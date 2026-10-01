@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block page %}dashboard{% endblock %}
+{% block topbar %}<button id="new-task-btn" class="primary">+ New Task</button>{% endblock %}
+{% block content %}
+<table class="tasks" id="tasks-table">
+  <thead>
+    <tr><th>TASK</th><th>REPO</th><th>MODEL</th><th>STATUS</th><th>GIT</th><th>BRANCH</th><th>CREATED</th></tr>
+  </thead>
+  <tbody id="tasks-body"><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
+</table>
+<footer class="summary" id="summary"></footer>
+
+<dialog id="new-task-dialog">
+  <form id="new-task-form" method="dialog">
+    <h2>New Task</h2>
+    <label>Repository
+      <input name="repository" list="repo-list" required placeholder="/home/you/workspace/repo" autocomplete="off">
+      <datalist id="repo-list"></datalist>
+    </label>
+    <div class="row">
+      <label>Base ref <input name="base_ref" value="main" placeholder="main"></label>
+      <label>Task name <input name="name" placeholder="(defaults to first line of prompt)"></label>
+    </div>
+    <label>Prompt
+      <textarea name="prompt" rows="8" required placeholder="What should Codex do?"></textarea>
+    </label>
+    <div class="row">
+      <label>Model <input name="model" placeholder="(Codex default)"></label>
+      <label>Reasoning effort
+        <select name="reasoning_effort">
+          {% for e in efforts %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="auto_approval" checked> Auto approval (<code>--approve-for-me</code>)</label>
+    </div>
+    <p id="form-error" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" id="cancel-btn">Cancel</button>
+      <button type="submit" class="primary" id="run-btn">Run</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}

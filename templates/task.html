@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Task {{ task_id }} - Codex GUI{% endblock %}
+{% block page %}task{% endblock %}
+{% block bodyattrs %}data-task-id="{{ task_id }}"{% endblock %}
+{% block topbar %}<a class="crumb" href="/">&larr; all tasks</a>{% endblock %}
+{% block content %}
+<section>
+  <div class="title-row">
+    <h1 id="task-name">…</h1>
+    <span id="task-status" class="status"></span>
+    <span class="spacer"></span>
+    <button id="stop-btn" class="danger" hidden>Stop</button>
+    <button id="commit-btn" hidden>Commit</button>
+    <button id="push-btn" hidden>Push</button>
+    <button id="del-wt-btn" hidden>Delete Worktree</button>
+    <button id="del-branch-btn" hidden>Delete Branch</button>
+  </div>
+  <p id="action-msg" class="muted" hidden></p>
+  <dl class="meta" id="meta"></dl>
+  <details><summary>Prompt</summary><pre id="prompt" class="block"></pre></details>
+</section>
+
+<section>
+  <h2>Codex Log <span class="muted" id="log-count"></span></h2>
+  <div id="log" class="log"></div>
+</section>
+
+<section>
+  <h2>Git <span class="muted" id="git-branch"></span></h2>
+  <nav class="tabs" id="git-tabs">
+    <button data-tab="status" class="active">Status</button>
+    <button data-tab="diff">Diff</button>
+    <button data-tab="log">Log</button>
+  </nav>
+  <pre id="git-status" class="block tab-body"></pre>
+  <div id="git-diff" class="tab-body" hidden><pre id="git-stat" class="block"></pre><pre id="git-diff-body" class="block diff"></pre></div>
+  <pre id="git-log" class="block tab-body" hidden></pre>
+</section>
+{% endblock %}
