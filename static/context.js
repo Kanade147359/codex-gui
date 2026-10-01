@@ -298,3 +298,4 @@ const CtxUI = (() => {
 
   return { agentsHealthHtml, initNewTask, formValues, bindNewTask, refreshPreview, renderTask, loadAudit, initThresholds, verifyHtml };
 })();
+window.CtxUI = CtxUI;  // a top-level const is not a window property: app.js looks for window.CtxUI

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from . import agents_audit, agents_md, ctx_config
 from . import git_manager as git
+from .codex_login import LoginError
 from .fs_browser import BrowseError, list_dir
 from .task_manager import TaskError, TaskManager
 
@@ -53,6 +54,10 @@ class NewTask(BaseModel):
     allow_subagents: bool = False              # nested agents are OFF unless the task needs them
     tool_profile: str = "full"                 # full | development | minimal
     cwd_subdir: str = ""                       # Advanced: run Codex in a sub-directory of the worktree
+
+
+class LoginRequest(BaseModel):
+    method: Literal["browser", "device"] = "browser"
 
 
 class ResumeRequest(BaseModel):
@@ -215,6 +220,36 @@ async def refs(repository: str):
     if repo is None:
         raise HTTPException(status_code=400, detail={"message": f"not a git repository: {repository}", "code": ""})
     return {"repository": repo, **await git.list_refs(repo)}
+
+
+# ---------- Codex sign-in ----------
+
+def login_error(e: LoginError) -> HTTPException:
+    return HTTPException(status_code=e.status, detail={"message": str(e), "code": "codex_login"})
+
+
+@router.get("/api/codex/account")
+async def codex_account(request: Request):
+    """Whether Codex is signed in (and as whom), plus the state of a sign-in in progress."""
+    try:
+        return await manager(request).codex_login.status()
+    except LoginError as e:
+        raise login_error(e)
+
+
+@router.post("/api/codex/login")
+async def codex_login_start(request: Request, body: LoginRequest):
+    """Start signing in to Codex with ChatGPT. The answer carries the page the browser has to open (and, for the
+    device-code method, the code to type there)."""
+    try:
+        return await manager(request).codex_login.start(body.method)
+    except LoginError as e:
+        raise login_error(e)
+
+
+@router.post("/api/codex/login/cancel")
+async def codex_login_cancel(request: Request):
+    return await manager(request).codex_login.cancel()
 
 
 @router.get("/api/repos")

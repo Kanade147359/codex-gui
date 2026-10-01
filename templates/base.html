@@ -10,12 +10,6 @@
   <header class="topbar">
     <a class="brand" href="/">Codex GUI</a>
     {% block topbar %}{% endblock %}
-    {% if request.state.user %}
-    <form class="account" method="post" action="/logout">
-      <a href="/account">{{ request.state.user.username }}</a>
-      <button type="submit">Sign out</button>
-    </form>
-    {% endif %}
   </header>
   <main>{% block content %}{% endblock %}</main>
   <script src="/static/context.js"></script>

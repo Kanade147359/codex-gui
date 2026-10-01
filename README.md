@@ -1,6 +1,6 @@
 # Codex GUI
 
-Codex CLI を複数同時に動かして一画面で管理する、セルフホスト型の Web GUI。ログイン付きで、Codex は **`codex app-server`**（thread / turn）経由で動かします。
+Codex CLI を複数同時に動かして一画面で管理する、ローカル Web GUI。Codex は **`codex app-server`**（thread / turn）経由で動かします。
 
 - 1 タスク = 1 Git branch = 1 Git worktree = 1 Codex thread。追加指示は同じ thread の次の turn（`thread/resume` + `turn/start`）なので、会話履歴は Codex が持ち続け、prompt cache（cached input）が効きます。GUI が履歴を貼り直すことはありません
 - 定額枠をできるだけ有効に使うための既定値（GPT-6.1 Sol / Standard / Low / 低 verbosity / web search OFF）、cache hit・context・利用枠の表示（[使用量の最適化](#使用量の最適化)）
@@ -9,22 +9,16 @@ Codex CLI を複数同時に動かして一画面で管理する、セルフホ�
 - 複数 Codex プロセスの並列実行、ログのリアルタイム表示、Git status / diff / log の確認
 - Stop、Commit / Push、Worktree / Branch の削除、SQLite による履歴保存
 
-## セキュリティ（必ず読んでください）
+## セキュリティ
 
-このアプリは **サインインできる人に、サーバー上で Codex（＝コマンド実行・ファイル編集・Git push）を操作させます**。公開するときは次を守ってください。
-
-- **ログインは既定で ON** です。ユーザーが 0 人のあいだは誰もサインインできません（下記「ログインとアカウント」）。
-- **HTTPS の reverse proxy 越し、または VPN（Tailscale / WireGuard など）の内側で公開**してください。素の HTTP をインターネットに出すとパスワードとセッションが平文で流れます。
-- アカウントは全員が**同じ権限**（全タスクの閲覧・実行・Push、サーバーのフォルダ一覧、`AGENTS.md` の編集）を持ちます。ロールやタスクごとの権限分離はありません。信頼できる人にだけアカウントを作ってください。
-- `CODEX_GUI_AUTH=0`（ログイン無効）は **loopback（`127.0.0.1`）専用**です。`run.sh` は、ログイン無効のまま `CODEX_GUI_HOST` を外向きにすると起動を拒否します。
-- パスワードは scrypt でハッシュ化して SQLite に保存し、セッションは推測不能なランダム値（DB にはその SHA-256 だけ）です。
-  Cookie は `HttpOnly` / `SameSite=Lax`（HTTPS では `Secure`）、状態を変える要求は `Origin` を検査し、ログイン失敗は回数制限（5 回 / 15 分）をかけます。
-- 二要素認証・パスワードリセットメール・SSO はありません（パスワードを忘れたらサーバー上で `python -m app.users passwd`）。
+この GUI 自体にはログイン（認証）がありません。開ける人は誰でも、サーバー上で Codex（＝コマンド実行・ファイル編集・Git push）を操作できます。
+既定では `127.0.0.1` だけで待ち受けます。ほかのマシンへ公開するなら、認証付きの reverse proxy か VPN（Tailscale / WireGuard など）の内側に置いてください。
+（下の「Codex へのサインイン」は Codex（ChatGPT アカウント）へのサインインで、GUI のログインではありません。）
 
 ## 必要環境
 
-- Linux / WSL2 / macOS、Python 3.10+、git（`run.sh` は bash スクリプト。動作確認は Linux / WSL2）
-- `codex` コマンドがインストール済みで、**ChatGPT アカウントでログイン済み**であること（`codex app-server --help` が動くこと）
+- Linux / WSL2、Python 3.10+、git
+- `codex` コマンドがインストール済みであること（`codex app-server --help` が動くこと）。ChatGPT アカウントへのサインインは GUI のダッシュボードからできます（[Codex へのサインイン](#codex-へのサインイン)）。`codex login` で済ませておいても構いません
   - 動作確認したバージョン: codex-cli 0.159.2（調査記録: [docs/codex-capabilities.md](docs/codex-capabilities.md)）
   - app-server が使えない古い CLI では `CODEX_GUI_BACKEND=exec`（従来の `codex exec` 方式。利用枠表示・実行中の追加指示・compact は使えません）
 
@@ -36,61 +30,22 @@ cd codex-gui
 ./run.sh
 ```
 
-初回は `.venv` を作って依存パッケージを入れ、**ログイン用のユーザーがまだ無ければ作成を促します**（端末から実行したとき）。
-起動後、ブラウザ（WSL2 なら Windows 側のブラウザ）で <http://127.0.0.1:8765> を開き、作ったユーザーでサインインしてください。
+初回は `.venv` を作って依存パッケージを入れます。起動後、ブラウザ（WSL2 なら Windows 側のブラウザ）で <http://127.0.0.1:8765> を開いてください。
 
-## ログインとアカウント
+## Codex へのサインイン
 
-ユーザーは SQLite（`$CODEX_GUI_HOME/codex-gui.db`）に保存します。管理はサーバー上の CLI で行います（パスワードは端末から入力し、コマンドラインや履歴には残しません）。
+Codex が ChatGPT アカウントにサインインしていないとき（または API キーでサインインしているとき）、ダッシュボードの上部に **Codex sign-in** が出ます。`codex login` と同じことを GUI からできます。
 
-```bash
-.venv/bin/python -m app.users add alice      # ユーザー作成（10 文字以上のパスワード）
-.venv/bin/python -m app.users passwd alice   # パスワード変更（そのユーザーの全セッションをサインアウト）
-.venv/bin/python -m app.users list
-.venv/bin/python -m app.users delete alice
-```
+| ボタン | 動き |
+| --- | --- |
+| **Sign in with ChatGPT (open browser)** | サインイン用のページをブラウザの新しいタブで開きます（開けなかったときは **Open sign-in page** を押す）。サインインが終わるとこの画面が自動で更新され、表示が消えます。サインイン後の戻り先は **Codex が動いているマシンの localhost** なので、Codex と同じマシンのブラウザで行ってください |
+| **Use a device code** | 表示されたコードを、ページ（**Open sign-in page**）に入力します。別のマシンのブラウザからでも使えます（リモートで GUI を開いているときはこちら） |
+| **Cancel** | 進行中のサインインを取り消します |
 
-- サインイン後は右上のユーザー名から **Account** ページで自分のパスワードを変更できます（他のブラウザのセッションは無効になります）。**Sign out** でサインアウト。
-- セッションの有効期間は既定 7 日（`CODEX_GUI_SESSION_HOURS`）。有効期限が切れた・サインアウトしたセッションは使えません。
-- 未サインインで開いたページは `/login` に移動し、サインイン後に元のページへ戻ります。API は `401` を返します。
-- ログイン失敗は同一アドレス + ユーザー名で 5 回 / 15 分を超えると `429`（待ち時間つき）になります。この制限はメモリ上なので、プロセスを再起動するとリセットされます。
-- `GET /healthz`（`{"ok": true}`）は、死活監視用にログイン無しで答えます。`/docs` / `/openapi.json` は公開しません。
-- スクリプトからユーザーを作るときは `CODEX_GUI_NEW_PASSWORD` にパスワードを渡せます（シェル履歴に残さないよう注意）。
-
-## 公開する（リモートアクセス）
-
-Codex GUI 自体は `127.0.0.1` で待ち受け、**HTTPS を終端する reverse proxy** を前に置く構成を推奨します。
-
-Caddy（証明書は自動取得）:
-
-```caddyfile
-gui.example.com {
-    reverse_proxy 127.0.0.1:8765
-}
-```
-
-nginx:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name gui.example.com;
-    # ssl_certificate / ssl_certificate_key は各自
-    location / {
-        proxy_pass http://127.0.0.1:8765;
-        proxy_set_header Host $host;                      # Origin 検査が Host と照合します
-        proxy_set_header X-Forwarded-Proto $scheme;       # https と判定して Secure Cookie にします
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_read_timeout 300s;
-    }
-}
-```
-
-- proxy は同じマシン（`127.0.0.1`）から接続してください。uvicorn は `127.0.0.1` からの `X-Forwarded-*` だけを信用します（別の場所なら `run.sh` の前に `FORWARDED_ALLOW_IPS` を設定）。
-- proxy が `Host` を書き換える場合は、元のホスト名を `X-Forwarded-Host` で渡してください（状態を変える要求は `Origin` が `Host` か `X-Forwarded-Host` と一致しないと `403`）。
-- Cookie の `Secure` を強制するなら `CODEX_GUI_COOKIE_SECURE=1`。既定の `auto` は、HTTPS で届いた要求にだけ付けます。
-- proxy を使わず自分で待ち受けるなら `CODEX_GUI_HOST=0.0.0.0 ./run.sh`（**ログイン必須。HTTPS ではないので VPN の内側だけで**）。
-- 公開前のチェック: ① ユーザーを作った ② HTTPS になっている ③ ファイアウォールで 8765 を外に出していない ④ `~/.local/share/codex-gui`（DB・ログ）と `~/.ssh` の権限が自分だけ ⑤ `codex` が ChatGPT ログイン済み。
+- サインイン済みなら、ダッシュボードに `Codex: signed in as <メール> (<プラン>)` と出ます。
+- パスワードやトークンは GUI を通りません。ブラウザが OpenAI と直接やりとりし、結果は Codex 自身の保管場所（`~/.codex`）に保存されます。GUI は何も保存しません。
+- 失敗したときは理由を表示します。API キーでのサインインはできません（`CODEX_GUI_SUBSCRIPTION_ONLY=1` の既定では、API キー認証だと Task も開始しません）。サインアウトの操作はありません（必要なら `codex logout`）。
+- 実体は app-server の `account/read` / `account/login/start`（`chatgpt` / `chatgptDeviceCode`）/ `account/login/completed` / `account/login/cancel` です。API は `GET /api/codex/account`、`POST /api/codex/login`（`{"method": "browser" | "device"}`）、`POST /api/codex/login/cancel`。
 
 環境変数:
 
@@ -104,10 +59,6 @@ server {
 | `CODEX_GUI_CONTEXT_WARN_PERCENT` | `80` | Context Guard が警告する context 使用率（%） |
 | `CODEX_GUI_PREFERRED_MODEL` | `gpt-6.1-sol` | 推奨モデル。`codex debug models` に無ければ「Codex default」 |
 | `CODEX_GUI_HOST` / `CODEX_GUI_PORT` | `127.0.0.1` / `8765` | 待ち受け先 |
-| `CODEX_GUI_AUTH` | `1` | `0` でログイン無効（loopback 専用。外向きの `CODEX_GUI_HOST` だと `run.sh` が起動を拒否） |
-| `CODEX_GUI_SESSION_HOURS` | `168` | ログインセッションの有効時間 |
-| `CODEX_GUI_COOKIE_SECURE` | `auto` | セッション Cookie の `Secure`。`auto` = HTTPS の要求にだけ付ける / `1` 常に / `0` 付けない |
-| `CODEX_GUI_NEW_PASSWORD` | （なし） | `python -m app.users` が端末の代わりに読むパスワード（スクリプト用） |
 | `CODEX_GUI_AUTO_RETRY` / `CODEX_GUI_MAX_RETRIES` | `1` / `3` | 予期しない停止の自動リトライの既定（Task ごとに変更可） |
 | `CODEX_GUI_RETRY_BACKOFF` | `10,30,60` | リトライまでの待ち秒数（カンマ区切り。最後の値を以降も使う） |
 | `CODEX_GUI_SCHEDULER_INTERVAL` | `2` | 待機中・リトライ待ちタスクを見に行く間隔（秒） |
@@ -277,6 +228,27 @@ Codex が「枠が使えない」と言ったとき（`ordinaryUsageAllowed: fal
 - codex の子プロセスには `OPENAI_API_KEY` / `CODEX_API_KEY` / `OPENAI_BASE_URL` などを渡しません。
 - 解除は `CODEX_GUI_SUBSCRIPTION_ONLY=0`（既定は ON。GUI からは変更できません）。
 
+## Context Efficiency
+
+多数の Task を並列に動かすとき、品質を落とさずに無駄な token / context を減らすための機能です。**何が実際に効くか（実 Codex での測定結果）は
+[docs/context-efficiency.md](docs/context-efficiency.md)** にまとめています。要点:
+
+- **AGENTS.md は自動で編集しません。** Health Check（New Task の preview と Task Detail）が chain・サイズ・budget 使用率・重複・「毎回読め」系の指示を
+  警告するだけで、直すのは Edit ボタンから人が行います。
+- New Task の **Context efficiency**: Tool output limit / Tool profile（Full・Development・Minimal）/ Allow subagents（既定 OFF）、Advanced に Skills catalog budget と
+  Working directory。設定は Task 作成時に決まり、同じ thread では凍結されます。tool profile が「最適化済み」と表示されるのは、実 Codex で tool 数が減ったことを測れたときだけです。
+- Task Detail の **Context efficiency**: Context と Compactions、Cache age（HOT/WARM/COLD、参考表示のみ。cache を温めるための prompt は送りません）、
+  ターンごとの cache read / write / uncached と cache miss の原因候補、大きな tool output、long-context の警告
+  （`≥272K` で **Continue / Compact / Start New Session in Same Worktree** を提示、自動 compact はしません）。
+- 送信は **Send Standard**（通常）と **Send Fast**（明示操作）。要求した speed は各ターンに保存されます。
+- quota 枯渇・context 超過・認証エラー・同じ tool 失敗の繰り返しは無限に retry せず、状態を表示して止まります。
+- 閾値はダッシュボードの **Efficiency settings** で変更できます。
+
+```bash
+.venv/bin/python -m pytest                                              # モデルは呼ばない（実 codex は使う）
+CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_ab.py -s   # 実モデルでの A/B（少量消費）
+```
+
 ## AGENTS.md エディタ
 
 プロジェクト共通のルールを毎回 prompt で送る代わりに `AGENTS.md` に置けるよう、GUI から確認・編集できます。GUI が `AGENTS.md` の中身を prompt に足すことはありません（Codex 自身が読み込みます。prompt の重複・context の重複・cache prefix の変動を避けるため）。
@@ -339,7 +311,7 @@ sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き
 
 実 Codex は使わず、`tests/fake_app_server.py`（app-server の JSON-RPC。thread / turn / 累積 usage / rate limit / steer / interrupt / compact / quota エラー）と
 `tests/fake_codex.py`（`codex exec` の従来方式）を、実際の JSON-RPC クライアント・サブプロセス・シグナル・git を通して動かします。
-カバー範囲: ログイン（ハッシュ・セッション・回数制限・CSRF・リダイレクト先の検証・パスワード変更・ユーザー CLI）、Task と thread id の永続化、同一 thread の再利用（resume）、token / cached の parse と cache hit 計算、rate limit の parse（週次のみ / 2 本）、
+カバー範囲: Codex へのサインイン（ブラウザ / デバイスコード / 失敗 / 取り消し）、Task と thread id の永続化、同一 thread の再利用（resume）、token / cached の parse と cache hit 計算、rate limit の parse（週次のみ / 2 本）、
 quota 時の状態遷移（再試行しない）、model・reasoning・Standard・auto approval・web search OFF の既定値と送信内容、API キーに fallback しないこと、
 context guard の判定、steer / stop / compact、AGENTS.md の読み書き・競合・path 検証・Repository と Task worktree の分離。
 
@@ -359,17 +331,14 @@ CODEX_GUI_REAL=1 CODEX_GUI_REAL_MODEL=gpt-6.1-sol CODEX_GUI_REAL_PAUSE=15 .venv/
 - Adaptive reasoning は提案のみで、自動昇格はしません。
 - compact 直後の context サイズは次のターンまで不明です。
 - 利用枠の % は整数で粗く、Task ごとの消費は並列実行時に分離できません。
-- アカウントはロール無しで全員が同権限（全タスク・フォルダ一覧・Push を操作可能）。二要素認証・パスワードリセットメール・SSO・監査ログはありません。
-- ログイン失敗の回数制限はメモリ上（プロセス再起動で戻る）で、複数プロセスでは共有されません。
+- GUI 自体のログイン（認証）はありません。Codex へのサインインは ChatGPT アカウントのみ（API キー・サインアウトの操作なし）。
 
 ## 構成
 
 ```text
 app/
-  main.py           アプリ生成・起動時の復旧・終了処理・ログイン / CSRF / セキュリティヘッダーの組み込み
-  auth.py           パスワードのハッシュ（scrypt）・セッション・ログイン失敗の回数制限
-  auth_routes.py    /login・/logout・/account（素の HTML フォーム）
-  users.py          ユーザー管理 CLI（python -m app.users）
+  main.py           アプリ生成・起動時の復旧・終了処理
+  codex_login.py    Codex（ChatGPT）へのサインイン（app-server の account/login/*）
   routes.py         HTML ページと JSON API
   task_manager.py   タスク作成・追加指示(resume / steer)・並列実行・Stop・compact・復旧・Git 操作・usage / 利用枠の記録
   appserver.py      codex app-server の JSON-RPC クライアント（共有プロセス・通知の振り分け・API キーを渡さない環境）
@@ -393,6 +362,6 @@ app/
   tool_probe.py / fake_responses.py   実 codex に偽の Responses API を向けてツール一覧などを測る
   procinfo.py / tokens.py             pid の同一性確認（/proc）・token の概算
 docs/               Codex CLI / app-server の調査記録
-static/ templates/  UI（素の HTML/CSS/JS、ポーリング。`script-src 'self'` の CSP に従い、インラインスクリプトはありません）
+static/ templates/  UI（素の HTML/CSS/JS、ポーリング）
 tests/
 ```

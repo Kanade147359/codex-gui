@@ -144,7 +144,27 @@ def handle(msg):
         reply({"userAgent": "fake-codex/0", "codexHome": STATE})
     elif method == "account/read":
         kind = os.environ.get("FAKE_ACCOUNT", "chatgpt")
-        reply({"account": None if kind == "none" else {"type": kind}, "requiresOpenaiAuth": True})
+        if os.path.exists(os.path.join(STATE, "signed_in")):  # a completed account/login/start
+            kind = "chatgpt"
+        reply({"account": None if kind == "none" else {"type": kind, "email": "me@example.com", "planType": "pro"},
+               "requiresOpenaiAuth": True})
+    elif method == "account/login/start":
+        # FAKE_LOGIN: ok (default) | fail. The browser flow completes when a test creates $STATE/browser_done.
+        login_id = "login-" + uuid.uuid4().hex[:8]
+        if params.get("type") == "chatgptDeviceCode":
+            reply({"type": "chatgptDeviceCode", "loginId": login_id, "userCode": "ABCD-1234",
+                   "verificationUrl": "https://auth.example.com/device"})
+        elif params.get("type") == "chatgpt":
+            reply({"type": "chatgpt", "loginId": login_id, "authUrl": "https://auth.example.com/authorize?x=1"})
+        else:
+            return fail("unsupported login type")
+        if os.environ.get("FAKE_LOGIN") == "fail":
+            notify("account/login/completed", loginId=login_id, success=False, error="access_denied")
+        elif os.environ.get("FAKE_LOGIN") != "wait":
+            open(os.path.join(STATE, "signed_in"), "w").close()
+            notify("account/login/completed", loginId=login_id, success=True, error=None)
+    elif method == "account/login/cancel":
+        reply({"status": "canceled"})
     elif method == "account/rateLimits/read":
         reply(rate_limits())
     elif method == "thread/start":

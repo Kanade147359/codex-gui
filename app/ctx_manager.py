@@ -6,6 +6,7 @@ TaskManager keeps only thin hooks into this class so that the efficiency logic l
 * what the GUI cannot know is shown as unknown, and what it only observes is labelled as observed;
 * a setting is only called "optimized" when a measurement against the real Codex showed a reduction.
 """
+import asyncio
 import hashlib
 import json
 import time
@@ -73,6 +74,7 @@ class ContextFeatures:
         self._thresholds: Optional[Thresholds] = None
         self._catalog = ModelCatalog(settings.codex_bin)
         self._verified: dict[str, tuple[float, dict]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     # ---------------------------------------------------------------- thresholds (configurable)
 
@@ -281,35 +283,51 @@ class ContextFeatures:
 
     # ---------------------------------------------------------------- live checks against the real Codex
 
+    async def _baseline(self, cwd: str, force: bool = False) -> dict:
+        """Codex's default tool catalog for a directory, measured once per TTL however many tasks ask at the same time."""
+        async with self._lock_for("baseline:" + cwd):
+            hit = self._verified.get("baseline:" + cwd)
+            if hit and not force and time.monotonic() - hit[0] < VERIFY_TTL:
+                return hit[1]
+            full = await tool_probe.catalog(self.settings.codex_bin, cwd, None)
+            if full["ok"]:
+                self._verified["baseline:" + cwd] = (time.monotonic(), full)
+            return full
+
+    def _lock_for(self, key: str) -> asyncio.Lock:
+        return self._locks.setdefault(key, asyncio.Lock())
+
     async def verify_profile(self, cwd: str, profile: str, mcp_servers: list[str], force: bool = False) -> dict:
         """Measure the tools the model can reach with the profile against Codex's own default. `verified` is True only
-        when the profile really reduced the nested tool count (and `bytes_saved` shows what the declarations lost)."""
+        when the profile really reduced the nested tool count (and the byte figures show what the declarations lost).
+        Concurrent identical requests share one measurement."""
         overrides = ctx_config.profile_config(profile, mcp_servers)
         key = json.dumps([cwd, profile, sorted(overrides.items())], sort_keys=True, default=str)
-        hit = self._verified.get(key)
-        if hit and not force and time.monotonic() - hit[0] < VERIFY_TTL:
-            return hit[1]
-        full = await tool_probe.catalog(self.settings.codex_bin, cwd, None)
-        res = {"profile": profile, "checked_at": now_iso(), "ok": False, "verified": False, "error": "", "overrides": overrides}
-        if not full["ok"]:
-            res["error"] = full["error"] or "could not measure Codex's default tools"
-        elif profile == "full":
-            res.update(ok=True, full_count=full["nested_count"], profile_count=full["nested_count"], full_bytes=full["catalog_bytes"],
-                       profile_bytes=full["catalog_bytes"], reduced=False, verified=False,
-                       note="Full is Codex's default: nothing to verify.")
-        else:
-            got = await tool_probe.catalog(self.settings.codex_bin, cwd, overrides)
-            if not got["ok"]:
-                res["error"] = got["error"] or "could not measure the tools with this profile"
+        async with self._lock_for(key):
+            hit = self._verified.get(key)
+            if hit and not force and time.monotonic() - hit[0] < VERIFY_TTL:
+                return hit[1]
+            full = await self._baseline(cwd, force)
+            res = {"profile": profile, "checked_at": now_iso(), "ok": False, "verified": False, "error": "", "overrides": overrides}
+            if not full["ok"]:
+                res["error"] = full["error"] or "could not measure Codex's default tools"
+            elif profile == "full":
+                res.update(ok=True, full_count=full["nested_count"], profile_count=full["nested_count"], full_bytes=full["catalog_bytes"],
+                           profile_bytes=full["catalog_bytes"], reduced=False, verified=False,
+                           note="Full is Codex's default: nothing to verify.")
             else:
-                reduced = got["nested_count"] < full["nested_count"]
-                res.update(ok=True, full_count=full["nested_count"], profile_count=got["nested_count"], full_bytes=full["catalog_bytes"],
-                           profile_bytes=got["catalog_bytes"], full_groups=full["groups"], profile_groups=got["groups"], reduced=reduced,
-                           verified=reduced, tokens_saved_est=max((full["catalog_bytes"] - got["catalog_bytes"]) // 4, 0),
-                           note=("" if reduced else "No reduction was measured, so this profile is NOT marked optimized."))
-        if res["ok"]:
-            self._verified[key] = (time.monotonic(), res)
-        return res
+                got = await tool_probe.catalog(self.settings.codex_bin, cwd, overrides)
+                if not got["ok"]:
+                    res["error"] = got["error"] or "could not measure the tools with this profile"
+                else:
+                    reduced = got["nested_count"] < full["nested_count"]
+                    res.update(ok=True, full_count=full["nested_count"], profile_count=got["nested_count"], full_bytes=full["catalog_bytes"],
+                               profile_bytes=got["catalog_bytes"], full_groups=full["groups"], profile_groups=got["groups"], reduced=reduced,
+                               verified=reduced, tokens_saved_est=max((full["catalog_bytes"] - got["catalog_bytes"]) // 4, 0),
+                               note=("" if reduced else "No reduction was measured, so this profile is NOT marked optimized."))
+            if res["ok"]:
+                self._verified[key] = (time.monotonic(), res)
+            return res
 
     async def preview(self, cwd: str, effective_config: Optional[dict], overrides: Optional[dict] = None) -> dict:
         """What the model will be handed before any task exists: the AGENTS.md chain, the skills catalog, tool-output cap."""

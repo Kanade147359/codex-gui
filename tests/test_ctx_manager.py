@@ -669,3 +669,52 @@ def test_the_code_has_no_keepalive_path():
     assert not [n for n in names if "keepalive" in n or "keep_alive" in n or "keepwarm" in n or "keep_warm" in n or "warm_cache" in n]
     imports = {n.module for n in ast.walk(ast.parse((root / "cache_health.py").read_text())) if isinstance(n, ast.ImportFrom)}
     assert not imports & {"asyncio", "subprocess", "app.appserver", ".appserver", "appserver"}
+
+
+def test_concurrent_profile_checks_share_one_measurement(settings, db, monkeypatch):
+    """Twenty tasks created at once must not start forty `codex` probes."""
+    from app import tool_probe
+    from app.ctx_manager import ContextFeatures
+    runs = []
+
+    async def fake_catalog(codex_bin, cwd, overrides=None, **kw):
+        runs.append(overrides)
+        await asyncio.sleep(0.05)
+        n = 187 if not overrides else 8
+        return {"ok": True, "error": "", "nested_count": n, "catalog_bytes": 26_000 if not overrides else 21_000, "groups": {"builtin": n}}
+    monkeypatch.setattr(tool_probe, "catalog", fake_catalog)
+
+    async def scenario():
+        cf = ContextFeatures(db, settings)
+        res = await asyncio.gather(*[cf.verify_profile("/repo", "development", []) for _ in range(20)])
+        assert all(r["verified"] and r["full_count"] == 187 and r["profile_count"] == 8 for r in res)
+        assert len(runs) == 2                                    # one baseline + one profile measurement
+        await cf.verify_profile("/repo", "minimal", [])           # another profile reuses the baseline
+        assert len(runs) == 3
+        again = await cf.verify_profile("/repo", "development", [])
+        assert len(runs) == 3 and again["verified"]
+        full = await cf.verify_profile("/repo", "full", [])
+        assert full["verified"] is False and "nothing to verify" in full["note"]
+    asyncio.run(scenario())
+
+
+def test_a_failed_measurement_is_never_called_verified(settings, db, monkeypatch):
+    from app import tool_probe
+    from app.ctx_manager import ContextFeatures
+
+    async def broken(codex_bin, cwd, overrides=None, **kw):
+        return {"ok": False, "error": "codex exploded", "nested_count": None, "catalog_bytes": None, "groups": {}}
+    monkeypatch.setattr(tool_probe, "catalog", broken)
+    r = asyncio.run(ContextFeatures(db, settings).verify_profile("/repo", "minimal", []))
+    assert r["ok"] is False and r["verified"] is False and "codex exploded" in r["error"]
+
+
+def test_a_profile_without_a_reduction_is_not_marked_optimized(settings, db, monkeypatch):
+    from app import tool_probe
+    from app.ctx_manager import ContextFeatures
+
+    async def same(codex_bin, cwd, overrides=None, **kw):
+        return {"ok": True, "error": "", "nested_count": 8, "catalog_bytes": 21_611, "groups": {"builtin": 8}}
+    monkeypatch.setattr(tool_probe, "catalog", same)
+    r = asyncio.run(ContextFeatures(db, settings).verify_profile("/repo", "development", []))
+    assert r["ok"] and r["verified"] is False and r["reduced"] is False and "NOT marked optimized" in r["note"]

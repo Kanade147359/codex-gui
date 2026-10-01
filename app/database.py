@@ -134,21 +134,6 @@ CREATE TABLE IF NOT EXISTS recent_repos (
     path TEXT PRIMARY KEY,
     last_used TEXT NOT NULL
 );
--- Login accounts. password_hash is "scrypt$n$r$p$salt$hash" (see app/auth.py); never the password.
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
--- Browser sessions. token_hash is the sha256 of the cookie value, so a leaked database cannot be used to log in.
-CREATE TABLE IF NOT EXISTS sessions (
-    token_hash TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
 """
 
 TASK_COLUMNS = (
@@ -530,67 +515,6 @@ class Database:
                 "SELECT path FROM recent_repos ORDER BY last_used DESC, rowid DESC LIMIT ?", (limit,)
             ).fetchall()
         return [r["path"] for r in rows]
-
-    # ---------- users and login sessions ----------
-
-    def create_user(self, username: str, password_hash: str, created_at: str) -> dict:
-        try:
-            cur = self._execute("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-                                (username, password_hash, created_at))
-        except sqlite3.IntegrityError:
-            raise ValueError(f"user already exists: {username}")
-        return self.get_user(cur.lastrowid)
-
-    def get_user(self, user_id: int) -> Optional[dict]:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return dict(row) if row else None
-
-    def get_user_by_name(self, username: str) -> Optional[dict]:
-        with self._lock:
-            row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-        return dict(row) if row else None
-
-    def list_users(self) -> list[dict]:
-        with self._lock:
-            rows = self._conn.execute("SELECT id, username, created_at FROM users ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
-
-    def count_users(self) -> int:
-        with self._lock:
-            return self._conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-
-    def set_password_hash(self, user_id: int, password_hash: str) -> None:
-        self._execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
-
-    def delete_user(self, username: str) -> bool:
-        user = self.get_user_by_name(username)
-        if not user:
-            return False
-        self._execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
-        self._execute("DELETE FROM users WHERE id = ?", (user["id"],))
-        return True
-
-    def add_session(self, token_hash: str, user_id: int, created_at: str, expires_at: str) -> None:
-        self._execute("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-                      (token_hash, user_id, created_at, expires_at))
-
-    def get_session_user(self, token_hash: str, now: str) -> Optional[dict]:
-        """The user a live (unexpired) session belongs to, else None."""
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id "
-                "WHERE s.token_hash = ? AND s.expires_at > ?", (token_hash, now)).fetchone()
-        return dict(row) if row else None
-
-    def delete_session(self, token_hash: str) -> None:
-        self._execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
-
-    def delete_user_sessions(self, user_id: int, keep_token_hash: Optional[str] = None) -> None:
-        self._execute("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?", (user_id, keep_token_hash or ""))
-
-    def purge_sessions(self, now: str) -> None:
-        self._execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
 
     # ---------- turns (token usage) ----------
 

@@ -26,6 +26,7 @@ from typing import Optional
 
 from . import git_manager as git
 from .appserver import CLOSED, AppServerClient, AppServerError
+from .codex_login import CodexLogin
 from .codex_runner import CodexRunner, approval_params, nested, task_config, terminate_process
 from .config import Settings
 from .database import Database, DependencyError
@@ -137,6 +138,7 @@ class TaskManager:
         self.ctx = ContextFeatures(db, settings)
         self._side_jobs: set[asyncio.Task] = set()
         self._guard_stops: dict[str, dict] = {}   # task id -> {"reason", "message"} of a stop the retry guard asked for
+        self.codex_login = CodexLogin(self.client, settings.subscription_only)
 
     @property
     def uses_app_server(self) -> bool:
@@ -177,12 +179,13 @@ class TaskManager:
         if kind != "chatgpt":
             raise TaskError(
                 "Codex is not signed in with a ChatGPT (subscription) account "
-                f"({'API key' if kind == 'apiKey' else 'not signed in'}); run `codex login`. "
+                f"({'API key' if kind == 'apiKey' else 'not signed in'}); sign in from the dashboard (or run `codex login`). "
                 "Codex GUI does not fall back to API billing.", 409, "not_subscription")
 
     # ---------- rate limits (display and history only) ----------
 
     def _on_global_notification(self, method: str, params: dict) -> None:
+        self.codex_login.on_notification(method, params)
         if method != "account/rateLimits/updated":
             return
         parsed = parse_rate_limits(params)

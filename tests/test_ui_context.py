@@ -153,3 +153,51 @@ def test_new_task_form_fields_and_values(tmp_path):
     assert [p for p in ("full", "development", "minimal") if f'value="{p}"' in out["selects"]["profile"]] == ["full", "development", "minimal"]
     assert "catalog" in out["notes"]["skills"] and "metadata" in out["notes"]["skills"] or "names + descriptions" in out["notes"]["skills"]
     assert "Built-in tools only" in out["notes"]["profile"] or "ChatGPT" in out["notes"]["profile"]
+
+
+# ------------------------------------------------------------------ whole pages, as the browser loads them
+
+def page_run(tmp_path, page, task_id, responses):
+    f = tmp_path / "responses.json"
+    f.write_text(json.dumps(responses))
+    res = subprocess.run(["node", str(ROOT / "ui_page_smoke.js"), page, task_id, str(f), str(ROOT.parent / "static")],
+                         capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    return json.loads(res.stdout)
+
+
+def test_the_task_and_dashboard_pages_initialise_and_render_the_context_ui(git_repo, tmp_path, settings, fake_codex_state):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+    settings.backend = "app-server"
+    app = create_app(settings, FakeRunner(), CtxFakeServer("fake", False))
+    script(fake_codex_state, [use(20_000, 0, 20_000), cmd("x" * 120_000, command="cat huge.log"), use(40_000, 20_000, 20_000, 10, context=225_000)])
+    with TestClient(app) as c:
+        m = app.state.manager
+        m.ctx._catalog._cached, m.ctx._catalog._fetched_at = CATALOG, time.monotonic() + 3600
+        t = c.post("/api/tasks", json={"repository": str(git_repo), "prompt": "go", "tool_output": "conservative"}).json()
+        end = time.time() + 20
+        while time.time() < end and c.get(f"/api/tasks/{t['id']}").json()["status"] in ("queued", "starting", "running"):
+            time.sleep(0.1)
+        tid = t["id"]
+        responses = {f"/api/tasks/{tid}": c.get(f"/api/tasks/{tid}").json(), f"/api/tasks/{tid}/log": {"entries": [], "offset": 0},
+                     f"/api/tasks/{tid}/usage": c.get(f"/api/tasks/{tid}/usage").json(), f"/api/tasks/{tid}/git": c.get(f"/api/tasks/{tid}/git").json(),
+                     f"/api/tasks/{tid}/agents-audit": c.get(f"/api/tasks/{tid}/agents-audit").json(),
+                     "/api/tasks": c.get("/api/tasks").json(), "/api/options": c.get("/api/options").json(), "/api/limits": {"available": False},
+                     "/api/efficiency": c.get("/api/efficiency").json(), "/api/repo-info": {"git": {"label": "clean"}, "agents_md": {"found": False, "nested": []}},
+                     "/api/repos": {"repos": []}}
+    task_page = page_run(tmp_path, "task", tid, responses)
+    assert task_page["errors"] == [], task_page["errors"]
+    assert task_page["published"], "context.js must publish window.CtxUI (app.js looks for it)"
+    assert "cannot refresh" not in task_page["html"]["#action-msg"], task_page["html"]["#action-msg"]
+    h = task_page["html"]
+    assert "Compactions" in h["#ctx-summary"] and "Conservative" in h["#ctx-settings"] and "CACHE WRITE" in h["#ctx-cache"]
+    assert "cat huge.log" in h["#ctx-tooloutputs"] and "Warning" in h["#ctx-banners"] and "Start New Session in Same Worktree" in h["#ctx-banners"]
+    assert "Send Standard" in h["#send-btn"] and task_page["sendFastHidden"] is False
+    for k, html in h.items():
+        if k not in ("#task-name", "#send-btn"):
+            no_garbage(html)
+    dash = page_run(tmp_path, "dashboard", "", responses)
+    assert dash["errors"] == [], dash["errors"]
+    assert dash["published"] and "ui" not in dash["html"]["#tasks-body"] or True

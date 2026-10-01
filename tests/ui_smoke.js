@@ -12,8 +12,9 @@ function makeEl() {
 const el = (sel) => (els[sel] = els[sel] || makeEl());
 const document = { querySelector: (sel) => el(sel), querySelectorAll: () => [] };
 const ctx = vm.createContext({ document, console, fetch: async () => { throw new Error("no network in the smoke test"); }, window: {}, setTimeout, clearTimeout });
-vm.runInContext(fs.readFileSync(process.argv[3], "utf8") + "\nthis.CtxUI = CtxUI;", ctx);
-const U = ctx.CtxUI;
+vm.runInContext(fs.readFileSync(process.argv[3], "utf8"), ctx);  // exactly as the browser loads it: nothing is exported by the harness
+const U = ctx.window.CtxUI;
+if (!U) throw new Error("context.js did not publish window.CtxUI: app.js checks window.CtxUI");
 const out = {};
 if (data.options) {
   U.initNewTask(data.options);

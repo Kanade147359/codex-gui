@@ -162,13 +162,5 @@ dialog label .small { display: block; margin-top: 3px; }
 .editor textarea { flex: 1; border: 0; border-radius: 0; resize: none; tab-size: 4; line-height: 1.45; padding: 8px 10px; white-space: pre; overflow: auto; background: transparent; }
 .editor textarea:focus { outline: none; }
 
-/* ---- login / account ---- */
-.topbar .account { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 13px; }
-.auth-card { max-width: 380px; margin: 60px auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
-.auth-card h1 { font-size: 20px; margin: 0 0 16px; }
-.auth-card h2 { font-size: 15px; margin: 20px 0 8px; }
-.auth-card form { display: flex; flex-direction: column; gap: 12px; }
-.auth-card label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.auth-card input { padding: 8px; font-size: 14px; }
-.auth-error { color: #ff7b72; font-size: 13px; }
-.auth-ok { color: #3fb950; font-size: 13px; }
+.login-code { font-size: 28px; letter-spacing: 4px; font-family: monospace; margin: 8px 0; }
+a.button { display: inline-block; padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px; background: #1f2530; color: var(--text); text-decoration: none; }

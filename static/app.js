@@ -30,10 +30,6 @@ async function api(method, url, body) {
   });
   let data = null;
   try { data = await res.json(); } catch (_) {}
-  if (res.status === 401 && data && data.detail && data.detail.code === "auth_required") {
-    location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
-    return new Promise(() => {});  // the page is going away; do not run the caller's error handling
-  }
   if (!res.ok) {
     const err = new Error(errText(data));
     err.code = data && data.detail && data.detail.code;
@@ -180,6 +176,62 @@ function initDashboard() {
     const text = kfmt(c.tokens);
     return c.warn ? `<span class="warn" title="Context usage ${Math.round(c.percent)}%: this thread is large">${text} ⚠</span>` : text;
   }
+
+  // ----- Codex sign-in (the same as `codex login`; the browser talks to OpenAI, the GUI never sees a password) -----
+
+  const webUrl = (u) => (/^https?:\/\//.test(u || "") ? u : "");
+  let accountTimer = null;
+  async function refreshAccount() {
+    clearTimeout(accountTimer);
+    let signedIn = false;
+    try {
+      const a = await api("GET", "/api/codex/account");
+      signedIn = a.signed_in && a.login.status !== "pending";
+      renderAccount(a);
+    } catch (e) {
+      $("#codex-login").hidden = false;
+      $("#codex-login-body").innerHTML = `<p class="muted">cannot read the Codex account: ${esc(e.message)}</p>`;
+    }
+    accountTimer = setTimeout(refreshAccount, signedIn ? 30000 : 3000);
+  }
+  function renderAccount(a) {
+    const l = a.login || {}, box = $("#codex-login"), body = $("#codex-login-body");
+    $("#codex-account").textContent = a.signed_in
+      ? `Codex: signed in${a.email ? " as " + a.email : ""}${a.plan ? " (" + a.plan + ")" : ""}` : "";
+    box.hidden = a.signed_in && l.status !== "pending";
+    if (box.hidden) return;
+    const url = webUrl(l.url), open = url ? `<a class="button" href="${esc(url)}" target="_blank" rel="noopener">Open sign-in page</a>` : "";
+    if (l.status === "pending" && l.method === "device") {
+      body.innerHTML = `<p>Open the page below, sign in, and enter this code:</p>
+        <p class="login-code">${esc(l.user_code || "")}</p>
+        <p>${open} <button data-login="cancel">Cancel</button></p>`;
+    } else if (l.status === "pending") {
+      body.innerHTML = `<p>Finish signing in in the browser tab that opened. When it is done this page updates by itself.</p>
+        <p>${open} <button data-login="cancel">Cancel</button></p>
+        <p class="muted small">The browser must be able to reach this machine's localhost (it returns there). From another computer, use a device code.</p>`;
+    } else {
+      const why = a.account_type === "apiKey" ? "Codex is using an API key, not a ChatGPT account." : "Codex is not signed in.";
+      body.innerHTML = `<p>${why} ${l.status === "failed" ? `<span class="warn">Sign-in failed: ${esc(l.error || "")}</span>` : ""}</p>
+        <p><button class="primary" data-login="browser">Sign in with ChatGPT (open browser)</button>
+        <button data-login="device">Use a device code</button></p>`;
+    }
+  }
+  $("#codex-login-body").addEventListener("click", async (ev) => {
+    const method = ev.target.dataset && ev.target.dataset.login;
+    if (!method) return;
+    try {
+      if (method === "cancel") {
+        await api("POST", "/api/codex/login/cancel");
+      } else {
+        const l = await api("POST", "/api/codex/login", { method });
+        const url = webUrl(l.url);
+        if (url) window.open(url, "_blank", "noopener");  // may be blocked: the "Open sign-in page" link stays
+      }
+    } catch (e) {
+      alert(e.message);
+    }
+    refreshAccount();
+  });
 
   // ----- Codex usage (display only) -----
 
@@ -524,6 +576,7 @@ function initDashboard() {
   setInterval(refresh, 2000);
   refreshLimits();
   setInterval(refreshLimits, 15000);
+  refreshAccount();
   let effPeriod = "lifetime";
   const effTabs = $("#efficiency-tabs");
   effTabs.innerHTML = EFFICIENCY_PERIODS.map(([id, label]) => `<button type="button" data-period="${id}">${label}</button>`).join("");

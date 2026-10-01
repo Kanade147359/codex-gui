@@ -2,7 +2,6 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -33,11 +32,6 @@ class Settings:
     retry_backoff_seconds: tuple = (10.0, 30.0, 60.0)
     # How often the scheduler looks at waiting / queued / retry_wait tasks (it also wakes up on every status change).
     scheduler_interval_seconds: float = 2.0
-    # Login. from_env() turns it on by default; the bare dataclass default is off so library / test use stays open.
-    auth_enabled: bool = False
-    session_hours: float = 168.0
-    # Session cookie "Secure" flag: None = decide per request (https => Secure), True / False = always / never.
-    cookie_secure: Optional[bool] = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -53,9 +47,6 @@ class Settings:
             default_max_retries=int(os.environ.get("CODEX_GUI_MAX_RETRIES", "3")),
             retry_backoff_seconds=tuple(float(x) for x in os.environ.get("CODEX_GUI_RETRY_BACKOFF", "10,30,60").split(",") if x.strip()),
             scheduler_interval_seconds=float(os.environ.get("CODEX_GUI_SCHEDULER_INTERVAL", "2")),
-            auth_enabled=os.environ.get("CODEX_GUI_AUTH", "1") != "0",
-            session_hours=float(os.environ.get("CODEX_GUI_SESSION_HOURS", "168")),
-            cookie_secure={"1": True, "0": False}.get(os.environ.get("CODEX_GUI_COOKIE_SECURE", "auto")),
         )
 
     @property
