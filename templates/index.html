@@ -17,7 +17,14 @@
   <h2>Codex Usage <span class="muted" id="usage-plan"></span></h2>
   <div id="limits" class="muted">loading…</div>
   <p class="muted small" id="limits-note"></p>
-  <p class="running-line">Running: <b id="running-count">0</b></p>
+  <p class="running-line">Running: <b id="running-count">0</b>
+    <button id="resume-all-btn" hidden title="Continue every interrupted task in its existing Codex thread">Resume interrupted</button></p>
+</section>
+
+<section class="usage-box">
+  <h2><span id="efficiency-title">LIFETIME EFFICIENCY</span> <span class="muted">(equivalent estimate)</span></h2>
+  <nav class="tabs" id="efficiency-tabs"></nav>
+  <div id="efficiency" class="muted">loading…</div>
 </section>
 
 <section class="repo-bar" id="repo-bar" hidden>
@@ -28,6 +35,20 @@
     <a class="button" id="repo-agents-btn" href="#">AGENTS.md</a>
   </div>
 </section>
+
+<p class="small"><button id="ctx-settings-btn" class="small-btn" title="Thresholds of Cache Health, the Tool Output Guard, compaction and cache age">Efficiency settings</button></p>
+
+<dialog id="ctx-settings-dialog">
+  <h2>Efficiency settings</h2>
+  <p class="small muted">Thresholds for the cache-miss events, large tool outputs, compaction warning, cache age and the retry guard. They only change what is shown or warned about.</p>
+  <form id="ctx-settings-form" class="settings-form"></form>
+  <p id="ctx-settings-msg" class="small"></p>
+  <div class="actions">
+    <button type="button" id="ctx-settings-reset">Reset to defaults</button>
+    <button type="button" id="ctx-settings-close">Close</button>
+    <button type="button" id="ctx-settings-save" class="primary">Save</button>
+  </div>
+</dialog>
 
 <table class="tasks" id="tasks-table">
   <thead>
@@ -80,8 +101,36 @@
         <label class="check"><input type="checkbox" name="adaptive_reasoning" checked> Adaptive reasoning <span class="muted">(suggests a retry with more effort; never automatic)</span></label>
         <label class="check"><input type="checkbox" name="context_guard" checked> Context guard <span class="muted">(warn when the thread gets large)</span></label>
       </div>
+      <fieldset class="ctx-group">
+        <legend>Context efficiency <span class="muted small">(fixed for the task: changing tools mid-thread can lose prompt-cache reuse)</span></legend>
+        <div class="row">
+          <label>Tool output limit
+            <select name="ctx_tool_output" id="ctx-tool-output"></select>
+            <span class="small muted" id="ctx-tool-output-note"></span>
+          </label>
+          <label>Tool profile
+            <select name="ctx_tool_profile" id="ctx-tool-profile"></select>
+            <span class="small muted" id="ctx-profile-note"></span>
+          </label>
+        </div>
+        <div class="small" id="ctx-verify-line"><button type="button" id="ctx-verify-btn" class="small-btn">Verify profile</button> <span id="ctx-verify"></span></div>
+        <label class="check"><input type="checkbox" id="ctx-subagents"> Allow subagents <span class="muted">(nested agents are OFF by default: this GUI already runs tasks in parallel)</span></label>
+        <details id="ctx-advanced" class="advanced">
+          <summary>AGENTS.md health and skills catalog</summary>
+          <div id="ctx-preview" class="small muted">choose a repository</div>
+        </details>
+      </fieldset>
       <details class="advanced">
         <summary>Advanced settings</summary>
+        <div class="row">
+          <label>Skills catalog budget <span class="muted">(prompt metadata only, not skill bodies)</span>
+            <select name="ctx_skills" id="ctx-skills"></select>
+            <span class="small muted" id="ctx-skills-note"></span>
+          </label>
+          <label>Working directory <span class="muted">(sub-directory of the worktree; empty = repository root)</span>
+            <input name="ctx_cwd" id="ctx-cwd" placeholder="e.g. packages/api" autocomplete="off">
+          </label>
+        </div>
         <div class="row">
           <label>Output verbosity
             <select name="model_verbosity" id="verbosity-select">

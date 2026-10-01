@@ -30,6 +30,10 @@ async function api(method, url, body) {
   });
   let data = null;
   try { data = await res.json(); } catch (_) {}
+  if (res.status === 401 && data && data.detail && data.detail.code === "auth_required") {
+    location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+    return new Promise(() => {});  // the page is going away; do not run the caller's error handling
+  }
   if (!res.ok) {
     const err = new Error(errText(data));
     err.code = data && data.detail && data.detail.code;
@@ -40,6 +44,49 @@ async function api(method, url, body) {
 const statusBadge = (s) => `<span class="status ${esc(s)}">${esc(statusText(s))}</span>`;
 const num = (n) => (n == null ? "-" : Number(n).toLocaleString("en-US"));
 const pct = (r) => (r == null ? "-" : r.toFixed(r >= 99.95 || r === 0 ? 0 : 1) + "%");
+// ----- Efficiency (credit/API-equivalent estimates, never real subscription savings) -----
+const eqCredits = (v) => (v == null ? "-" : Number(v).toLocaleString("en-US", { maximumFractionDigits: 2 }) + " credits eq.");
+const eqUsd = (v) => (v == null ? "-" : "$" + Number(v).toFixed(v !== 0 && Math.abs(v) < 0.01 ? 4 : 2) + " eq.");
+const eqMultiplier = (v) => (v == null ? "-" : Number(v).toFixed(1) + "x");
+const EFFICIENCY_PERIODS = [["today", "Today", "TODAY"], ["7d", "7 Days", "7 DAY"], ["lifetime", "Lifetime", "LIFETIME"]];
+function efficiencyRows(a, mode) {
+  // `a` is an aggregate (exact / estimated / total buckets). With estimated turns the exact-only part is shown too.
+  const t = a.total, hasEst = a.estimated.turns > 0;
+  const f = (fmt, path) => { const v = path(t); return v == null ? "-" : fmt(v) + (hasEst ? ` (exact only: ${fmt(path(a.exact))}; includes estimated)` : ""); };
+  const rows = [];
+  if (mode === "period") {
+    rows.push(["Total input", num(a.input_tokens)], ["Cached input", num(a.cached_input_tokens)],
+      ["Uncached input", `${num(a.uncached_input_tokens)} (${pct(a.uncached_input_rate)})`],
+      ["Cache write", `${num(a.cache_write_input_tokens)} tokens (part of the uncached input; priced separately where a rate is known)`],
+      ["Overall cache hit", pct(a.cache_hit_rate)]);
+    if (!a.turns) { rows.push(["Savings", "no turns in this period"]); return rows; }
+  } else rows.push(["Cache read (cached input)", num(a.cached_input_tokens)], ["Cache write", num(a.cache_write_input_tokens)],
+    ["Uncached input", num(a.uncached_input_tokens)], ["Cache hit", pct(a.cache_hit_rate)]);
+  if (!t.turns) { rows.push(["Savings", "pricing unavailable"]); return rows; }
+  if (mode === "period") {
+    rows.push(["Cache write cost (API-equivalent)", f(eqUsd, (b) => b.usd.cache_write_cost)],
+      ["Effective input multiplier", f(eqMultiplier, (b) => b.effective_input_multiplier)],
+      ["Credit-equivalent saved by cache", f(eqCredits, (b) => b.credits.saved_by_cache)],
+      ["API-equivalent saved by cache", f(eqUsd, (b) => b.usd.saved_by_cache)],
+      ["Credit-equivalent saved vs Astra (same-token estimate)", f(eqCredits, (b) => b.credits.saved_vs_astra)],
+      ["API-equivalent saved vs Astra (same-token estimate)", f(eqUsd, (b) => b.usd.saved_vs_astra)]);
+  } else {
+    rows.push(["Actual credit-equivalent", f(eqCredits, (b) => b.credits.actual)],
+      ["Without-cache equivalent", f(eqCredits, (b) => b.credits.no_cache)],
+      ["Saved by cache", f(eqCredits, (b) => b.credits.saved_by_cache)],
+      ["Cache write cost (API-equivalent)", f(eqUsd, (b) => b.usd.cache_write_cost)],
+      ["Saved %", pct(t.saved_percent)],
+      ["Astra Standard same-token equivalent (estimate)", f(eqCredits, (b) => b.credits.astra_same_token)],
+      ["Saved vs Astra (same-token estimate)", f(eqCredits, (b) => b.credits.saved_vs_astra)]);
+  }
+  return rows;
+}
+function efficiencyHtml(a, mode) {
+  const dl = efficiencyRows(a, mode).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  const fast = mode === "period" && a.fast_tasks
+    ? `<p class="small">Fast tasks: ${a.fast_tasks}<br>Included allowance multiplier: ${a.allowance_multiplier_fast}x vs Standard <span class="muted">(allowance only; Fast pricing above is Standard x 2)</span></p>` : "";
+  return `<dl class="usage">${dl}</dl>${fast}<p class="small muted">${a.notes.map(esc).join(" ")}</p>`;
+}
 const repoName = (p) => p.split("/").filter(Boolean).pop() || p;
 const kfmt = (n) => (n == null ? "-" : n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
 const EFFORT_LABELS = { default: "Auto", low: "Low", medium: "Medium", high: "High", xhigh: "XHigh", max: "Max", ultra: "Ultra" };
@@ -96,7 +143,7 @@ function initDashboard() {
           <td title="${esc(t.effective_model || "")}">${esc(modelName(t.effective_model || t.model))}</td>
           <td>${esc(effortLabel(t.reasoning_effort))}${t.service_tier !== "default" ? ` <span class="warn" title="Fast mode consumes included usage more quickly.">fast</span>` : ""}</td>
           <td title="cache hit rate of the latest turn (cached / input)">${esc(pct(t.cache_hit_rate))}</td>
-          <td title="current context / model window">${ctxCell(t.context)}</td>
+          <td title="current context / model window">${ctxCell(t.context)}${ctxBadges(t)}</td>
           <td>${statusBadge(t.status)}</td>
           <td>${esc(t.git_summary)}</td>
           <td>${esc(t.branch)}${t.branch_deleted ? " (deleted)" : ""}</td>
@@ -106,6 +153,9 @@ function initDashboard() {
     const n = (k) => tasks.filter((t) => t.status === k).length;
     const active = n("queued") + n("starting") + n("running");
     $("#running-count").textContent = active;
+    const nInt = n("interrupted");
+    $("#resume-all-btn").hidden = !nInt;
+    $("#resume-all-btn").textContent = `Resume interrupted (${nInt})`;
     $("#summary").innerHTML =
       `Running: <b>${active}</b> &nbsp; Completed: <b>${n("completed")}</b> &nbsp; Failed: <b>${n("failed")}</b>` +
       ` &nbsp; Waiting for quota: <b>${n("waiting-for-quota")}</b>` +
@@ -117,6 +167,13 @@ function initDashboard() {
     if (!slug) return "default";
     const m = options.models.find((x) => x.slug === slug);
     return m ? m.name.replace(/^GPT-/i, "").replace(/-/g, " ") : slug;
+  }
+  // Long-context zone (from the latest request's context size) and the number of compactions of the thread.
+  function ctxBadges(t) {
+    const z = { long: ["LONG", "error", "GPT-6.1 Sol long-context pricing zone"], strong: ["!!", "error", "close to the long-context pricing threshold"],
+                warning: ["!", "warn", "approaching the long-context pricing threshold"] }[t.ctx_zone];
+    return (z ? ` <span class="${z[1]}" title="${z[2]}">${z[0]}</span>` : "") +
+           (t.compactions ? ` <span class="muted" title="compactions of this thread">C${t.compactions}</span>` : "");
   }
   function ctxCell(c) {
     if (!c || c.tokens == null) return "-";
@@ -177,6 +234,15 @@ function initDashboard() {
     const a = info && info.agents_md;
     $("#repo-agents").textContent = !a ? "unknown" : (a.found ? "found" : "not found") + (a.nested.length ? ` (+${a.nested.length} nested)` : "");
   }
+  $("#resume-all-btn").addEventListener("click", async () => {
+    const ids = allTasks.filter((t) => t.status === "interrupted" && (!filterEl.dataset.want || t.repository === filterEl.dataset.want)).map((t) => t.id);
+    if (!ids.length || !confirm(`Resume ${ids.length} interrupted task(s) in their existing Codex threads?\n\nTasks without a recorded session need Start New Session and are skipped.`)) return;
+    try {
+      const r = await api("POST", "/api/tasks/resume-interrupted", { task_ids: ids });
+      if (r.skipped.length) alert(`Resumed ${r.resumed.length}. Skipped ${r.skipped.length}:\n` + r.skipped.map((x) => `${x.id}: ${x.reason}`).join("\n"));
+    } catch (e) { alert(e.message); }
+    refresh();
+  });
   $("#repo-new-btn").addEventListener("click", () => $("#new-task-btn").click());
 
   async function refresh() {
@@ -387,6 +453,7 @@ function initDashboard() {
     } catch (_) {}
     buildModelSelect();
     renderRecent();
+    if (window.CtxUI) CtxUI.initNewTask(options);
     if (options.error) { formError.textContent = options.error + " (use Custom… to type a model id)"; formError.hidden = false; }
     if (!f.repository.value) f.repository.value = filterEl.dataset.want || options.repos[0] || "";
     refsFor = "";
@@ -421,6 +488,7 @@ function initDashboard() {
         context_guard: f.context_guard.checked,
         writable_dirs: f.writable_dirs.value,
         feature_flags: f.feature_flags.value,
+        ...(window.CtxUI ? CtxUI.formValues() : {}),
       });
       f.prompt.value = "";
       f.name.value = "";
@@ -456,7 +524,28 @@ function initDashboard() {
   setInterval(refresh, 2000);
   refreshLimits();
   setInterval(refreshLimits, 15000);
+  let effPeriod = "lifetime";
+  const effTabs = $("#efficiency-tabs");
+  effTabs.innerHTML = EFFICIENCY_PERIODS.map(([id, label]) => `<button type="button" data-period="${id}">${label}</button>`).join("");
+  effTabs.addEventListener("click", (e) => {
+    const id = e.target.dataset && e.target.dataset.period;
+    if (!id || id === effPeriod) return;
+    effPeriod = id;
+    refreshEfficiency();
+  });
+  async function refreshEfficiency() {
+    const period = effPeriod;
+    effTabs.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.period === period));
+    $("#efficiency-title").textContent = EFFICIENCY_PERIODS.find((p) => p[0] === period)[2] + " EFFICIENCY";
+    try {
+      const a = await api("GET", "/api/efficiency?period=" + period);
+      if (period === effPeriod) $("#efficiency").innerHTML = efficiencyHtml(a, "period"); // drop a stale response
+    } catch (_) {}
+  }
+  refreshEfficiency();
+  setInterval(refreshEfficiency, 15000);
   setTimeout(renderRepoBar, 300);
+  if (window.CtxUI) { CtxUI.bindNewTask(); CtxUI.initThresholds(); }
   setInterval(() => { delete repoInfoCache[filterEl.dataset.want]; renderRepoBar(); }, 20000);
 }
 
@@ -518,9 +607,13 @@ function initTask() {
     // Additional instruction. Idle: Send resumes the thread. Running (app-server): Send steers the running turn.
     const idle = !active && !t.worktree_removed;
     const steerable = active && t.status === "running" && t.backend === "app-server" && !t.worktree_removed;
-    $("#send-btn").textContent = steerable ? "Send to running turn" : "Send";
+    $("#send-btn").textContent = steerable ? "Send to running turn" : "Send Standard";
     $("#send-btn").disabled = sending || !(steerable || (idle && t.codex_thread_id));
+    $("#send-fast-btn").hidden = active;  // the speed is chosen per turn; an instruction added to a running turn has none
+    $("#send-fast-btn").disabled = sending || !(idle && t.codex_thread_id);
     $("#new-session-btn").disabled = !idle || sending;
+    $("#resume-btn").hidden = t.status !== "interrupted";
+    $("#resume-btn").disabled = sending || !t.codex_thread_id;
     $("#instruction").disabled = !(idle || steerable);
     $("#session-id").textContent = t.codex_thread_id ? `thread ${t.codex_thread_id}` : "";
     $("#instruction-hint").textContent =
@@ -558,6 +651,7 @@ function initTask() {
     document.querySelectorAll(".compact-btn").forEach((b) => (b.disabled = !canCompact));
     renderContext(t);
     renderObserved(t);
+    if (window.CtxUI) CtxUI.renderTask(t, ctxHandlers);
   }
 
   function renderContext(t) {
@@ -597,6 +691,7 @@ function initTask() {
     $("#latest-usage").innerHTML = l
       ? `<div class="muted">Latest turn (${l.turn})</div><dl class="usage">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
       : "no completed turn yet";
+    $("#efficiency").innerHTML = u.turns.length ? efficiencyHtml(u.efficiency, "task") : "no turn yet";
     $("#turns").hidden = !u.turns.length;
     $("#turns-body").innerHTML = u.turns.map((r) =>
       `<tr><td>${r.turn}${r.kind === "compact" ? " (compact)" : ""}${r.status !== "completed" ? ` <span class="muted">${esc(r.status)}</span>` : ""}</td><td>${r.session}</td>` +
@@ -730,7 +825,7 @@ function initTask() {
     return "branch deleted";
   }));
 
-  async function sendInstruction({ path = "messages", label = "Send", confirmText = "", effort = null, fallbackToLast = false }) {
+  async function sendInstruction({ path = "messages", label = "Send", confirmText = "", effort = null, fallbackToLast = false, tier = null }) {
     let prompt = $("#instruction").value;
     if (!prompt.trim() && fallbackToLast) prompt = task.last_prompt || "";
     if (!prompt.trim()) { setMsg("Write an instruction first.", true); return; }
@@ -741,6 +836,7 @@ function initTask() {
       await action(label, async () => {
         const body = { prompt };
         if (effort) body.reasoning_effort = effort;
+        if (tier) body.service_tier = tier;  // Send Standard / Send Fast: the speed of this turn only
         await api("POST", `/api/tasks/${id}/${path}`, body);
         $("#instruction").value = "";
         return label + ": started";
@@ -750,9 +846,35 @@ function initTask() {
       renderTask();
     }
   }
-  $("#send-btn").addEventListener("click", () => sendInstruction({ label: ACTIVE.includes(task.status) ? "Send to running turn" : "Send" }));
+  $("#send-btn").addEventListener("click", () => sendInstruction(ACTIVE.includes(task.status) ? { label: "Send to running turn" } : { label: "Send Standard", tier: "standard" }));
+  $("#send-fast-btn").addEventListener("click", () => sendInstruction({ label: "Send Fast", tier: "fast",
+    confirmText: "Send this instruction at Fast speed?\n\nFast costs 2x at API-equivalent prices and consumes your included usage faster. Only this turn is Fast; the next Send is Standard." }));
+  // Context Efficiency panel actions (the choices are the user's; the GUI never does any of them on its own)
+  const ctxHandlers = {
+    zoneAction: async (what) => {
+      if (what === "continue") { await action("Continue", async () => { await api("POST", `/api/tasks/${id}/context-ack`); return "Continuing in the same thread (nothing changed)"; }); return; }
+      if (what === "compact") { $("#compact-btn").click(); return; }
+      $("#instruction").focus();
+      setMsg("Write the first instruction of the new session, then press Start New Session.", false);
+    },
+    changeProfile: async (current) => {
+      const next = (prompt(`Tool profile (full / development / minimal). Current: ${current}\n\nChanging tool configuration may reduce prompt cache reuse.`, current) || "").trim().toLowerCase();
+      if (!next || next === current) return;
+      if (!confirm(`Change the tool profile to "${next}"?\n\nChanging tool configuration may reduce prompt cache reuse.`)) return;
+      await action("Change tool profile", async () => { await api("POST", `/api/tasks/${id}/tool-profile`, { profile: next, confirm: true }); return "tool profile changed"; });
+    },
+  };
+  if (window.CtxUI) {
+    CtxUI.loadAudit(id);
+    $("#ctx-agents-details").addEventListener("toggle", (ev) => { if (ev.target.open) CtxUI.loadAudit(id); });
+  }
   $("#retry-medium-btn").addEventListener("click", () => sendInstruction({ label: "Retry with Medium", effort: "medium", fallbackToLast: true }));
   $("#retry-high-btn").addEventListener("click", () => sendInstruction({ label: "Retry with High", effort: "high", fallbackToLast: true }));
+  $("#resume-btn").addEventListener("click", () => action("Resume", async () => {
+    const r = await api("POST", "/api/tasks/resume-interrupted", { task_ids: [id] });
+    if (r.skipped.length) throw new Error(r.skipped[0].reason);
+    return "Resume: started";
+  }));
   $("#new-session-btn").addEventListener("click", () => sendInstruction({ path: "new-session", label: "Start New Session",
     confirmText: "Start a NEW Codex thread in this worktree?\n\nThe conversation so far is not carried over and the previous thread's cached input is not reused." }));
   $("#quota-retry-btn").addEventListener("click", () => {
@@ -921,7 +1043,7 @@ function initAgents() {
     }
   });
 
-  load("AGENTS.md");
+  load(new URLSearchParams(location.search).get("path") || "AGENTS.md");  // the health check's Edit button names the file
 }
 
 function colorDiffText(text) {

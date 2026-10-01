@@ -173,3 +173,12 @@ def test_rate_limit_history_roundtrip(db):
     assert [r["ts"] for r in db.list_rate_limits(task_id="a")] == ["t1"]
     with pytest.raises(ValueError):
         db.add_rate_limits(ts="t", reason="r", bogus=1)
+
+
+def test_list_all_turns_since_filters_by_created_at(db):
+    new_task(db, "t1")
+    turn(db, "t1", 1, created_at="2026-01-01T00:00:00Z")
+    turn(db, "t1", 2, created_at="2026-01-02T00:00:00Z")
+    assert [t["turn"] for t in db.list_all_turns()] == [1, 2]
+    assert [t["turn"] for t in db.list_all_turns("2026-01-01T12:00:00Z")] == [2]
+    assert [t["turn"] for t in db.list_all_turns("2026-01-02T00:00:00Z")] == [2]

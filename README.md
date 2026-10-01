@@ -1,6 +1,6 @@
 # Codex GUI
 
-Codex CLI を複数同時に動かして一画面で管理する、自分専用のローカル Web GUI。Codex は **`codex app-server`**（thread / turn）経由で動かします。
+Codex CLI を複数同時に動かして一画面で管理する、セルフホスト型の Web GUI。ログイン付きで、Codex は **`codex app-server`**（thread / turn）経由で動かします。
 
 - 1 タスク = 1 Git branch = 1 Git worktree = 1 Codex thread。追加指示は同じ thread の次の turn（`thread/resume` + `turn/start`）なので、会話履歴は Codex が持ち続け、prompt cache（cached input）が効きます。GUI が履歴を貼り直すことはありません
 - 定額枠をできるだけ有効に使うための既定値（GPT-6.1 Sol / Standard / Low / 低 verbosity / web search OFF）、cache hit・context・利用枠の表示（[使用量の最適化](#使用量の最適化)）
@@ -9,11 +9,21 @@ Codex CLI を複数同時に動かして一画面で管理する、自分専用�
 - 複数 Codex プロセスの並列実行、ログのリアルタイム表示、Git status / diff / log の確認
 - Stop、Commit / Push、Worktree / Branch の削除、SQLite による履歴保存
 
-localhost 専用です。認証・マルチユーザー・クラウド対応はありません。
+## セキュリティ（必ず読んでください）
+
+このアプリは **サインインできる人に、サーバー上で Codex（＝コマンド実行・ファイル編集・Git push）を操作させます**。公開するときは次を守ってください。
+
+- **ログインは既定で ON** です。ユーザーが 0 人のあいだは誰もサインインできません（下記「ログインとアカウント」）。
+- **HTTPS の reverse proxy 越し、または VPN（Tailscale / WireGuard など）の内側で公開**してください。素の HTTP をインターネットに出すとパスワードとセッションが平文で流れます。
+- アカウントは全員が**同じ権限**（全タスクの閲覧・実行・Push、サーバーのフォルダ一覧、`AGENTS.md` の編集）を持ちます。ロールやタスクごとの権限分離はありません。信頼できる人にだけアカウントを作ってください。
+- `CODEX_GUI_AUTH=0`（ログイン無効）は **loopback（`127.0.0.1`）専用**です。`run.sh` は、ログイン無効のまま `CODEX_GUI_HOST` を外向きにすると起動を拒否します。
+- パスワードは scrypt でハッシュ化して SQLite に保存し、セッションは推測不能なランダム値（DB にはその SHA-256 だけ）です。
+  Cookie は `HttpOnly` / `SameSite=Lax`（HTTPS では `Secure`）、状態を変える要求は `Origin` を検査し、ログイン失敗は回数制限（5 回 / 15 分）をかけます。
+- 二要素認証・パスワードリセットメール・SSO はありません（パスワードを忘れたらサーバー上で `python -m app.users passwd`）。
 
 ## 必要環境
 
-- Linux / WSL2、Python 3.10+、git
+- Linux / WSL2 / macOS、Python 3.10+、git（`run.sh` は bash スクリプト。動作確認は Linux / WSL2）
 - `codex` コマンドがインストール済みで、**ChatGPT アカウントでログイン済み**であること（`codex app-server --help` が動くこと）
   - 動作確認したバージョン: codex-cli 0.159.2（調査記録: [docs/codex-capabilities.md](docs/codex-capabilities.md)）
   - app-server が使えない古い CLI では `CODEX_GUI_BACKEND=exec`（従来の `codex exec` 方式。利用枠表示・実行中の追加指示・compact は使えません）
@@ -21,10 +31,66 @@ localhost 専用です。認証・マルチユーザー・クラウド対応は�
 ## 起動
 
 ```bash
+git clone https://github.com/Kanade147359/codex-gui.git
+cd codex-gui
 ./run.sh
 ```
 
-初回は `.venv` を作って依存パッケージを入れます。起動後、Windows のブラウザから <http://127.0.0.1:8765> を開いてください。
+初回は `.venv` を作って依存パッケージを入れ、**ログイン用のユーザーがまだ無ければ作成を促します**（端末から実行したとき）。
+起動後、ブラウザ（WSL2 なら Windows 側のブラウザ）で <http://127.0.0.1:8765> を開き、作ったユーザーでサインインしてください。
+
+## ログインとアカウント
+
+ユーザーは SQLite（`$CODEX_GUI_HOME/codex-gui.db`）に保存します。管理はサーバー上の CLI で行います（パスワードは端末から入力し、コマンドラインや履歴には残しません）。
+
+```bash
+.venv/bin/python -m app.users add alice      # ユーザー作成（10 文字以上のパスワード）
+.venv/bin/python -m app.users passwd alice   # パスワード変更（そのユーザーの全セッションをサインアウト）
+.venv/bin/python -m app.users list
+.venv/bin/python -m app.users delete alice
+```
+
+- サインイン後は右上のユーザー名から **Account** ページで自分のパスワードを変更できます（他のブラウザのセッションは無効になります）。**Sign out** でサインアウト。
+- セッションの有効期間は既定 7 日（`CODEX_GUI_SESSION_HOURS`）。有効期限が切れた・サインアウトしたセッションは使えません。
+- 未サインインで開いたページは `/login` に移動し、サインイン後に元のページへ戻ります。API は `401` を返します。
+- ログイン失敗は同一アドレス + ユーザー名で 5 回 / 15 分を超えると `429`（待ち時間つき）になります。この制限はメモリ上なので、プロセスを再起動するとリセットされます。
+- `GET /healthz`（`{"ok": true}`）は、死活監視用にログイン無しで答えます。`/docs` / `/openapi.json` は公開しません。
+- スクリプトからユーザーを作るときは `CODEX_GUI_NEW_PASSWORD` にパスワードを渡せます（シェル履歴に残さないよう注意）。
+
+## 公開する（リモートアクセス）
+
+Codex GUI 自体は `127.0.0.1` で待ち受け、**HTTPS を終端する reverse proxy** を前に置く構成を推奨します。
+
+Caddy（証明書は自動取得）:
+
+```caddyfile
+gui.example.com {
+    reverse_proxy 127.0.0.1:8765
+}
+```
+
+nginx:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name gui.example.com;
+    # ssl_certificate / ssl_certificate_key は各自
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;                      # Origin 検査が Host と照合します
+        proxy_set_header X-Forwarded-Proto $scheme;       # https と判定して Secure Cookie にします
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+- proxy は同じマシン（`127.0.0.1`）から接続してください。uvicorn は `127.0.0.1` からの `X-Forwarded-*` だけを信用します（別の場所なら `run.sh` の前に `FORWARDED_ALLOW_IPS` を設定）。
+- proxy が `Host` を書き換える場合は、元のホスト名を `X-Forwarded-Host` で渡してください（状態を変える要求は `Origin` が `Host` か `X-Forwarded-Host` と一致しないと `403`）。
+- Cookie の `Secure` を強制するなら `CODEX_GUI_COOKIE_SECURE=1`。既定の `auto` は、HTTPS で届いた要求にだけ付けます。
+- proxy を使わず自分で待ち受けるなら `CODEX_GUI_HOST=0.0.0.0 ./run.sh`（**ログイン必須。HTTPS ではないので VPN の内側だけで**）。
+- 公開前のチェック: ① ユーザーを作った ② HTTPS になっている ③ ファイアウォールで 8765 を外に出していない ④ `~/.local/share/codex-gui`（DB・ログ）と `~/.ssh` の権限が自分だけ ⑤ `codex` が ChatGPT ログイン済み。
 
 環境変数:
 
@@ -38,6 +104,13 @@ localhost 専用です。認証・マルチユーザー・クラウド対応は�
 | `CODEX_GUI_CONTEXT_WARN_PERCENT` | `80` | Context Guard が警告する context 使用率（%） |
 | `CODEX_GUI_PREFERRED_MODEL` | `gpt-6.1-sol` | 推奨モデル。`codex debug models` に無ければ「Codex default」 |
 | `CODEX_GUI_HOST` / `CODEX_GUI_PORT` | `127.0.0.1` / `8765` | 待ち受け先 |
+| `CODEX_GUI_AUTH` | `1` | `0` でログイン無効（loopback 専用。外向きの `CODEX_GUI_HOST` だと `run.sh` が起動を拒否） |
+| `CODEX_GUI_SESSION_HOURS` | `168` | ログインセッションの有効時間 |
+| `CODEX_GUI_COOKIE_SECURE` | `auto` | セッション Cookie の `Secure`。`auto` = HTTPS の要求にだけ付ける / `1` 常に / `0` 付けない |
+| `CODEX_GUI_NEW_PASSWORD` | （なし） | `python -m app.users` が端末の代わりに読むパスワード（スクリプト用） |
+| `CODEX_GUI_AUTO_RETRY` / `CODEX_GUI_MAX_RETRIES` | `1` / `3` | 予期しない停止の自動リトライの既定（Task ごとに変更可） |
+| `CODEX_GUI_RETRY_BACKOFF` | `10,30,60` | リトライまでの待ち秒数（カンマ区切り。最後の値を以降も使う） |
+| `CODEX_GUI_SCHEDULER_INTERVAL` | `2` | 待機中・リトライ待ちタスクを見に行く間隔（秒） |
 | `CODEX_GUI_SSH_KEY` | `~/.ssh/id_ed25519` | agent が空のときに `ssh-add` する鍵 |
 | `CODEX_GUI_SSH_AGENT_ENV` | `~/.ssh/agent.env` | agent の環境変数の保存先 |
 | `CODEX_GUI_SSH_DIAGNOSTICS` | `1` | `0` で起動時の SSH 診断ログを無効化 |
@@ -183,7 +256,7 @@ Weekly   ██░░░░░░░░   11%   Reset: Oct 8 18:20
 Running: 4
 ```
 
-- ウィンドウは `windowDurationMins` で **5 hour / Weekly** に分類します。**このマシンのプランは週次の 1 本だけで、5 時間枠は返ってきません**（プランによっては 2 本）。無い枠は表示しません。
+- ウィンドウは `windowDurationMins` で **5 hour / Weekly** に分類します。**プランによっては週次の 1 本だけで 5 時間枠は返ってきません**（確認した環境では週次のみ。2 本返るプランもあります）。無い枠は表示しません。
 - `Available resets: N`（利用可能な reset 数）も表示のみ。**reset を GUI が使うことはありません。**
 - 利用枠の履歴を `rate_limit_history` テーブルに保存します（Task の各ターンの開始時・終了時は必ず、Codex からの更新通知は 5 分に 1 回まで）。後から Task ごとの消費を分析するためで、**自動制御には使いません**。
   `GET /api/limits/history?task_id=...` で取れます。
@@ -266,7 +339,7 @@ sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き
 
 実 Codex は使わず、`tests/fake_app_server.py`（app-server の JSON-RPC。thread / turn / 累積 usage / rate limit / steer / interrupt / compact / quota エラー）と
 `tests/fake_codex.py`（`codex exec` の従来方式）を、実際の JSON-RPC クライアント・サブプロセス・シグナル・git を通して動かします。
-カバー範囲: Task と thread id の永続化、同一 thread の再利用（resume）、token / cached の parse と cache hit 計算、rate limit の parse（週次のみ / 2 本）、
+カバー範囲: ログイン（ハッシュ・セッション・回数制限・CSRF・リダイレクト先の検証・パスワード変更・ユーザー CLI）、Task と thread id の永続化、同一 thread の再利用（resume）、token / cached の parse と cache hit 計算、rate limit の parse（週次のみ / 2 本）、
 quota 時の状態遷移（再試行しない）、model・reasoning・Standard・auto approval・web search OFF の既定値と送信内容、API キーに fallback しないこと、
 context guard の判定、steer / stop / compact、AGENTS.md の読み書き・競合・path 検証・Repository と Task worktree の分離。
 
@@ -286,12 +359,17 @@ CODEX_GUI_REAL=1 CODEX_GUI_REAL_MODEL=gpt-6.1-sol CODEX_GUI_REAL_PAUSE=15 .venv/
 - Adaptive reasoning は提案のみで、自動昇格はしません。
 - compact 直後の context サイズは次のターンまで不明です。
 - 利用枠の % は整数で粗く、Task ごとの消費は並列実行時に分離できません。
+- アカウントはロール無しで全員が同権限（全タスク・フォルダ一覧・Push を操作可能）。二要素認証・パスワードリセットメール・SSO・監査ログはありません。
+- ログイン失敗の回数制限はメモリ上（プロセス再起動で戻る）で、複数プロセスでは共有されません。
 
 ## 構成
 
 ```text
 app/
-  main.py           アプリ生成・起動時の復旧・終了処理
+  main.py           アプリ生成・起動時の復旧・終了処理・ログイン / CSRF / セキュリティヘッダーの組み込み
+  auth.py           パスワードのハッシュ（scrypt）・セッション・ログイン失敗の回数制限
+  auth_routes.py    /login・/logout・/account（素の HTML フォーム）
+  users.py          ユーザー管理 CLI（python -m app.users）
   routes.py         HTML ページと JSON API
   task_manager.py   タスク作成・追加指示(resume / steer)・並列実行・Stop・compact・復旧・Git 操作・usage / 利用枠の記録
   appserver.py      codex app-server の JSON-RPC クライアント（共有プロセス・通知の振り分け・API キーを渡さない環境）
@@ -306,7 +384,15 @@ app/
   models.py         ステータス遷移・命名規則
   config.py         設定
   ssh_agent.py      サブプロセスへの SSH_AUTH_SOCK 継承・起動時の SSH 診断
+  scheduler.py      待機中 / キュー / リトライ待ちタスクを定期的に進めるバックグラウンド処理
+  recovery.py       予期しない停止の分類とリトライの間隔
+  efficiency.py     cache・モデル選択による節約量の見積もり（クレジット / API 換算の推定。実際の節約額ではありません）
+  cache_health.py   ターンごとの cache hit の記録・miss の原因候補・compact の監視
+  ctx_config.py / ctx_guard.py / ctx_manager.py / turn_observer.py   Context Efficiency（設定・ガード・ターンの観測）
+  agents_audit.py   AGENTS.md の健全性チェック（読み取り専用）
+  tool_probe.py / fake_responses.py   実 codex に偽の Responses API を向けてツール一覧などを測る
+  procinfo.py / tokens.py             pid の同一性確認（/proc）・token の概算
 docs/               Codex CLI / app-server の調査記録
-static/ templates/  UI（素の HTML/CSS/JS、ポーリング）
+static/ templates/  UI（素の HTML/CSS/JS、ポーリング。`script-src 'self'` の CSP に従い、インラインスクリプトはありません）
 tests/
 ```

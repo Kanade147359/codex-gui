@@ -85,6 +85,19 @@ async def commit_count(worktree, base_sha: str) -> int:
     return int(out.strip()) if code == 0 and out.strip().isdigit() else 0
 
 
+async def snapshot(worktree) -> dict:
+    """Read-only picture of a worktree, recorded before a retry: `git status`, HEAD and the push state.
+
+    Nothing here changes the repository. `pushed` is None when there is no upstream to compare with (never pushed, or no
+    remote), else the number of local commits the upstream does not have yet.
+    """
+    _, status, _ = await run_git(worktree, "status", "--short", "--branch")
+    code, head, _ = await run_git(worktree, "log", "-1", "--format=%h %s", check=False)
+    code_up, ahead, _ = await run_git(worktree, "rev-list", "--count", "@{upstream}..HEAD", check=False)
+    unpushed = int(ahead.strip()) if code_up == 0 and ahead.strip().isdigit() else None
+    return {"status": status.strip(), "head": head.strip() if code == 0 else "", "unpushed": unpushed}
+
+
 async def log_oneline(worktree, n: int = 10) -> str:
     return (await run_git(worktree, "log", "--oneline", f"-{n}"))[1]
 

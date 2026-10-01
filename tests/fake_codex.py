@@ -1,6 +1,15 @@
 """Stand-in for `codex exec --json [resume <thread>] -`: reads the prompt from stdin and behaves per its first word.
 
 ok | fail | sleep | stubborn | nothread | newthread | meet <mine> <theirs> <dir>
+crash        thread.started, then the process kills itself (SIGKILL) -- the first time per test only
+crashloop    like crash, but every time (a task that can never be recovered)
+crashearly   like crash but before thread.started (no thread id exists) -- first time per test only
+wipcrash     writes an uncommitted wip.txt, thread.started, then kills itself -- first time per test only
+gate <file>  waits until <file> exists (a test opens the gate), then behaves like ok
+err <code> <text...>   writes <text> to stderr and exits with <code> (thread.started first)
+
+$FAKE_CODEX_FORCE_MODE (e.g. "crash", "err 1 401 Unauthorized") replaces the mode of EVERY invocation, so that a retry
+(whose prompt is the fixed recovery instruction, a plain "ok" here) can be made to fail too.
 
 Like the real CLI (codex-cli 0.159.2): thread.started carries the session id (a resume reports the id it was
 given), and turn.completed.usage is the running total of the thread. Per-thread totals are kept in
@@ -16,7 +25,19 @@ import uuid
 argv = sys.argv[1:]
 resume = argv[1] if argv[:1] == ["resume"] else None
 prompt = sys.stdin.read().split()
+logged_prompt = list(prompt)
+if os.environ.get("FAKE_CODEX_FORCE_MODE"):
+    prompt = os.environ["FAKE_CODEX_FORCE_MODE"].split()
 mode = prompt[0] if prompt else "ok"
+
+
+def once(name):
+    """True the first time `name` is asked for in this test (a marker file in the state dir)."""
+    marker = os.path.join(os.environ["FAKE_CODEX_STATE"], "once-" + name)
+    if os.path.exists(marker):
+        return False
+    open(marker, "w").close()
+    return True
 
 
 def emit(obj):
@@ -39,14 +60,31 @@ def report_usage():
 
 # Evidence for the tests of what the process was started with.
 with open(os.path.join(os.environ["FAKE_CODEX_STATE"], "invocations.jsonl"), "a") as f:
-    f.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "prompt": " ".join(prompt)}) + "\n")
+    f.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "prompt": " ".join(logged_prompt)}) + "\n")
 
 thread = resume or "thread-" + uuid.uuid4().hex[:8]
 if mode == "newthread":  # a CLI that ignores the resume request
     thread = "thread-" + uuid.uuid4().hex[:8]
+if mode == "crashearly" and once("crashearly"):
+    os.kill(os.getpid(), signal.SIGKILL)
 if mode != "nothread":
     emit({"type": "thread.started", "thread_id": thread})
-if mode in ("ok", "nothread", "newthread"):
+if mode == "wipcrash" and once("wipcrash"):
+    open("wip.txt", "w").write("work in progress\n")
+    os.kill(os.getpid(), signal.SIGKILL)
+if (mode == "crash" and once("crash")) or mode == "crashloop":
+    os.kill(os.getpid(), signal.SIGKILL)
+if mode == "err":
+    sys.stderr.write(" ".join(prompt[2:]) + "\n")
+    sys.exit(int(prompt[1]))
+if mode == "gate":
+    for _ in range(300):
+        if os.path.exists(prompt[1]):
+            break
+        time.sleep(0.1)
+    mode = "ok"
+# "Previous ..." is the fixed recovery instruction of a retry; the other crash modes behave normally after their first crash.
+if mode in ("ok", "nothread", "newthread", "Previous", "crash", "crashearly", "wipcrash"):
     open("out.txt", "a").write("hello\n")
     print("this line is not json", flush=True)
     sys.stderr.write("a warning\n")

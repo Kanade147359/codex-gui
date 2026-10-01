@@ -9,6 +9,7 @@ import signal
 from typing import Optional
 
 from .appserver import subscription_env
+from .ctx_config import efficiency_config, task_cwd
 
 # One JSONL line from codex can contain a lot of command output.
 STREAM_LIMIT = 32 * 1024 * 1024
@@ -28,7 +29,11 @@ def task_config(task: dict) -> dict:
     }
     if task["reasoning_effort"] not in ("", "default"):
         cfg["model_reasoning_effort"] = task["reasoning_effort"]
+    # Context Efficiency (tool output cap, nested agents, skills budget, tool profile): frozen per task, see ctx_config.
+    cfg.update(efficiency_config(task))
     dirs = [d.strip() for d in (task.get("writable_dirs") or "").splitlines() if d.strip()]
+    if task.get("cwd_subdir"):
+        dirs.append(task["worktree"])  # a sub-directory as cwd must not shrink what Codex may write: the whole worktree stays writable
     if dirs:
         cfg["sandbox_workspace_write.writable_roots"] = dirs
     for flag in (task.get("feature_flags") or "").replace(",", " ").split():
@@ -77,7 +82,7 @@ class CodexRunner:
         the identical options (model, effort, approval and cwd must not drift inside one task).
         No daemon flag is passed: Codex decides how it reaches its shared app-server.
         """
-        cmd = [self.codex_bin, "exec", "--json", "-C", task["worktree"]]
+        cmd = [self.codex_bin, "exec", "--json", "-C", task_cwd(task)]
         if task["auto_approval"] and task["sandbox"] == "workspace-write":
             # Automatic review inside the workspace-write sandbox. Never the dangerous bypass flag.
             cmd.append("--approve-for-me")
@@ -99,7 +104,7 @@ class CodexRunner:
         """Start the process in its own session so the whole group can be signalled."""
         return await asyncio.create_subprocess_exec(
             *self.build_command(task, resume_thread),
-            cwd=task["worktree"],
+            cwd=task_cwd(task),
             env=subscription_env(self.subscription_only),  # SSH_AUTH_SOCK, minus API keys; the agent is shared
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

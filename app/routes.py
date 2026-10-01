@@ -1,13 +1,13 @@
 """HTTP routes: two HTML pages plus a small JSON API (polled by static/app.js)."""
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from . import agents_md
+from . import agents_audit, agents_md, ctx_config
 from . import git_manager as git
 from .fs_browser import BrowseError, list_dir
 from .task_manager import TaskError, TaskManager
@@ -39,15 +39,62 @@ class NewTask(BaseModel):
     context_guard: bool = True
     writable_dirs: str = ""
     feature_flags: str = ""
+    # Run after other tasks: the ids this task waits for (empty = start immediately). Policy: all_success.
+    depends_on: list[str] = []
+    dependency_policy: str = "all_success"
+    # Automatic recovery from an unexpected stop. None = the server's defaults (on, 3 retries).
+    auto_retry: Optional[bool] = None
+    max_retries: Optional[int] = None
+    # Context Efficiency. Frozen for the task. Presets are the GUI's own; "default" = Codex's behaviour.
+    tool_output: str = "default"               # default | conservative (8000) | balanced (16000) | large (32000)
+    tool_output_limit: Optional[int] = None    # an explicit token limit instead of a preset
+    skills: str = "default"                    # default | economy (2000) | balanced (4000) | large (8000): catalog budget
+    skills_budget: Optional[int] = None
+    allow_subagents: bool = False              # nested agents are OFF unless the task needs them
+    tool_profile: str = "full"                 # full | development | minimal
+    cwd_subdir: str = ""                       # Advanced: run Codex in a sub-directory of the worktree
+
+
+class ResumeRequest(BaseModel):
+    task_ids: Optional[list[str]] = None
 
 
 class Instruction(BaseModel):
     prompt: str
     reasoning_effort: Optional[str] = None  # an explicit "Retry with ..." choice; omitted = unchanged
+    service_tier: Optional[str] = None      # speed of THIS turn: "standard" (Send Standard) / "fast" (Send Fast); omitted = the task's
+
+
+class ToolProfileChange(BaseModel):
+    profile: str
+    confirm: bool = False  # the user accepted "Changing tool configuration may reduce prompt cache reuse"
+
+
+class ToolProfileVerify(BaseModel):
+    repository: str
+    profile: str
+    force: bool = False
+
+
+class ContextSettings(BaseModel):
+    values: dict[str, int]
 
 
 class CommitRequest(BaseModel):
     message: str = ""
+
+
+class RetryRequest(BaseModel):
+    confirm_over_limit: bool = False  # the user confirmed retrying past the automatic retry limit
+
+
+class AutoRetryRequest(BaseModel):
+    enabled: Optional[bool] = None
+    max_retries: Optional[int] = None
+
+
+class DependenciesRequest(BaseModel):
+    depends_on: list[str]
 
 
 def api_error(e) -> HTTPException:
@@ -84,6 +131,16 @@ def worktree_root(request: Request, task_id: str) -> str:
     if task["worktree_removed"] or not Path(task["worktree"]).is_dir():
         raise HTTPException(status_code=409, detail={"message": "worktree no longer exists", "code": "no_worktree"})
     return task["worktree"]
+
+
+def context_options() -> dict:
+    """Preset tables for the New Task form (the values are the GUI's own presets, not Codex's)."""
+    return {
+        "tool_output": [{"id": k, "label": ctx_config.TOOL_OUTPUT_LABELS[k], "limit": v} for k, v in ctx_config.TOOL_OUTPUT_PRESETS.items()],
+        "skills": [{"id": k, "label": ctx_config.SKILLS_LABELS[k], "budget": v} for k, v in ctx_config.SKILLS_PRESETS.items()],
+        "tool_profiles": [{"id": k, "label": ctx_config.TOOL_PROFILE_LABELS[k]} for k in ctx_config.TOOL_PROFILES],
+        "default_tool_output": "default", "default_skills": "default", "default_tool_profile": "full", "default_allow_subagents": False,
+    }
 
 
 # ---------- pages ----------
@@ -139,7 +196,8 @@ async def options(request: Request):
     m = manager(request)
     return {**await request.app.state.catalog.get(), "repos": m.db.recent_repos(),
             "backend": m.settings.backend, "subscription_only": m.settings.subscription_only,
-            "context_warn_percent": m.settings.context_warn_percent}
+            "default_auto_retry": m.settings.default_auto_retry, "default_max_retries": m.settings.default_max_retries,
+            "context_warn_percent": m.settings.context_warn_percent, "context_efficiency": context_options()}
 
 
 @router.get("/api/fs")
@@ -198,11 +256,23 @@ async def get_usage(request: Request, task_id: str):
         raise api_error(e)
 
 
+@router.get("/api/efficiency")
+async def get_efficiency(request: Request, period: Literal["today", "7d", "lifetime"] = "lifetime"):
+    """Efficiency of all tasks over a period: credit/API-equivalent estimates, not real subscription savings."""
+    return manager(request).efficiency_for(period)
+
+
+@router.post("/api/tasks/resume-interrupted")
+async def resume_interrupted(request: Request, body: ResumeRequest):
+    """Continue interrupted tasks in their existing Codex threads (all of them unless task_ids is given)."""
+    return await manager(request).resume_interrupted(body.task_ids)
+
+
 @router.post("/api/tasks/{task_id}/messages")
 async def send_instruction(request: Request, task_id: str, body: Instruction):
     """Additional instruction: continues the task's existing Codex session (codex exec resume)."""
     try:
-        return await manager(request).send_instruction(task_id, body.prompt, body.reasoning_effort)
+        return await manager(request).send_instruction(task_id, body.prompt, body.reasoning_effort, body.service_tier)
     except TaskError as e:
         raise api_error(e)
 
@@ -233,6 +303,59 @@ async def limits(request: Request, refresh: bool = False):
 @router.get("/api/limits/history")
 async def limits_history(request: Request, limit: int = 200, task_id: str = ""):
     return {"history": manager(request).db.list_rate_limits(min(max(limit, 1), 1000), task_id or None)}
+
+
+@router.get("/api/tasks/{task_id}/attempts")
+async def get_attempts(request: Request, task_id: str):
+    """Every run of the task (first run, instructions, retries), apart from the token-usage turns."""
+    try:
+        return {"attempts": manager(request).attempts(task_id)}
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/retry")
+async def retry_task(request: Request, task_id: str, body: Optional[RetryRequest] = None):
+    """Retry a failed or stopped task (or end a retry wait now): same worktree, same Codex thread."""
+    try:
+        return await manager(request).retry_task(task_id, bool(body and body.confirm_over_limit))
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/auto-retry")
+async def set_auto_retry(request: Request, task_id: str, body: AutoRetryRequest):
+    try:
+        return await manager(request).set_auto_retry(task_id, body.enabled, body.max_retries)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.put("/api/tasks/{task_id}/dependencies")
+async def set_dependencies(request: Request, task_id: str, body: DependenciesRequest):
+    """Replace the prerequisites of a task that has not started. Cycles, self and duplicate dependencies are refused."""
+    try:
+        return await manager(request).set_dependencies(task_id, body.depends_on)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/run-anyway")
+async def run_anyway(request: Request, task_id: str):
+    """Start a waiting or blocked task without its prerequisites."""
+    try:
+        return await manager(request).run_anyway(task_id)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/retry-dependencies")
+async def retry_dependencies(request: Request, task_id: str, body: Optional[RetryRequest] = None):
+    """For a blocked task: retry its failed or stopped prerequisites and wait for them again."""
+    try:
+        return await manager(request).retry_failed_dependencies(task_id, bool(body and body.confirm_over_limit))
+    except TaskError as e:
+        raise api_error(e)
 
 
 @router.post("/api/tasks/{task_id}/stop")
@@ -339,3 +462,87 @@ async def task_agents_diff(request: Request, task_id: str, path: str = agents_md
         return await agents_md.diff(worktree_root(request, task_id), path)
     except agents_md.AgentsError as e:
         raise api_error(e)
+
+
+# ---------- Context Efficiency ----------
+
+@router.get("/api/context/preview")
+async def context_preview(request: Request, repository: str, cwd_subdir: str = "", skills: str = "default",
+                          skills_budget: Optional[int] = None):
+    """AGENTS.md health check (read-only), the skills catalog and the model's tool-output cap for a repository."""
+    try:
+        return await manager(request).context_preview(repository, cwd_subdir, skills=skills, skills_budget=skills_budget)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tool-profiles/verify")
+async def verify_tool_profile(request: Request, body: ToolProfileVerify):
+    """Measure, with the real Codex and no model, how many tools the model can reach with a profile (vs Codex's default)."""
+    try:
+        return await manager(request).verify_tool_profile(body.repository, body.profile, body.force)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/tool-profile")
+async def change_tool_profile(request: Request, task_id: str, body: ToolProfileChange):
+    try:
+        return await manager(request).change_tool_profile(task_id, body.profile, body.confirm)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/context-ack")
+async def context_ack(request: Request, task_id: str):
+    """[Continue] in the long-context banner: only remembers the choice. Nothing is compacted or changed."""
+    try:
+        return manager(request).acknowledge_long_context(task_id)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.get("/api/tasks/{task_id}/agents-audit")
+async def task_agents_audit(request: Request, task_id: str):
+    """The AGENTS.md chain Codex reads for this task's actual working directory. Read-only."""
+    m = manager(request)
+    try:
+        task = m.get(task_id)
+    except TaskError as e:
+        raise api_error(e)
+    cwd = ctx_config.task_cwd(task)
+    if task["worktree_removed"] or not Path(cwd).is_dir():
+        raise HTTPException(status_code=409, detail={"message": "worktree no longer exists", "code": "no_worktree"})
+    cfg = await m.effective_config(cwd) or {}
+    return agents_audit.audit(
+        cwd, max_bytes=cfg.get("project_doc_max_bytes") if isinstance(cfg.get("project_doc_max_bytes"), int) else None,
+        markers=cfg.get("project_root_markers") if isinstance(cfg.get("project_root_markers"), list) else None,
+        fallbacks=tuple(cfg.get("project_doc_fallback_filenames") or ()))
+
+
+@router.get("/api/context/settings")
+async def get_context_settings(request: Request):
+    return manager(request).ctx.threshold_values()
+
+
+@router.put("/api/context/settings")
+async def put_context_settings(request: Request, body: ContextSettings):
+    try:
+        return manager(request).ctx.set_thresholds(body.values)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"message": str(e), "code": "invalid"})
+
+
+@router.delete("/api/context/settings")
+async def reset_context_settings(request: Request):
+    return manager(request).ctx.reset_thresholds()
+
+
+@router.get("/api/tasks/{task_id}/context-events")
+async def context_events(request: Request, task_id: str, kind: str = "", limit: int = 200):
+    try:
+        manager(request).get(task_id)
+    except TaskError as e:
+        raise api_error(e)
+    kinds = [k for k in kind.split(",") if k] or None
+    return {"events": manager(request).db.list_context_events(task_id, kinds, min(max(limit, 1), 1000))}

@@ -14,6 +14,13 @@ CONFIG_PATH = Path("~/.codex/config.toml")
 PREFERRED_MODEL = "gpt-6.1-sol"
 
 
+def tool_output_cap(model: dict) -> Optional[int]:
+    policy = model.get("truncation_policy")
+    if isinstance(policy, dict) and policy.get("mode") == "tokens" and isinstance(policy.get("limit"), int):
+        return policy["limit"]
+    return None
+
+
 def parse_catalog(data: dict) -> list[dict]:
     """Keep user-selectable models, best first. Each: slug, name, default_effort, efforts."""
     models = []
@@ -33,6 +40,9 @@ def parse_catalog(data: dict) -> list[dict]:
             "supports_verbosity": bool(m.get("support_verbosity")),
             "default_verbosity": m.get("default_verbosity") or "",
             "context_window": m.get("context_window") if isinstance(m.get("context_window"), int) else None,
+            # The model's own cap on one tool output (tokens): tool_output_token_limit can only lower it.
+            "tool_output_cap": tool_output_cap(m),
+            "multi_agent_version": m.get("multi_agent_version"),
         })
     models.sort(key=lambda m: m["priority"])
     return models

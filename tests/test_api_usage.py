@@ -80,7 +80,7 @@ def test_compact_endpoint(client, git_repo):
 
 
 def test_retry_with_more_effort_over_http(client, git_repo):
-    t = client.post("/api/tasks", json={"repository": str(git_repo), "prompt": "fail", "reasoning_effort": "low"}).json()
+    t = client.post("/api/tasks", json={"repository": str(git_repo), "prompt": "fail", "reasoning_effort": "low", "auto_retry": False}).json()
     done = wait_done(client, t["id"])
     assert done["retry_suggestion"]["effort"] == "medium" and done["reasoning_effort"] == "low"
     assert client.post(f"/api/tasks/{t['id']}/messages", json={"prompt": "ok", "reasoning_effort": "medium"}).status_code == 200

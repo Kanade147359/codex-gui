@@ -34,11 +34,16 @@ _DECLINES = {
 
 
 class AppServerError(Exception):
-    """The server answered with an error, or it is gone. `code` is the JSON-RPC error code when there is one."""
+    """The server answered with an error, or it is gone. `code` is the JSON-RPC error code when there is one.
 
-    def __init__(self, message: str, code: Optional[int] = None):
+    `kind` says how it went wrong, for failure classification: "spawn" (cannot start the binary at all), "closed" (the
+    process exited or its pipe broke), "timeout" (no answer in time), "rpc" (the server answered with an error).
+    """
+
+    def __init__(self, message: str, code: Optional[int] = None, kind: str = ""):
         super().__init__(message)
         self.code = code
+        self.kind = kind
 
 
 def subscription_env(subscription_only: bool, extra: Optional[dict] = None) -> dict:
@@ -83,6 +88,10 @@ class AppServerClient:
     def alive(self) -> bool:
         return self._proc is not None and self._proc.returncode is None
 
+    @property
+    def pid(self) -> Optional[int]:
+        return self._proc.pid if self.alive else None
+
     async def start(self) -> None:
         """Spawn and initialize, unless already running. Safe to call concurrently."""
         async with self._start_lock:
@@ -96,7 +105,7 @@ class AppServerClient:
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     start_new_session=True, limit=STREAM_LIMIT)
             except OSError as e:
-                raise AppServerError(f"cannot start codex app-server: {e}") from e
+                raise AppServerError(f"cannot start codex app-server: {e}", kind="spawn") from e
             self._reader = asyncio.create_task(self._read_loop(self._proc))
             asyncio.create_task(self._drain_stderr(self._proc))
             try:
@@ -129,11 +138,11 @@ class AppServerClient:
 
     def _send(self, obj: dict) -> None:
         if not self.alive or self._proc.stdin is None:
-            raise AppServerError("codex app-server is not running")
+            raise AppServerError("codex app-server is not running", kind="closed")
         try:
             self._proc.stdin.write((json.dumps(obj) + "\n").encode())
         except (BrokenPipeError, ConnectionResetError) as e:
-            raise AppServerError(f"codex app-server went away: {e}") from e
+            raise AppServerError(f"codex app-server went away: {e}", kind="closed") from e
 
     async def request(self, method: str, params: Optional[dict] = None, timeout: Optional[float] = 60,
                       _starting: bool = False):
@@ -151,10 +160,10 @@ class AppServerClient:
             try:
                 await self._proc.stdin.drain()
             except (BrokenPipeError, ConnectionResetError) as e:
-                raise AppServerError(f"codex app-server went away: {e}") from e
+                raise AppServerError(f"codex app-server went away: {e}", kind="closed") from e
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
-            raise AppServerError(f"{method} timed out after {timeout:g}s") from None
+            raise AppServerError(f"{method} timed out after {timeout:g}s", kind="timeout") from None
         finally:
             self._pending.pop(rid, None)
 
@@ -222,7 +231,7 @@ class AppServerClient:
             if fut is not None and not fut.done():
                 if "error" in msg:
                     err = msg["error"] if isinstance(msg["error"], dict) else {}
-                    fut.set_exception(AppServerError(str(err.get("message", msg["error"])), err.get("code")))
+                    fut.set_exception(AppServerError(str(err.get("message", msg["error"])), err.get("code"), kind="rpc"))
                 else:
                     fut.set_result(msg.get("result"))
 
@@ -238,6 +247,6 @@ class AppServerClient:
     def _fail_all(self, reason: str) -> None:
         for fut in list(self._pending.values()):
             if not fut.done():
-                fut.set_exception(AppServerError(reason))
+                fut.set_exception(AppServerError(reason, kind="closed"))
         for q in self._threads.values():
             q.put_nowait((CLOSED["method"], {"reason": reason}))

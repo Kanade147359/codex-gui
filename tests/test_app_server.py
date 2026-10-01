@@ -146,7 +146,8 @@ def test_model_effort_tier_and_the_rest_are_passed_and_kept_for_every_turn(git_r
         assert p["config"]["model_verbosity"] == "high" and p["config"]["web_search"] == "live"
         assert p["config"]["model_reasoning_effort"] == "medium"
         assert p["config"]["sandbox_workspace_write"] == {"writable_roots": ["/data/shared"]}
-        assert p["config"]["features"] == {"foo": True}
+        # the user's flag is kept; nested agents are OFF for a new task (Context Efficiency), see tests/test_ctx_manager.py
+        assert p["config"]["features"]["foo"] is True and p["config"]["features"]["multi_agent"] is False
     assert [r["params"]["effort"] for r in calls(fake_codex_state, "turn/start")] == ["medium", "medium"]
 
 
@@ -391,7 +392,7 @@ def test_a_plain_failure_is_failed_not_quota(git_repo, make_manager):
     m = make_manager(backend="app-server")
 
     async def scenario():
-        t = await create(m, git_repo, "fail")
+        t = await create(m, git_repo, "fail", auto_retry=False)
         done = await finished(m, t["id"])
         assert done["status"] == "failed" and done["status_detail"] == "boom"
         await m.shutdown()
@@ -405,7 +406,7 @@ def test_retry_with_higher_effort_is_offered_after_a_failed_turn_and_never_appli
     m = make_manager(backend="app-server")
 
     async def scenario():
-        t = await create(m, git_repo, "fail", reasoning_effort="low")
+        t = await create(m, git_repo, "fail", reasoning_effort="low", auto_retry=False)
         done = await finished(m, t["id"])
         assert m.present_task(done)["retry_suggestion"] == {"effort": "medium", "reason": "the last turn failed"}
         assert done["reasoning_effort"] == "low"  # still low: nothing escalated by itself
@@ -514,7 +515,7 @@ def test_server_dying_mid_turn_fails_the_task_and_the_next_turn_restarts_it(git_
     m = make_manager(backend="app-server")
 
     async def scenario():
-        t = await create(m, git_repo)
+        t = await create(m, git_repo, auto_retry=False)  # automatic recovery is covered in test_recovery.py
         await finished(m, t["id"])
         await m.send_instruction(t["id"], "die")
         done = await finished(m, t["id"])

@@ -74,7 +74,7 @@ def test_failed_run(git_repo, make_manager):
     m = make_manager()
 
     async def scenario():
-        t = await create(m, git_repo, "fail")
+        t = await create(m, git_repo, "fail", auto_retry=False)
         done = await finished(m, t["id"])
         assert done["status"] == "failed" and done["exit_code"] == 3
         entries, _ = m.read_log(t["id"])
@@ -172,18 +172,21 @@ def test_max_concurrent_queues_and_stop_queued(git_repo, make_manager):
     go(scenario())
 
 
-def test_recover_marks_active_tasks_interrupted(git_repo, make_manager, db):
+def test_recover_after_a_gui_restart(git_repo, make_manager, db):
+    """Details of the restart recovery are in test_recovery.py; this is the shape: nothing is left "active" without an owner."""
     m = make_manager()
-    base = dict(name="n", repository="/r", worktree="/w", branch="b", base_ref="main", base_sha="a",
+    base = dict(name="n", repository="/r", worktree=str(git_repo), branch="b", base_ref="main", base_sha="a",
                 prompt="p", created_at="2026-01-01T00:00:00Z")
-    db.create_task(id="r1", status="queued", **base)
-    db.create_task(id="r2", status="running", pid=2 ** 22 + 12345, **base)
+    db.create_task(id="r1", status="queued", claimed_by="old-gui", pending_turn='{"prompt": "p"}', **base)
+    db.create_task(id="r2", status="running", pid=2 ** 22 + 12345, auto_retry_enabled=0, **base)
     db.create_task(id="r3", status="completed", **base)
     assert sorted(m.recover()) == ["r1", "r2"]
-    assert [db.get_task(i)["status"] for i in ("r1", "r2", "r3")] == ["interrupted", "interrupted", "completed"]
-    assert db.get_task("r2")["finished_at"]
-    assert "interrupted" in m.read_log("r2")[0][-1]["message"]
-    assert m.recover() == []
+    # r1 was never started: its claim is released so the scheduler starts it. r2's process is gone and auto retry is off.
+    assert db.get_task("r1")["status"] == "queued" and db.get_task("r1")["claimed_by"] is None
+    assert [db.get_task(i)["status"] for i in ("r2", "r3")] == ["failed", "completed"]
+    log = " | ".join(e["message"] for e in m.read_log("r2")[0])
+    assert "Codex process is gone" in log and "process_lost" in log
+    assert m.recover() == []  # idempotent
 
 
 def test_shutdown_interrupts_and_kills_children(git_repo, make_manager):
@@ -292,5 +295,27 @@ def test_many_tasks_in_one_repo_in_parallel(git_repo, tmp_path, make_manager):
             assert (await finished(m, t["id"]))["status"] == "completed"
         listing = subprocess.run(["git", "-C", str(git_repo), "worktree", "list"], capture_output=True, text=True).stdout
         assert listing.count("codex-gui/") == 5
+
+    go(scenario())
+
+
+def test_resume_interrupted_continues_thread_and_skips_sessionless(git_repo, make_manager):
+    m = make_manager()
+
+    async def scenario():
+        a = await create(m, git_repo, "ok")
+        await finished(m, a["id"])
+        b = await create(m, git_repo, "ok")
+        await finished(m, b["id"])
+        thread = m.get(a["id"])["codex_thread_id"]
+        assert thread
+        m.db._conn.execute("UPDATE tasks SET status='interrupted'")
+        m.db.update_task(b["id"], codex_thread_id=None)
+        res = await m.resume_interrupted()
+        assert res["resumed"] == [a["id"]]
+        assert [s["id"] for s in res["skipped"]] == [b["id"]]
+        await finished(m, a["id"])
+        assert m.get(a["id"])["codex_thread_id"] == thread
+        assert m.get(b["id"])["status"] == "interrupted"
 
     go(scenario())

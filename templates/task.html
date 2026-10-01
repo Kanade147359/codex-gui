@@ -37,9 +37,11 @@
   <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
   <textarea id="instruction" rows="4" placeholder="Next instruction for this task's Codex thread"></textarea>
   <div class="inline-actions">
-    <button id="send-btn" class="primary">Send</button>
+    <button id="send-btn" class="primary" title="Send at Standard speed">Send Standard</button>
+    <button id="send-fast-btn" title="Send this one instruction at Fast speed (2x price, included usage is consumed faster)">Send Fast</button>
     <button id="retry-medium-btn" hidden>Retry with Medium</button>
     <button id="retry-high-btn" hidden>Retry with High</button>
+    <button id="resume-btn" class="primary" hidden title="Continue this interrupted task in its existing Codex thread">Resume</button>
     <button id="new-session-btn" title="Start a fresh Codex thread in this worktree (the old thread's cache is not reused)">Start New Session</button>
     <button id="compact-btn" class="compact-btn" title="Compact this thread's context (thread/compact/start)" hidden>Compact Thread</button>
     <span id="instruction-hint" class="muted"></span>
@@ -48,6 +50,18 @@
   <p class="muted small">Send continues the same Codex thread (its history stays inside Codex, so the prompt cache is reused); while a turn is running
     it is added to that turn. Model, reasoning, speed, sandbox, approval and web search are fixed for the task: changing them mid-thread lowers cache reuse.
     “Retry with …” changes the reasoning effort only when you click it.</p>
+</section>
+
+<section id="ctx-panel">
+  <h2>Context efficiency</h2>
+  <div id="ctx-banners"></div>
+  <div id="ctx-summary" class="muted">loading…</div>
+  <h3>Settings of this task</h3>
+  <div id="ctx-settings"></div>
+  <h3>Cache health</h3>
+  <div id="ctx-cache"></div>
+  <div id="ctx-tooloutputs"></div>
+  <details id="ctx-agents-details"><summary>AGENTS.md health (read-only)</summary><div id="ctx-agents" class="muted small">loading…</div></details>
 </section>
 
 <section>
@@ -63,6 +77,11 @@
     <thead><tr><th>TURN</th><th>SESSION</th><th>INPUT</th><th>CACHED</th><th>CACHE</th><th>OUTPUT</th><th>REASONING</th></tr></thead>
     <tbody id="turns-body"></tbody>
   </table>
+</section>
+
+<section>
+  <h2>EFFICIENCY <span class="muted">(equivalent estimate)</span></h2>
+  <div id="efficiency" class="muted">no turn yet</div>
 </section>
 
 <section id="observed-box" hidden>

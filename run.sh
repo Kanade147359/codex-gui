@@ -78,5 +78,23 @@ setup_ssh_agent
 
 HOST="${CODEX_GUI_HOST:-127.0.0.1}"
 PORT="${CODEX_GUI_PORT:-8765}"
+
+# ---- Login ----------------------------------------------------------------
+# Anyone who can sign in can run Codex (and so commands) on this machine, so the login is on by default and
+# the server refuses to listen on a non-loopback address without it.
+if [ "${CODEX_GUI_AUTH:-1}" = "0" ]; then
+  case "$HOST" in
+    127.0.0.1|localhost|::1) echo "auth: login is DISABLED (CODEX_GUI_AUTH=0); only this machine can reach the GUI" >&2 ;;
+    *) echo "error: CODEX_GUI_AUTH=0 with CODEX_GUI_HOST=$HOST would expose Codex without a login. Refusing to start." >&2; exit 1 ;;
+  esac
+elif [ "$(.venv/bin/python -m app.users count)" = "0" ]; then
+  if [ -t 0 ]; then
+    read -r -p "No login user yet. Username to create: " NEW_USER
+    .venv/bin/python -m app.users add "$NEW_USER"
+  else
+    echo "auth: no users yet. Run: .venv/bin/python -m app.users add <username>" >&2
+  fi
+fi
+
 echo "Codex GUI: http://${HOST}:${PORT}"
 exec .venv/bin/python -m uvicorn --factory app.main:create_app --host "$HOST" --port "$PORT"
