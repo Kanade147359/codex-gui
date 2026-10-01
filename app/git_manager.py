@@ -1,8 +1,9 @@
 """Thin async wrappers around the standard git CLI. No shell strings, only argv lists."""
 import asyncio
-import os
 from pathlib import Path
 from typing import Optional
+
+from .ssh_agent import child_env
 
 MAX_OUTPUT_BYTES = 512 * 1024
 MAX_UNTRACKED_FILES = 50
@@ -13,7 +14,7 @@ class GitError(Exception):
 
 
 async def run_git(cwd, *args: str, check: bool = True) -> tuple[int, str, str]:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}
+    env = child_env({"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"})
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", "-C", str(cwd), *args,

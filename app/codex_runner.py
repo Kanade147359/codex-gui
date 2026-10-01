@@ -8,6 +8,8 @@ import os
 import signal
 from typing import Optional
 
+from .ssh_agent import child_env
+
 # One JSONL line from codex can contain a lot of command output.
 STREAM_LIMIT = 32 * 1024 * 1024
 MESSAGE_MAX_CHARS = 2000
@@ -35,6 +37,7 @@ class CodexRunner:
         return await asyncio.create_subprocess_exec(
             *self.build_command(task),
             cwd=task["worktree"],
+            env=child_env(),  # carries SSH_AUTH_SOCK; the agent is shared, never started per task
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

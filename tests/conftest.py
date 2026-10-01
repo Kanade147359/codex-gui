@@ -10,7 +10,8 @@ import pytest
 # Make git independent of the developer's global config.
 os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com",
-                  GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+                  GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                  CODEX_GUI_SSH_DIAGNOSTICS="0")  # no ssh-add / ssh -T from tests
 
 from app.codex_runner import CodexRunner  # noqa: E402
 from app.config import Settings  # noqa: E402
