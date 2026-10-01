@@ -34,7 +34,7 @@ def test_create_validation(git_repo, tmp_path, make_manager):
             (dict(repository=str(tmp_path / "nope"), prompt="x"), "not a directory"),
             (dict(repository=str(plain), prompt="x"), "not a git repository"),
             (dict(repository=str(git_repo), prompt="x", base_ref="nope"), "base ref not found"),
-            (dict(repository=str(git_repo), prompt="x", reasoning_effort="extreme"), "reasoning effort"),
+            (dict(repository=str(git_repo), prompt="x", reasoning_effort="hi gh;"), "reasoning effort"),
             (dict(repository=str(git_repo), prompt="x", model="--evil"), "model"),
         ]:
             with pytest.raises(TaskError, match=fragment):
@@ -271,5 +271,26 @@ def test_status_transitions_are_enforced_in_db(git_repo, make_manager):
         await finished(m, t["id"])
         with pytest.raises(InvalidTransition):
             m.db.set_status(t["id"], "running")
+
+    go(scenario())
+
+
+def test_many_tasks_in_one_repo_in_parallel(git_repo, tmp_path, make_manager):
+    """Created simultaneously in the same repo: separate worktrees/branches, all running at once."""
+    m = make_manager()
+    flags = tmp_path / "flags"
+    flags.mkdir()
+
+    async def scenario():
+        names = ["a", "b", "c", "d", "e"]
+        # every task waits for every other one's flag (chained pairwise would be weaker): ring of meets
+        tasks = await asyncio.gather(*[
+            create(m, git_repo, f"meet {n} {names[(i + 1) % len(names)]} {flags}", name="same name")
+            for i, n in enumerate(names)])
+        assert len({t["worktree"] for t in tasks}) == 5 and len({t["branch"] for t in tasks}) == 5
+        for t in tasks:
+            assert (await finished(m, t["id"]))["status"] == "completed"
+        listing = subprocess.run(["git", "-C", str(git_repo), "worktree", "list"], capture_output=True, text=True).stdout
+        assert listing.count("codex-gui/") == 5
 
     go(scenario())

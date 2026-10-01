@@ -91,3 +91,31 @@ def test_remove_worktree_and_delete_branch(git_repo, tmp_path):
     assert "b1" in branches  # branch survives worktree removal
     run(git.delete_branch(git_repo, "b1"))  # no commits of its own -> fully merged
     assert "b1" not in subprocess.run(["git", "-C", str(git_repo), "branch"], capture_output=True, text=True).stdout
+
+
+def test_list_refs(git_repo, tmp_path):
+    git_run = lambda *a: subprocess.run(["git", "-C", str(git_repo), *a], check=True, capture_output=True)
+    git_run("branch", "feature")
+    git_run("tag", "v1")
+    wt = tmp_path / "wt"
+    git_run("worktree", "add", "-b", "codex-gui/t1-x", str(wt))
+    detached = tmp_path / "wt2"
+    git_run("worktree", "add", "--detach", str(detached))
+
+    refs = run(git.list_refs(git_repo))
+    assert {b["name"] for b in refs["branches"]} == {"main", "feature", "codex-gui/t1-x"}
+    assert refs["current"] == "main" and refs["default"] == "main"
+    assert [t["name"] for t in refs["tags"]] == ["v1"] and refs["remotes"] == []
+    by_ref = {w["ref"]: w for w in refs["worktrees"]}
+    assert by_ref["codex-gui/t1-x"]["path"] == str(wt.resolve())  # main working tree is not listed
+    assert any(w["branch"] == "" and len(w["ref"]) == 10 for w in refs["worktrees"])  # detached -> sha
+    # every offered ref resolves, so it is usable as a base ref
+    for r in [b["name"] for b in refs["branches"]] + [w["ref"] for w in refs["worktrees"]] + ["v1"]:
+        assert run(git.resolve_commit(git_repo, r))
+
+
+def test_list_refs_default_falls_back_to_current_branch(tmp_path):
+    repo = tmp_path / "r"
+    subprocess.run(["git", "init", "-q", "-b", "trunk", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty", "-m", "i"], check=True)
+    assert run(git.list_refs(repo))["default"] == "trunk"

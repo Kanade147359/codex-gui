@@ -136,3 +136,38 @@ async def commit_all(worktree, message: str) -> str:
 async def push(worktree, branch: str) -> str:
     _, out, err = await run_git(worktree, "push", "-u", "origin", branch)
     return (out + err).strip()
+
+
+async def list_refs(repo) -> dict:
+    """Everything that can serve as a base ref: local branches, other worktrees, remote branches, tags."""
+    fmt = "%(refname)\t%(refname:short)\t%(objectname:short)\t%(contents:subject)"
+    out = (await run_git(repo, "for-each-ref", "--sort=-committerdate", f"--format={fmt}",
+                         "refs/heads", "refs/remotes", "refs/tags"))[1]
+    refs = {"branches": [], "remotes": [], "tags": []}
+    for line in out.splitlines():
+        full, short, sha, subject = (line.split("\t") + ["", "", "", ""])[:4]
+        item = {"name": short, "sha": sha, "subject": subject}
+        if full.startswith("refs/heads/"):
+            refs["branches"].append(item)
+        elif full.startswith("refs/remotes/") and not full.endswith("/HEAD"):
+            refs["remotes"].append(item)
+        elif full.startswith("refs/tags/"):
+            refs["tags"].append(item)
+    refs["remotes"], refs["tags"] = refs["remotes"][:200], refs["tags"][:50]
+
+    worktrees = []
+    wt_out = (await run_git(repo, "worktree", "list", "--porcelain"))[1]
+    for block in wt_out.split("\n\n")[1:]:  # the first block is the main working tree itself
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        if "worktree" not in fields or "bare" in block.split():
+            continue
+        branch = fields.get("branch", "").removeprefix("refs/heads/")
+        sha = fields.get("HEAD", "")[:10]
+        worktrees.append({"path": fields["worktree"], "branch": branch, "sha": sha, "ref": branch or sha})
+    refs["worktrees"] = worktrees
+
+    _, current, _ = await run_git(repo, "branch", "--show-current", check=False)
+    refs["current"] = current.strip()
+    names = {b["name"] for b in refs["branches"]}
+    refs["default"] = "main" if "main" in names else refs["current"] or (refs["branches"][0]["name"] if refs["branches"] else "HEAD")
+    return refs

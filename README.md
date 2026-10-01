@@ -33,9 +33,14 @@ localhost 専用です。認証・マルチユーザー・クラウド対応は�
 
 ## 使い方
 
-1. `+ New Task` で Repository / Base ref / Prompt などを入力して Run
+1. `+ New Task` で入力して Run（すべて GUI で選べます）
+   - **Repository:** `Browse…` でサーバー側のフォルダを辿って選択（git リポジトリは `git` バッジ付き）。最近使ったリポジトリはチップで 1 クリック
+   - **Base ref:** 選んだリポジトリのブランチ / 既存 worktree / リモートブランチ / タグから選択（`Custom…` で任意の ref やコミットも可）。
+     worktree を選んだ場合は **commit 済みの状態** から分岐します（未コミットの変更は含まれません）
+   - **Model:** `codex debug models` のカタログから選択（`Custom…` で ID 直接入力）。Reasoning effort の選択肢もモデルごとの対応値に連動
+   - **Run & add another:** フォームを開いたまま次のタスクを追加。**同じリポジトリで複数タスクを並列実行**できます（タスクごとに別 branch・別 worktree）
 2. worktree と branch が作られ、その中で Codex が起動する（ダッシュボードは 2 秒ごとに自動更新）
-3. 行をクリックすると詳細画面。Codex ログ（種別名をクリックで生イベント JSON）と Git の Status / Diff / Log を確認
+3. ダッシュボードはリポジトリで絞り込み可能。行をクリックすると詳細画面。Codex ログ（種別名をクリックで生イベント JSON）と Git の Status / Diff / Log を確認
 4. Stop / Commit / Push / Delete Worktree / Delete Branch は詳細画面から
 
 Diff は **base commit との差分**（Codex が作った commit も含む）に、未追跡ファイルを加えたものです。

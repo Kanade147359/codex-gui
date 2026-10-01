@@ -10,7 +10,7 @@ from .config import Settings
 from .database import Database
 from .logstore import TaskLog, read_log
 from .models import (
-    ACTIVE_STATUSES, REASONING_EFFORTS, TERMINAL_STATUSES,
+    ACTIVE_STATUSES, EFFORT_RE, TERMINAL_STATUSES,
     branch_name, make_task_id, now_iso, worktree_path,
 )
 
@@ -34,6 +34,7 @@ class TaskManager:
         self._jobs: dict[str, asyncio.Task] = {}
         self._procs: dict[str, asyncio.subprocess.Process] = {}
         self._stop_requested: set[str] = set()
+        self._repo_locks: dict[str, asyncio.Lock] = {}
         self._shutting_down = False
         self._slots = asyncio.Semaphore(settings.max_concurrent) if settings.max_concurrent > 0 else None
 
@@ -64,8 +65,8 @@ class TaskManager:
         model = model.strip()
         if model.startswith("-"):
             raise TaskError("invalid model name")
-        if reasoning_effort not in REASONING_EFFORTS:
-            raise TaskError(f"reasoning effort must be one of {', '.join(REASONING_EFFORTS)}")
+        if reasoning_effort != "default" and not EFFORT_RE.match(reasoning_effort):
+            raise TaskError(f"invalid reasoning effort: {reasoning_effort}")
         base_ref = base_ref.strip() or "main"
 
         repo_input = Path(repository.strip()).expanduser()
@@ -81,10 +82,13 @@ class TaskManager:
         task_id = make_task_id()
         branch = branch_name(task_id, name)
         wt = worktree_path(self.settings.worktrees_dir, repo, task_id)
-        try:
-            await git.create_worktree(repo, wt, branch, base_sha)
-        except git.GitError as e:
-            raise TaskError(f"git worktree add failed: {e}") from e
+        # Several tasks may be created in the same repo at once; git's own locks (config, refs)
+        # can make concurrent `worktree add` calls fail, so creation is serialized per repository.
+        async with self._repo_locks.setdefault(repo, asyncio.Lock()):
+            try:
+                await git.create_worktree(repo, wt, branch, base_sha)
+            except git.GitError as e:
+                raise TaskError(f"git worktree add failed: {e}") from e
 
         task = self.db.create_task(
             id=task_id, name=name, repository=repo, worktree=str(wt), branch=branch,

@@ -19,7 +19,8 @@ TRANSITIONS = {
     "interrupted": set(),
 }
 
-REASONING_EFFORTS = ("default", "low", "medium", "high")
+# The CLI decides which efforts a model supports (the UI offers those); we only keep the argv value sane.
+EFFORT_RE = re.compile(r"^[a-z]{1,16}$")
 
 
 class InvalidTransition(ValueError):

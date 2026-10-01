@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from .catalog import ModelCatalog
 from .codex_runner import CodexRunner
 from .config import Settings
 from .database import Database
@@ -30,6 +31,7 @@ def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner
     app = FastAPI(title="Codex GUI", lifespan=lifespan)
     app.state.settings = settings
     app.state.manager = TaskManager(settings, db, runner)
+    app.state.catalog = ModelCatalog(settings.codex_bin)
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app

@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block page %}dashboard{% endblock %}
-{% block topbar %}<button id="new-task-btn" class="primary">+ New Task</button>{% endblock %}
+{% block topbar %}
+<button id="new-task-btn" class="primary">+ New Task</button>
+<label class="filter">Repository
+  <select id="repo-filter"><option value="">All repositories</option></select>
+</label>
+{% endblock %}
 {% block content %}
 <table class="tasks" id="tasks-table">
   <thead>
@@ -12,31 +17,56 @@
 
 <dialog id="new-task-dialog">
   <form id="new-task-form" method="dialog">
-    <h2>New Task</h2>
-    <label>Repository
-      <input name="repository" list="repo-list" required placeholder="/home/you/workspace/repo" autocomplete="off">
-      <datalist id="repo-list"></datalist>
-    </label>
-    <div class="row">
-      <label>Base ref <input name="base_ref" value="main" placeholder="main"></label>
-      <label>Task name <input name="name" placeholder="(defaults to first line of prompt)"></label>
-    </div>
-    <label>Prompt
-      <textarea name="prompt" rows="8" required placeholder="What should Codex do?"></textarea>
-    </label>
-    <div class="row">
-      <label>Model <input name="model" placeholder="(Codex default)"></label>
-      <label>Reasoning effort
-        <select name="reasoning_effort">
-          {% for e in efforts %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
-        </select>
+    <div id="form-body">
+      <h2>New Task</h2>
+      <div class="field">
+        <span class="label">Repository</span>
+        <div class="repo-row">
+          <input name="repository" required placeholder="/home/you/workspace/repo" autocomplete="off">
+          <button type="button" id="browse-btn">Browse…</button>
+        </div>
+        <div id="recent-repos" class="chips"></div>
+      </div>
+      <div class="row">
+        <label>Base ref
+          <select name="base_choice" id="base-select"><option value="main">main</option></select>
+          <input name="base_custom" id="base-custom" placeholder="branch / tag / commit" hidden>
+        </label>
+        <label>Task name <input name="name" placeholder="(defaults to first line of prompt)"></label>
+      </div>
+      <label>Prompt
+        <textarea name="prompt" rows="8" required placeholder="What should Codex do?"></textarea>
       </label>
-      <label class="check"><input type="checkbox" name="auto_approval" checked> Auto approval (<code>--approve-for-me</code>)</label>
+      <div class="row">
+        <label>Model
+          <select name="model_choice" id="model-select"></select>
+          <input name="model_custom" id="model-custom" placeholder="model id" hidden>
+        </label>
+        <label>Reasoning effort <select name="reasoning_effort" id="effort-select"></select></label>
+        <label class="check"><input type="checkbox" name="auto_approval" checked> Auto approval (<code>--approve-for-me</code>)</label>
+      </div>
+      <p id="form-error" class="error" hidden></p>
+      <p id="form-ok" class="ok" hidden></p>
+      <div class="actions">
+        <button type="button" id="cancel-btn">Close</button>
+        <button type="button" id="run-more-btn" title="Create the task and keep this form open for the next one">Run &amp; add another</button>
+        <button type="submit" class="primary" id="run-btn">Run</button>
+      </div>
     </div>
-    <p id="form-error" class="error" hidden></p>
-    <div class="actions">
-      <button type="button" id="cancel-btn">Cancel</button>
-      <button type="submit" class="primary" id="run-btn">Run</button>
+
+    <div id="picker" hidden>
+      <h2>Select repository folder</h2>
+      <div class="repo-row">
+        <input id="picker-path" autocomplete="off" spellcheck="false">
+        <button type="button" id="picker-go">Go</button>
+      </div>
+      <label class="check inline"><input type="checkbox" id="picker-hidden"> show hidden folders</label>
+      <ul id="picker-list" class="picker-list"></ul>
+      <p id="picker-info" class="muted"></p>
+      <div class="actions">
+        <button type="button" id="picker-back">Back</button>
+        <button type="button" class="primary" id="picker-select" disabled>Select this folder</button>
+      </div>
     </div>
   </form>
 </dialog>

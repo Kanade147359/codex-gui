@@ -83,3 +83,24 @@ details summary { cursor: pointer; color: var(--muted); }
 .diff .hunk { color: var(--purple); }
 .diff .file { color: var(--yellow); font-weight: bold; }
 .crumb { color: var(--muted); }
+
+/* dashboard toolbar */
+.filter { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); }
+.filter select { width: auto; max-width: 420px; }
+.ok { color: var(--green); }
+
+/* repository field + picker */
+dialog .field { margin-bottom: 10px; }
+dialog .field .label { display: block; color: var(--muted); margin-bottom: 3px; }
+.repo-row { display: flex; gap: 8px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.chip { padding: 1px 9px; border-radius: 10px; font-size: 12px; color: var(--muted); }
+.chip:hover { color: var(--text); }
+dialog label.check.inline { padding: 8px 0 0; }
+.picker-list { list-style: none; margin: 8px 0; padding: 0; height: 320px; overflow: auto; background: #0b0d11; border: 1px solid var(--border); border-radius: 4px; }
+.picker-list li { display: flex; align-items: center; gap: 8px; padding: 3px 10px; cursor: pointer; }
+.picker-list li:hover { background: #12161c; }
+.picker-list li.git .name { color: var(--text); font-weight: bold; }
+.picker-list li .name { flex: 1; color: var(--muted); }
+.picker-list .badge { font-size: 11px; color: var(--green); border: 1px solid #2c7a57; border-radius: 3px; padding: 0 5px; }
+.picker-list .pick { padding: 0 8px; font-size: 12px; }

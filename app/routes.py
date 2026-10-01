@@ -6,7 +6,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from .models import REASONING_EFFORTS
+from . import git_manager as git
+from .fs_browser import BrowseError, list_dir
 from .task_manager import TaskError, TaskManager
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
@@ -40,7 +41,7 @@ def api_error(e: TaskError) -> HTTPException:
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return TEMPLATES.TemplateResponse(request, "index.html", {"efforts": REASONING_EFFORTS})
+    return TEMPLATES.TemplateResponse(request, "index.html", {})
 
 
 @router.get("/tasks/{task_id}", response_class=HTMLResponse)
@@ -67,6 +68,30 @@ async def create_task(request: Request, body: NewTask):
         return await manager(request).create_task(**body.model_dump())
     except TaskError as e:
         raise api_error(e)
+
+
+@router.get("/api/options")
+async def options(request: Request):
+    """Model choices (from the codex CLI) and recently used repositories for the New Task form."""
+    m = manager(request)
+    return {**await request.app.state.catalog.get(), "repos": m.db.recent_repos()}
+
+
+@router.get("/api/fs")
+async def browse(path: str = "", hidden: bool = False):
+    try:
+        return list_dir(path, hidden)
+    except BrowseError as e:
+        raise HTTPException(status_code=400, detail={"message": str(e), "code": ""})
+
+
+@router.get("/api/refs")
+async def refs(repository: str):
+    """Base ref choices for a repository (branches, worktrees, remote branches, tags)."""
+    repo = await git.repo_toplevel(Path(repository.strip()).expanduser())
+    if repo is None:
+        raise HTTPException(status_code=400, detail={"message": f"not a git repository: {repository}", "code": ""})
+    return {"repository": repo, **await git.list_refs(repo)}
 
 
 @router.get("/api/repos")
