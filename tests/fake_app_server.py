@@ -8,6 +8,7 @@ A turn's behaviour is chosen by the first word of the prompt:
   sleep    runs until interrupted (-> interrupted) or steered (-> completes, recording the steered text)
   hang     like sleep, but ignores interrupts (the GUI must give up on its own)
   die      the process exits in the middle of the turn
+  dieearly the process exits right after turn/start was answered, before turn/started -- the first time per test only
 
 State lives in $FAKE_CODEX_STATE: threads/<id>.json (running totals, so a resume continues them) and
 invocations.jsonl (every request the server received, for the tests). A test may write rate.json (the body of
@@ -31,6 +32,15 @@ def emit(obj):
     with OUT:
         sys.stdout.write(json.dumps(obj) + "\n")
         sys.stdout.flush()
+
+
+def once(name):
+    """True the first time `name` is asked for in this test (a marker file in the state dir)."""
+    marker = os.path.join(STATE, "once-" + name)
+    if os.path.exists(marker):
+        return False
+    open(marker, "w").close()
+    return True
 
 
 def note(method, params):
@@ -184,6 +194,8 @@ def handle(msg):
         ACTIVE[tid] = {"turn": turn_id, "interrupted": False, "steered": []}
         prompt = "".join(i.get("text", "") for i in params["input"])
         reply({"turn": {"id": turn_id, "items": [], "status": "inProgress"}})
+        if prompt.split()[:1] == ["dieearly"] and once("dieearly"):
+            os._exit(7)  # the turn was acknowledged but never started: its instruction is not in the thread
         threading.Thread(target=run_turn, args=(tid, turn_id, prompt), daemon=True).start()
     elif method == "thread/compact/start":
         tid = params["threadId"]

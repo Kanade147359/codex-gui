@@ -249,6 +249,7 @@ const CtxUI = (() => {
       <dt>Context</dt><dd>${pctUsed}${z.tokens != null ? ` <span class="muted">(${num(z.tokens)} tokens in the latest request)</span>` : ""} ${z.zone && !["n/a", "normal", "unknown"].includes(z.zone) ? `<b class="${z.zone === "long" ? "error" : "warn"}">${esc(z.zone.toUpperCase())}</b>` : ""}</dd>
       <dt>Compactions</dt><dd>${comp.count}${comp.frequent ? ` <span class="warn">${esc(comp.warning)}</span>` : ""}</dd>
       <dt>Cache age</dt><dd><b class="cache-${esc(age.state)}">${esc(age.label)}</b> <span class="muted small">reference only; the prompt cache is kept for at least 30 minutes. The GUI never sends a prompt just to keep it warm.</span></dd></dl>`;
+    $("#ctx-fold-summary").textContent = `· context ${pctUsed} · cache ${age.state}` + (comp.count ? ` · ${comp.count} compaction${comp.count === 1 ? "" : "s"}` : "");
     $("#ctx-settings").innerHTML = settingsHtml(ctx, task);
     $("#ctx-cache").innerHTML = cacheTable(ctx) + eventsHtml(ctx);
     $("#ctx-tooloutputs").innerHTML = toolOutputsHtml(ctx);

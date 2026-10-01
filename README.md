@@ -290,6 +290,61 @@ OFF のときは `approvalPolicy: "never"`（sandbox 内で完結。昇格が要
 
 sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き込めないことがあります。その場合は GUI の **Commit** ボタンで commit してください。
 
+## Task の依存関係（After other tasks complete）
+
+New Task の **Run** で **After other tasks complete** を選び、**Depends on** で待つ Task を選ぶと、それらがすべて `completed` になってから自動で始まります
+（A・B・C → D。ポリシーは `all_success`。将来 `all_terminal` などを足せる作りです）。
+
+- **worktree は実行直前に作ります。** 待機中の Task は branch 名と worktree のパスだけを持ち、worktree はありません（無駄な worktree を作りません）。
+  base ref は作成時に存在確認し、**開始時点の ref** から分岐します。
+- 状態: `waiting_dependencies`（待機中。Dashboard は `Waiting (2/3 complete)`）→ `queued`（準備完了、まだ runner に claim されていない）→ `starting` → `running`。
+- 依存先が `failed` / `stopped` / `blocked` になると、この Task は **`blocked`**（`Dependency B failed`）になり、勝手には実行されません。
+  詳細画面の **Run Anyway**（依存を無視して開始）か **Retry Failed Dependency**（失敗した依存先を同じ worktree・同じ thread で再実行し、もう一度待つ）で進めます。
+- 依存先が **リトライ中（`retry_wait`）の間は待ちます**。一時的な失敗だけでは `blocked` になりません。最終的に `failed` になった時点で `blocked` です。
+  `waiting-for-quota` / `interrupted` の依存先も「再開できる一時停止」なので待ち続けます。
+- 依存先を Stop すると `stopped` なので、依存する Task は `blocked` になります。
+- 依存は DAG です。**自己依存・重複・循環は拒否**します（`PUT /api/tasks/{id}/dependencies` で未開始の Task の依存先を差し替えるときも同じ検査）。
+- 二重起動しない仕組み: `waiting_dependencies → queued` は「全依存先が completed」の判定を含む **1 本の条件付き UPDATE**、`queued → 実行` は `claimed_by IS NULL` を条件にした
+  **1 本の UPDATE（claim）** です。親が同時に終わっても、リスナー・スケジューラ・API が何度評価しても、起動できるのは 1 回だけです。
+
+## 自動復旧（リトライ）
+
+予期しない停止（Codex の子プロセスが落ちた、app-server が落ちた、一時的な接続 / I/O エラー、原因不明の失敗）は、既定で **最大 3 回** まで自動で再開します（New Task の
+**Auto recovery**、Task ごとに変更可）。再開は **同じ Task・同じ worktree・同じ branch・同じ Codex thread** です。
+
+| 分類 | 例 | 動作 |
+| --- | --- | --- |
+| retryable | プロセスが signal で終了 / app-server の終了・タイムアウト / `httpConnectionFailed` / `responseStreamDisconnected` / `serverOverloaded` / `internalServerError` / EAGAIN 等 | リトライ |
+| unknown | 分類できない失敗 | **リトライ**（ただし上限は必ず守る） |
+| quota | `usageLimitExceeded` / `rateLimitExceeded` / rate limit | リトライせず `waiting-for-quota`（回数を消費しない。手動で再開。API 課金・別モデルへの fallback なし） |
+| non-retryable | **ユーザーの Stop** / 認証 / 設定 / 不正な model / 不正な引数 / 不正な Git リポジトリ / worktree 作成の恒久エラー / 依存先の失敗 / worktree が消えている / thread が存在しない / context window 超過 / 上限到達 | `stopped` / `failed`（リトライしない） |
+
+- **間隔:** 10 秒 → 30 秒 → 60 秒（`CODEX_GUI_RETRY_BACKOFF`）。連続リトライはしません。待機中は `Retry 1/3 in 18s`。
+- **再開の方法:** 元の指示を送り直さず、固定の短い recovery instruction を同じ thread に送ります。Codex が現在の状態（`git status` / `git log`・会話）を確認し、終わっている作業はやり直しません
+  （同じ commit / push を重複しない）。
+  Codex 0.159.2 には「中断した turn を自動で続ける」機能が **ない**ことを実機で確認しています（`codex exec resume <id>` はプロンプト必須）。
+- **turn が始まる前に落ちた場合**（Codex が `turn/started` を返す前）は、指示が thread に届いていない可能性があるため、recovery instruction ではなく **元の指示をもう一度**、同じ thread に送ります
+  （まだ何も実行されていないので二重実行になりません）。thread id がまだ無い場合は、同じ worktree で新しい thread を作り、ログに
+  `Retry started a new Codex thread because no previous thread ID existed.` と残します。
+- **Git の安全:** 再開前に worktree の存在を確認します（**消えていても作り直さず `failed`**）。`git status` / HEAD / push 状況を **記録するだけ**で、`reset` / `clean` / `checkout` はしません。
+  途中の変更は Codex が現在の状態を見て続けます。GUI が履歴を書き換えることはありません。
+- **Stop** は明示的な操作なので `stopped`。リトライしません（依存する Task は `blocked`）。
+- **手動 Retry**（`failed` / `stopped`）: 同じ worktree・同じ thread で再実行。自動リトライの上限を超えているときは確認ダイアログが出ます。別の thread にしたいときは **Start New Session**。
+  `retry_wait` 中は **Retry Now**、**Disable Auto Retry** で待機中のリトライを取り消せます。
+- **履歴:** `task_attempts` テーブルに 1 回の実行ごと（初回 / 追加指示 / 自動・手動リトライ / GUI 再起動後の復旧）の開始・終了・exit code・結果・失敗の種類・thread id・resume か否か・service tier・
+  reasoning effort・再開前の git 状態を記録します（token usage の `turns` とは別）。詳細画面の Recovery に一覧が出ます。
+
+### GUI 自体が落ちたとき
+
+起動時に `running` / `starting` / `retry_wait` / `queued` の Task を見直します。
+
+- `running` / `starting`: 記録した **プロセスがまだ生きていれば**（pid・**起動時刻**・コマンドラインがすべて一致。pid の使い回しは別プロセス扱い）そのままにして監視し、終了したらリトライします。
+  いなければ、自動リトライが有効で上限内なら `retry_wait`、そうでなければ `failed`。**GUI の再起動だけが原因で同じ Task を二重に実行することはありません。**
+- `retry_wait`: タイマーは DB にあるので続きます（worktree が消えていたら `failed`）。
+- `queued`（claim 済みで未開始）: claim を解放し、スケジューラが開始します。
+- 通常終了（Ctrl+C）で止めた Task は、これまで通り `interrupted`（Send / Resume interrupted で続行）。
+- 前提: **1 つの DB に GUI プロセスは 1 つ**です（起動時の復旧は前のプロセスの claim を引き継ぎます）。
+
 ## Git worktree の扱い
 
 - Stop しても worktree は消えません。途中の変更を確認できます。
@@ -300,7 +355,7 @@ sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き
 
 - 履歴は SQLite に残ります。
 - GUI を **通常終了**（Ctrl+C）すると、実行中の turn は止められ `interrupted` になり、app-server も終了します。**thread は Codex 側に残る**ので、再起動後に Send で同じ thread を続けられます。
-- GUI が強制終了された場合、次回起動時に active のまま残ったタスクを `interrupted` にします（app-server は stdin が閉じると終了するので孤児になりません）。
+- GUI が強制終了された場合の復旧は「自動復旧（リトライ）」の「GUI 自体が落ちたとき」を参照（プロセスが残っていれば監視、いなければ自動リトライ）。
 
 ## テスト
 
@@ -313,12 +368,16 @@ sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き
 `tests/fake_codex.py`（`codex exec` の従来方式）を、実際の JSON-RPC クライアント・サブプロセス・シグナル・git を通して動かします。
 カバー範囲: Codex へのサインイン（ブラウザ / デバイスコード / 失敗 / 取り消し）、Task と thread id の永続化、同一 thread の再利用（resume）、token / cached の parse と cache hit 計算、rate limit の parse（週次のみ / 2 本）、
 quota 時の状態遷移（再試行しない）、model・reasoning・Standard・auto approval・web search OFF の既定値と送信内容、API キーに fallback しないこと、
-context guard の判定、steer / stop / compact、AGENTS.md の読み書き・競合・path 検証・Repository と Task worktree の分離。
+context guard の判定、steer / stop / compact、AGENTS.md の読み書き・競合・path 検証・Repository と Task worktree の分離、
+依存関係（DAG・循環 / 自己 / 重複の拒否・複数接続からの同時評価でも 1 回だけ起動・依存先のリトライ中は待機・blocked / Run Anyway）、
+自動復旧（失敗の分類・上限・間隔・同じ thread / worktree の再利用・Stop / quota / 認証はリトライしない・作業ツリーに触れない・worktree 削除時は再作成しない・
+GUI を SIGKILL した後の復旧・pid 使い回しの判別）。
 
 実 Codex に接続する統合テストは分離してあり、`CODEX_GUI_REAL=1` のときだけ動きます（トークンを少し使います。cache hit は表示のみで、成否は同一 thread・usage 取得・context window・利用枠の取得で判定）:
 
 ```bash
 CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_codex.py -s
+CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_codex.py -s -k killed_mid_turn   # 実 Codex を turn の途中で SIGKILL → 同じ thread・worktree で復旧
 CODEX_GUI_REAL=1 CODEX_GUI_REAL_MODEL=gpt-6.1-sol CODEX_GUI_REAL_PAUSE=15 .venv/bin/python -m pytest tests/test_real_codex.py -s -k app_server
 ```
 

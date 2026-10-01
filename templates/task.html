@@ -17,8 +17,11 @@
     <button id="del-branch-btn" hidden>Delete Branch</button>
   </div>
   <p id="action-msg" class="muted" hidden></p>
-  <dl class="meta" id="meta"></dl>
-  <details><summary>Prompt</summary><pre id="prompt" class="block"></pre></details>
+  <details class="fold" data-fold="meta">
+    <summary><h2>Details <span class="muted small" id="meta-summary"></span></h2></summary>
+    <dl class="meta" id="meta"></dl>
+  </details>
+  <details class="fold"><summary><h2>Prompt</h2></summary><pre id="prompt" class="block"></pre></details>
 </section>
 
 <section id="quota-banner" class="banner quota" hidden>
@@ -33,28 +36,36 @@
   <div class="inline-actions"><button class="compact-btn">Compact</button></div>
 </section>
 
-<section>
-  <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
-  <textarea id="instruction" rows="4" placeholder="Next instruction for this task's Codex thread"></textarea>
+<section id="deps-section" hidden>
+  <h2>Dependencies <span class="muted" id="deps-summary"></span></h2>
+  <ul id="deps-items" class="deps"></ul>
+  <p class="small muted" id="blocks-line" hidden></p>
   <div class="inline-actions">
-    <button id="send-btn" class="primary" title="Send at Standard speed">Send Standard</button>
-    <button id="send-fast-btn" title="Send this one instruction at Fast speed (2x price, included usage is consumed faster)">Send Fast</button>
-    <button id="retry-medium-btn" hidden>Retry with Medium</button>
-    <button id="retry-high-btn" hidden>Retry with High</button>
-    <button id="resume-btn" class="primary" hidden title="Continue this interrupted task in its existing Codex thread">Resume</button>
-    <button id="new-session-btn" title="Start a fresh Codex thread in this worktree (the old thread's cache is not reused)">Start New Session</button>
-    <button id="compact-btn" class="compact-btn" title="Compact this thread's context (thread/compact/start)" hidden>Compact Thread</button>
-    <span id="instruction-hint" class="muted"></span>
+    <button id="run-anyway-btn" hidden title="Start this task now, without waiting for (or caring about) its dependencies">Run Anyway</button>
+    <button id="retry-deps-btn" hidden title="Retry the failed or stopped dependencies (same worktree and thread each) and wait for them again">Retry Failed Dependency</button>
   </div>
-  <p class="muted small" id="retry-hint" hidden></p>
-  <p class="muted small">Send continues the same Codex thread (its history stays inside Codex, so the prompt cache is reused); while a turn is running
-    it is added to that turn. Model, reasoning, speed, sandbox, approval and web search are fixed for the task: changing them mid-thread lowers cache reuse.
-    “Retry with …” changes the reasoning effort only when you click it.</p>
 </section>
 
+<details class="fold" id="recovery-section" data-fold="recovery">
+  <summary><h2>Recovery <span class="muted small" id="recovery-summary"></span></h2></summary>
+  <dl class="usage" id="recovery-dl"></dl>
+  <div class="inline-actions">
+    <button id="retry-now-btn" class="primary" hidden title="Do not wait for the timer: retry now">Retry Now</button>
+    <button id="retry-btn" hidden title="Run this task again in the same worktree and Codex thread (Start New Session for a different thread)">Retry</button>
+    <button id="auto-retry-btn" title="Turn automatic retry of unexpected stops on or off for this task">Disable Auto Retry</button>
+    <button id="max-retries-btn">Max retries…</button>
+  </div>
+  <p class="small muted" id="recovery-hint"></p>
+  <table class="usage" id="attempts" hidden>
+    <thead><tr><th>#</th><th>STARTED</th><th>BY</th><th>RESULT</th><th>THREAD</th><th>DETAIL</th></tr></thead>
+    <tbody id="attempts-body"></tbody>
+  </table>
+</details>
+
 <section id="ctx-panel">
-  <h2>Context efficiency</h2>
   <div id="ctx-banners"></div>
+  <details class="fold" data-fold="context-efficiency">
+  <summary><h2>Context efficiency <span class="muted small" id="ctx-fold-summary"></span></h2></summary>
   <div id="ctx-summary" class="muted">loading…</div>
   <h3>Settings of this task</h3>
   <div id="ctx-settings"></div>
@@ -62,10 +73,11 @@
   <div id="ctx-cache"></div>
   <div id="ctx-tooloutputs"></div>
   <details id="ctx-agents-details"><summary>AGENTS.md health (read-only)</summary><div id="ctx-agents" class="muted small">loading…</div></details>
+  </details>
 </section>
 
-<section>
-  <h2>Token usage</h2>
+<details class="fold" data-fold="token-usage">
+  <summary><h2>Token usage <span class="muted small" id="usage-summary"></span></h2></summary>
   <div id="latest-usage" class="muted">no completed turn yet</div>
   <div id="context-box" class="context" hidden>
     <div class="ctx-title">Context</div>
@@ -77,22 +89,43 @@
     <thead><tr><th>TURN</th><th>SESSION</th><th>INPUT</th><th>CACHED</th><th>CACHE</th><th>OUTPUT</th><th>REASONING</th></tr></thead>
     <tbody id="turns-body"></tbody>
   </table>
-</section>
+</details>
 
-<section>
-  <h2>EFFICIENCY <span class="muted">(equivalent estimate)</span></h2>
+<details class="fold" data-fold="efficiency">
+  <summary><h2>EFFICIENCY <span class="muted">(equivalent estimate)</span> <span class="muted small" id="efficiency-summary"></span></h2></summary>
   <div id="efficiency" class="muted">no turn yet</div>
-</section>
+</details>
 
-<section id="observed-box" hidden>
-  <h2>Observed quota change <span class="muted">(latest turn)</span></h2>
+<details class="fold" id="observed-box" data-fold="observed" hidden>
+  <summary><h2>Observed quota change <span class="muted">(latest turn)</span> <span class="muted small" id="observed-summary"></span></h2></summary>
   <dl class="usage" id="observed-dl"></dl>
   <p class="small muted" id="observed-note"></p>
-</section>
+</details>
 
 <section>
   <h2>Codex Log <span class="muted" id="log-count"></span></h2>
   <div id="log" class="log"></div>
+</section>
+
+<section>
+  <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
+  <textarea id="instruction" rows="3" placeholder="Next instruction for this task's Codex thread"></textarea>
+  <div class="inline-actions">
+    <button id="send-btn" class="primary" title="Send at Standard speed">Send Standard</button>
+    <button id="send-fast-btn" title="Send this one instruction at Fast speed (2x price, included usage is consumed faster)">Send Fast</button>
+    <button id="retry-medium-btn" hidden>Retry with Medium</button>
+    <button id="retry-high-btn" hidden>Retry with High</button>
+    <button id="resume-btn" class="primary" hidden title="Continue this interrupted task in its existing Codex thread">Resume</button>
+    <button id="new-session-btn" title="Start a fresh Codex thread in this worktree (the old thread's cache is not reused)">Start New Session</button>
+    <button id="compact-btn" class="compact-btn" title="Compact this thread's context (thread/compact/start)" hidden>Compact Thread</button>
+    <span id="instruction-hint" class="muted"></span>
+  </div>
+  <p class="muted small" id="retry-hint" hidden></p>
+  <details class="small"><summary>How sending works</summary>
+    <p class="muted small">Send continues the same Codex thread (its history stays inside Codex, so the prompt cache is reused); while a turn is running
+    it is added to that turn. Model, reasoning, speed, sandbox, approval and web search are fixed for the task: changing them mid-thread lowers cache reuse.
+    “Retry with …” changes the reasoning effort only when you click it.</p>
+  </details>
 </section>
 
 <section>

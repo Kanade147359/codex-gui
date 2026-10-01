@@ -491,3 +491,50 @@ def test_dependencies_over_http(git_repo, settings):
             if c.get(f"/api/tasks/{a['id']}").json()["status"] == "stopped":
                 break
             time.sleep(0.05)
+
+
+# ---------- status model and old databases ----------
+
+@pytest.mark.parametrize("old,new,ok", [
+    ("waiting_dependencies", "queued", True), ("waiting_dependencies", "blocked", True), ("waiting_dependencies", "stopped", True),
+    ("blocked", "queued", True), ("blocked", "waiting_dependencies", True), ("blocked", "stopped", True),
+    ("running", "retry_wait", True), ("starting", "retry_wait", True),
+    ("retry_wait", "queued", True), ("retry_wait", "stopped", True), ("retry_wait", "failed", True),
+    ("waiting_dependencies", "running", False), ("waiting_dependencies", "starting", False), ("blocked", "running", False),
+    ("retry_wait", "running", False), ("retry_wait", "completed", False), ("completed", "retry_wait", False),
+    ("queued", "retry_wait", False), ("queued", "waiting_dependencies", False),
+])
+def test_new_status_transitions(old, new, ok):
+    from app.models import can_transition
+    assert can_transition(old, new) is ok
+
+
+def test_an_old_database_is_migrated_and_keeps_its_tasks(tmp_path):
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE tasks (id TEXT PRIMARY KEY, name TEXT NOT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL,
+        branch TEXT NOT NULL, base_ref TEXT NOT NULL, base_sha TEXT NOT NULL, prompt TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
+        reasoning_effort TEXT NOT NULL DEFAULT 'default', auto_approval INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL, pid INTEGER,
+        exit_code INTEGER, git_summary TEXT NOT NULL DEFAULT '', worktree_removed INTEGER NOT NULL DEFAULT 0,
+        branch_deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)""")
+    conn.execute("INSERT INTO tasks (id, name, repository, worktree, branch, base_ref, base_sha, prompt, status, created_at) "
+                 "VALUES ('old1', 'n', '/r', '/w', 'b', 'main', 'abc', 'p', 'completed', '2026-01-01T00:00:00Z')")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    task = db.get_task("old1")
+    assert task["auto_retry_enabled"] == 1 and task["max_retries"] == 3 and task["retry_count"] == 0
+    assert task["dependency_policy"] == "all_success" and task["worktree_pending"] == 0 and task["pending_turn"] is None
+    row(db, "d", status="waiting_dependencies", depends_on=["old1"])  # the new tables are there too
+    assert db.queue_if_ready("d")
+    db.close()
+
+
+def test_a_queued_task_from_before_the_upgrade_is_not_started_blindly(git_repo, make_manager, db):
+    """Without a recorded pending turn nobody knows whether it was a first run or a continuation: the user decides."""
+    m = make_manager()
+    row(db, "legacy", status="queued", worktree=str(git_repo))
+    row(db, "modern", status="queued", worktree=str(git_repo), pending_turn='{"prompt": "p"}', claimed_by="old-gui")
+    assert sorted(m.recover()) == ["legacy", "modern"]
+    assert db.get_task("legacy")["status"] == "interrupted"
+    assert db.get_task("modern")["status"] == "queued" and db.get_task("modern")["claimed_by"] is None

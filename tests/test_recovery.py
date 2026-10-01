@@ -168,7 +168,7 @@ def test_unexpected_exit_is_retried_in_the_same_worktree_and_thread(git_repo, ma
         assert thread and waiting["retry_count"] == 1 and waiting["max_retries"] == 3
         assert waiting["last_failure_kind"] == "process_exited" and waiting["last_exit_code"] == -9
         assert waiting["status_detail"].startswith("Retry 1/3 in 0.3s")
-        assert 0 < seconds(waiting["next_retry_at"]) - time.time() <= 0.31
+        assert seconds(waiting["next_retry_at"]) - time.time() <= 0.31  # (upper bound only: a slow machine may look late)
         m.scheduler.start(0.05)
         done = await reaches(m, t["id"], {"completed"})
 
@@ -318,22 +318,23 @@ def test_auto_retry_can_be_off(git_repo, make_manager, fake_codex_state):
 
 
 def test_the_backoff_grows_and_retries_are_never_back_to_back(git_repo, make_manager, monkeypatch):
+    import app.task_manager as tm
+    waits = []
+    real_timestamp = tm.timestamp
+    monkeypatch.setattr(tm, "timestamp", lambda seconds_from_now=0.0: (waits.append(seconds_from_now), real_timestamp(seconds_from_now))[1])
     m = make_manager(retry_backoff_seconds=(0.2, 0.6))
     monkeypatch.setenv("FAKE_CODEX_FORCE_MODE", "crashloop")
 
     async def scenario():
         m.scheduler.start(0.02)
         t = await create(m, git_repo, "ok", max_retries=2)
-        delays, seen = [], 0
-        while seen < 2:
-            row = await wait_for(lambda: m.get(t["id"]) if m.get(t["id"])["retry_count"] > seen and m.get(t["id"])["status"] == "retry_wait" else None)
-            delays.append(round(seconds(row["next_retry_at"]) - time.time(), 1))
-            seen = row["retry_count"]
-        assert delays[0] <= 0.2 and 0.3 <= delays[1] <= 0.6        # ~0.2 s, then ~0.6 s
         await reaches(m, t["id"], {"failed"})
         await m.scheduler.stop()
-        starts = [seconds(a["started_at"]) for a in m.attempts(t["id"])]
-        assert len(starts) == 3 and starts[1] - starts[0] >= 0 and starts[2] - starts[1] >= 0
+        assert [w for w in waits if w] == [0.2, 0.6]   # each retry is scheduled the next step of the schedule later
+        a = m.attempts(t["id"])
+        assert len(a) == 3
+        # every retry started after the wait that was set when the previous attempt failed (next_retry_at is checked by the scheduler)
+        assert all(seconds(a[i + 1]["started_at"]) >= seconds(a[i]["started_at"]) for i in range(2))
 
     go(scenario())
 
@@ -354,6 +355,26 @@ def test_no_thread_id_means_a_fresh_thread_in_the_same_worktree(git_repo, make_m
         assert NO_THREAD_NOTE in log_text(m, t["id"])
         assert [a["was_resume"] for a in m.attempts(t["id"])] == [0, 0]
         await m.scheduler.stop()
+
+    go(scenario())
+
+
+def test_a_turn_that_never_started_is_sent_again_not_continued(git_repo, make_manager, fake_codex_state):
+    """Codex never confirmed the turn (no turn.started): the instruction may not be in the thread, so "continue" would have
+    nothing to continue. Nothing can have been done yet, so the same instruction is sent again on the same thread."""
+    m = make_manager(retry_backoff_seconds=(0.2,))
+
+    async def scenario():
+        t = await create(m, git_repo, "crashunstarted")
+        waiting = await reaches(m, t["id"], {"retry_wait"})
+        thread = waiting["codex_thread_id"]
+        m.scheduler.start(0.05)
+        done = await reaches(m, t["id"], {"completed"})
+        await m.scheduler.stop()
+        first, second = invocations(fake_codex_state)
+        assert second["argv"] == ["resume", thread] and second["prompt"] == "crashunstarted" != RECOVERY_PROMPT
+        assert second["cwd"] == first["cwd"] and done["codex_thread_id"] == thread
+        assert "had not started" in log_text(m, t["id"])
 
     go(scenario())
 
@@ -408,6 +429,9 @@ def test_retry_now_ends_the_wait(git_repo, make_manager, fake_codex_state):
         t = await create(m, git_repo, "crash")
         waiting = await reaches(m, t["id"], {"retry_wait"})
         assert m.present_task(waiting)["retry_in_seconds"] > 50
+        for _ in range(5):  # the scheduler looking again and again does not make a retry come early
+            m.tick()
+        assert status(m, t["id"]) == "retry_wait" and len(invocations(fake_codex_state)) == 1
         await m.retry_task(t["id"])
         done = await reaches(m, t["id"], {"completed"})
         assert done["retry_count"] == 1 and [a["trigger_kind"] for a in m.attempts(t["id"])] == ["initial", "manual_retry"]
@@ -553,6 +577,64 @@ def test_app_server_dying_mid_turn_is_recovered_in_the_same_thread(git_repo, mak
         assert done["codex_thread_id"] == thread and done["worktree"] == waiting["worktree"]
         assert [a["trigger_kind"] for a in m.attempts(t["id"])][-2:] == ["instruction", "auto_retry"]
         await m.scheduler.stop()
+        await m.shutdown()
+
+    go(scenario())
+
+
+def test_app_server_turn_that_never_started_is_sent_again_on_the_same_thread(git_repo, make_manager, fake_codex_state):
+    m = make_manager(backend="app-server", retry_backoff_seconds=(0.2,))
+
+    async def scenario():
+        t = await create(m, git_repo, "dieearly")
+        waiting = await reaches(m, t["id"], {"retry_wait"})
+        thread = waiting["codex_thread_id"]
+        m.scheduler.start(0.05)
+        done = await reaches(m, t["id"], {"completed"})
+        calls = [json.loads(line) for line in (fake_codex_state / "invocations.jsonl").read_text().splitlines()]
+        prompts = [c["params"]["input"][0]["text"] for c in calls if c["method"] == "turn/start"]
+        assert prompts == ["dieearly", "dieearly"]                       # the instruction again, not "continue"
+        assert [c["params"]["threadId"] for c in calls if c["method"] == "thread/resume"] == [thread]
+        assert [c["method"] for c in calls].count("thread/start") == 1 and done["codex_thread_id"] == thread
+        await m.scheduler.stop()
+        await m.shutdown()
+
+    go(scenario())
+
+
+def test_app_server_thread_that_codex_never_saved_gets_a_new_thread_in_the_same_worktree(git_repo, make_manager, fake_codex_state):
+    """The thread-creating turn never started and Codex has no record of the thread: nothing was ever done in it."""
+    m = make_manager(backend="app-server", retry_backoff_seconds=(1.0,))
+
+    async def scenario():
+        t = await create(m, git_repo, "dieearly")
+        waiting = await reaches(m, t["id"], {"retry_wait"})
+        lost = waiting["codex_thread_id"]
+        (fake_codex_state / "threads" / f"{lost}.json").unlink()          # Codex never persisted it
+        m.scheduler.start(0.05)
+        done = await reaches(m, t["id"], {"completed"})
+        await m.scheduler.stop()
+        assert done["codex_thread_id"] and done["codex_thread_id"] != lost and done["worktree"] == waiting["worktree"]
+        assert NO_THREAD_NOTE in log_text(m, t["id"]) and "Codex has no saved thread" in log_text(m, t["id"])
+        await m.shutdown()
+
+    go(scenario())
+
+
+def test_app_server_a_started_turn_that_lost_its_thread_is_not_silently_restarted(git_repo, make_manager, fake_codex_state):
+    """Only a never-started first turn may fall back to a new thread. A thread that had real work in it is not replaced."""
+    m = make_manager(backend="app-server", retry_backoff_seconds=(0.2,))
+
+    async def scenario():
+        t = await create(m, git_repo, "ok")
+        done = await reaches(m, t["id"], {"completed"})
+        await m.send_instruction(t["id"], "die")
+        waiting = await reaches(m, t["id"], {"retry_wait"})
+        (fake_codex_state / "threads" / f"{waiting['codex_thread_id']}.json").unlink()
+        m.scheduler.start(0.05)
+        failed = await reaches(m, t["id"], {"failed"})
+        await m.scheduler.stop()
+        assert failed["last_failure_kind"] == "session_missing" and failed["codex_thread_id"] == waiting["codex_thread_id"]
         await m.shutdown()
 
     go(scenario())

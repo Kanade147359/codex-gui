@@ -115,6 +115,21 @@ GUI は（既定で）`chatgpt` 以外のときターンを開始せず、`faile
 - compaction は小さい thread（context 約 13k）では token をほぼ使わず、context も縮みませんでした（`total` が変わらない）。大きい thread での縮み方は未確認です。
 - prompt cache は best-effort です。実測では 1・2 ターン目が約 76%、3 ターン目が約 99% でした（変動します）。
 
+## 中断した turn の復旧（実測: 0.159.2）
+
+自動復旧（README「自動復旧（リトライ）」）の設計は、次の実測に基づいています。
+
+- `codex exec resume <thread_id>` は **プロンプトが必須**（stdin が空だと `No prompt provided via stdin.` で終了）。「中断した turn をそのまま続ける」ネイティブ機能は **ない**。
+- turn の途中で `kill -9` した後の rollout（`~/.codex/sessions/…/rollout-…-<thread_id>.jsonl`）は、`task_started` と tool 呼び出しで終わり `task_complete` が無い。
+  子プロセス（`sleep` を実行していた shell）は親の死亡で消え、**コマンドの結果は残らない**。
+- 同じ thread に固定の recovery instruction（`codex exec … resume <id> -` / app-server の `thread/resume` + `turn/start`）を送ると、**同じ thread_id** のまま、モデルは中断された作業を把握し、
+  `git status` 相当の確認をしてから **残りだけ** を実行した（実測: 再開 turn の cached input は約 90〜98%）。
+- 反例（実測で発見）: app-server を `turn/start` の応答直後（`turn/started` の前）に落とすと、**再開した thread に元の指示が入っていなかった**
+  （モデルは "The interrupted task isn't visible in this conversation" と答えて何もせず完了した）。そのため GUI は「Codex が turn の開始を確認したか」を記録し、
+  確認前に落ちた turn は recovery instruction ではなく **元の指示を同じ thread に再送**します（まだ何も実行されていない）。
+- app-server の `codexErrorInfo` は `httpConnectionFailed` / `responseStreamConnectionFailed` / `responseStreamDisconnected` / `responseTooManyFailedAttempts` / `serverOverloaded` /
+  `internalServerError`（一時的）、`usageLimitExceeded` / `rateLimitExceeded`（利用枠）、`unauthorized` / `badRequest` / `contextWindowExceeded` / `sandboxError`（リトライしても直らない）などに分かれる。
+
 ## 再現方法
 
 ```bash

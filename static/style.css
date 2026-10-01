@@ -64,7 +64,7 @@ dl.meta dt { color: var(--muted); }
 dl.meta dd { margin: 0; word-break: break-all; }
 pre.block { margin: 0; padding: 8px 10px; background: #0b0d11; border: 1px solid var(--border); border-radius: 4px; overflow: auto; max-height: 520px; white-space: pre-wrap; word-break: break-word; }
 details summary { cursor: pointer; color: var(--muted); }
-.log { background: #0b0d11; border: 1px solid var(--border); border-radius: 4px; height: 480px; overflow: auto; resize: vertical; padding: 4px 0; }
+.log { background: #0b0d11; border: 1px solid var(--border); border-radius: 4px; height: clamp(160px, 32vh, 480px); overflow: auto; resize: vertical; padding: 4px 0; }
 .log .entry { display: flex; gap: 10px; padding: 1px 10px; }
 .log .entry:hover { background: #12161c; }
 .log .ts { color: var(--muted); flex: none; }
@@ -118,6 +118,21 @@ dl.usage dd { margin: 0; text-align: right; }
 
 /* status for the quota stop */
 .status.waiting-for-quota { color: var(--yellow); border-color: #85692a; }
+.status.waiting_dependencies, .status.retry_wait { color: var(--yellow); border-color: #85692a; }
+.status.retry_wait::before { content: "↻ "; }
+.status.blocked { color: var(--red); border-color: #8a3640; }
+td .sub { margin-top: 2px; font-size: 12px; color: var(--muted); max-width: 260px; }
+.run-group { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; }
+.run-group legend { color: var(--muted); padding: 0 4px; }
+.deps-list { max-height: 160px; overflow: auto; margin: 4px 0; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: #0b0d11; }
+.deps-list label.check { padding-bottom: 2px; }
+input.narrow { width: 4.5em; }
+ul.deps { list-style: none; margin: 6px 0; padding: 0; }
+ul.deps li { padding: 2px 0; }
+ul.deps .mark { display: inline-block; width: 1.4em; text-align: center; }
+ul.deps .mark.ok { color: var(--green); }
+ul.deps .mark.bad { color: var(--red); }
+ul.deps .mark.wait { color: var(--yellow); }
 .warn { color: var(--yellow); }
 a.button { display: inline-block; font: inherit; color: var(--text); background: #1f2530; border: 1px solid var(--border); border-radius: 4px; padding: 4px 12px; }
 a.button:hover { border-color: var(--accent); text-decoration: none; }
@@ -126,6 +141,8 @@ a.button:hover { border-color: var(--accent); text-decoration: none; }
 .center h1 { font-size: 20px; }
 .defaults { margin: 4px 0 14px; }
 .usage-box { margin-bottom: 18px; max-width: 760px; }
+details.usage-box > summary { color: var(--text); }
+details.usage-box > summary h2 { display: inline; }
 .limit-row { display: flex; align-items: center; gap: 12px; margin: 3px 0; }
 .limit-label { width: 70px; color: var(--muted); }
 .limit-pct { width: 44px; text-align: right; }
@@ -164,3 +181,14 @@ dialog label .small { display: block; margin-top: 3px; }
 
 .login-code { font-size: 28px; letter-spacing: 4px; font-family: monospace; margin: 8px 0; }
 a.button { display: inline-block; padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px; background: #1f2530; color: var(--text); text-decoration: none; }
+details.advanced > summary .muted { margin-left: 6px; }
+details.fold { margin: 6px 0; }
+details.fold > summary { color: var(--text); }
+details.fold > summary h2 { display: inline; }
+details.fold > summary .muted { margin-left: 6px; }
+details.fold[open] > summary { margin-bottom: 6px; }
+/* folded-section headings: the title stays a label, the one-line values read as normal text */
+details.fold > summary { padding: 1px 0; }
+details.fold > summary h2 { color: var(--text); font-size: 14px; }
+details.fold > summary h2 span.muted { font-size: 14px; }
+details.fold > summary h2 span.muted.small { text-transform: none; letter-spacing: 0; font-weight: normal; color: #b8c2d4; }

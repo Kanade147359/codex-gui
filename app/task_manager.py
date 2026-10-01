@@ -74,11 +74,17 @@ class _Turn:
     trigger: str = "instruction"
     # The speed REQUESTED for this turn only ("default" = Standard, "priority" = Fast); None = the task's own tier.
     service_tier: Optional[str] = None
+    # Codex confirmed that the turn started (turn/started, turn.started or any item): its instruction is part of the thread,
+    # so a retry only has to say "continue". Without that, the instruction may never have reached the thread.
+    started: bool = False
+    # A retry of a thread-creating turn that never started: if Codex never saved that thread, a new one is acceptable.
+    fresh_ok: bool = False
 
     def to_json(self) -> str:
         """Stored in tasks.pending_turn: the turn that is queued, running or to be retried survives a GUI restart."""
         return json.dumps({"prompt": self.prompt, "resume_thread": self.resume_thread, "thread_id": self.thread_id,
-                           "kind": self.kind, "trigger": self.trigger, "service_tier": self.service_tier})
+                           "kind": self.kind, "trigger": self.trigger, "service_tier": self.service_tier,
+                           "started": self.started, "fresh_ok": self.fresh_ok})
 
     @classmethod
     def from_json(cls, raw: Optional[str]) -> Optional["_Turn"]:
@@ -89,7 +95,7 @@ class _Turn:
         if not isinstance(d, dict) or not isinstance(d.get("prompt"), str):
             return None
         return cls(d["prompt"], d.get("resume_thread"), d.get("thread_id"), d.get("kind") or "turn",
-                   d.get("trigger") or "instruction", d.get("service_tier"))
+                   d.get("trigger") or "instruction", d.get("service_tier"), bool(d.get("started")), bool(d.get("fresh_ok")))
 
 
 class TaskError(Exception):
@@ -613,6 +619,9 @@ class TaskManager:
                            f"{task['worktree']} on branch {task['branch']}")
             if not turn.resume_thread and turn.kind == "turn":
                 log.add_system(NO_THREAD_NOTE)
+            elif turn.kind == "turn" and turn.prompt != RECOVERY_PROMPT:
+                log.add_system("The interrupted turn had not started (Codex never confirmed it), so its instruction may not be in "
+                               "the thread; nothing can have been done yet, so the same instruction is sent again on the same thread.")
             await self._record_git_state(task, log)
         return True
 
@@ -725,15 +734,30 @@ class TaskManager:
 
     @staticmethod
     def _recovery_turn(turn: _Turn, trigger: str) -> _Turn:
-        """The turn that continues `turn` after an unexpected stop. With a Codex thread: the fixed recovery instruction on
-        that same thread (the original instruction is never sent twice: it could repeat work already done). Without one
-        (the process died before thread.started): the same instruction again, as a new thread in the same worktree."""
+        """The turn that continues `turn` after an unexpected stop.
+
+        - The turn started and there is a Codex thread: the fixed recovery instruction on that same thread. The original
+          instruction is never sent again: it is in the thread already, and sending it could repeat work that was done.
+        - There is a thread but Codex never confirmed that the turn started: the instruction may not have reached the thread
+          (a real run showed a resumed thread that had never seen it), and nothing can have been done yet, so the same
+          instruction is sent again on the same thread.
+        - No thread (the process died before thread.started): the same instruction again, as a new thread in the same worktree.
+        """
         thread = turn.thread_id or turn.resume_thread
         if turn.kind == "compact":
             return _Turn("", resume_thread=thread, kind="compact", trigger=trigger, service_tier=turn.service_tier)
-        if thread:
+        if thread and (turn.started or turn.prompt == RECOVERY_PROMPT):  # (a recovery turn only exists after a started one)
             return _Turn(RECOVERY_PROMPT, resume_thread=thread, trigger=trigger, service_tier=turn.service_tier)
+        if thread:
+            return _Turn(turn.prompt, resume_thread=thread, trigger=trigger, service_tier=turn.service_tier,
+                         fresh_ok=turn.fresh_ok or turn.resume_thread is None)
         return _Turn(turn.prompt, trigger=trigger, service_tier=turn.service_tier)
+
+    def _mark_started(self, task_id: str, turn: _Turn) -> None:
+        """Codex confirmed the turn started: remember it, so that a retry knows its instruction is in the thread."""
+        if not turn.started:
+            turn.started = True
+            self.db.update_task(task_id, pending_turn=turn.to_json())
 
     def _in_flight_turn(self, task: dict) -> _Turn:
         """The turn a task was running (or was to run) when it stopped, as stored on the task. A row from before
@@ -796,13 +820,27 @@ class TaskManager:
                             five_hour_used_after=None, weekly_used_after=None, quota_overlap=0)
 
         try:
-            res = await client.request(
-                "thread/resume" if turn.resume_thread else "thread/start",
-                {**self._thread_params(task),
-                 **({"threadId": turn.resume_thread, "excludeTurns": True} if turn.resume_thread else
-                    {"serviceName": "codex-gui",
-                     **({"developerInstructions": self.runner.instructions} if self.runner.instructions else {})})},
-                timeout=60)
+            while True:
+                try:
+                    res = await client.request(
+                        "thread/resume" if turn.resume_thread else "thread/start",
+                        {**self._thread_params(task),
+                         **({"threadId": turn.resume_thread, "excludeTurns": True} if turn.resume_thread else
+                            {"serviceName": "codex-gui",
+                             **({"developerInstructions": self.runner.instructions} if self.runner.instructions else {})})},
+                        timeout=60)
+                    break
+                except AppServerError as e:
+                    if turn.fresh_ok and turn.resume_thread and recovery.classify_app_server_error(e).kind == "session_missing":
+                        # The turn that created this thread never started and Codex never saved the thread: nothing was
+                        # ever done in it, so the same instruction may start a new thread (same worktree, same branch).
+                        log.add_system(f"Codex has no saved thread {turn.resume_thread} (the process died before the first turn started). "
+                                       "Starting a new Codex thread in the same worktree with the same instruction.")
+                        log.add_system(NO_THREAD_NOTE)
+                        turn.resume_thread = turn.thread_id = None
+                        turn.fresh_ok = False
+                        continue
+                    raise
             thread = res["thread"]
             thread_id = thread["id"]
         except AppServerError as e:
@@ -883,6 +921,8 @@ class TaskManager:
                     info["turn"] = tid
                     if task_id in self._stop_requested:
                         await self._interrupt(task_id)
+                if method in ("turn/started", "turn/completed") or method.startswith("item/"):
+                    self._mark_started(task_id, turn)
                 guard = observer.feed(method, params)
                 if guard and task_id not in self._guard_stops:
                     # The retry guard owns this stop (an error Codex would keep retrying, or the same tool failing again
@@ -1077,6 +1117,8 @@ class TaskManager:
         """React to the parsed JSON events that matter here. Never raises: the log must keep flowing."""
         try:
             etype = event.get("type") if event else None
+            if etype in ("turn.started", "turn.completed") or (etype or "").startswith("item."):
+                self._mark_started(task_id, turn)
             if etype == "thread.started":
                 self._on_thread_started(task_id, log, turn, event)
             elif etype == "turn.completed":
@@ -1450,12 +1492,12 @@ class TaskManager:
         if task_id in self._jobs:
             return False
         if status == "queued":
-            if not task["claimed_by"]:
-                return False
-            if not task["pending_turn"]:  # cannot tell what it was to run: leave it to the user, as before
+            if not task["pending_turn"]:  # a row from before pending_turn existed: what it was to run is unknown, so the user decides
                 TaskLog.note(self.log_path(task_id), "GUI restarted while this task was queued; marking it interrupted.")
                 self.db.set_status(task_id, "interrupted", finished_at=now_iso())
                 return True
+            if not task["claimed_by"]:
+                return False
             TaskLog.note(self.log_path(task_id), "GUI restarted while this task was queued; it will be started again.")
             self.db.release_claim(task_id)
             return True

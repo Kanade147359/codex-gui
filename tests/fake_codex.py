@@ -4,6 +4,7 @@ ok | fail | sleep | stubborn | nothread | newthread | meet <mine> <theirs> <dir>
 crash        thread.started, then the process kills itself (SIGKILL) -- the first time per test only
 crashloop    like crash, but every time (a task that can never be recovered)
 crashearly   like crash but before thread.started (no thread id exists) -- first time per test only
+crashunstarted  thread.started, then kills itself before any turn.started -- the first time per test only
 wipcrash     writes an uncommitted wip.txt, thread.started, then kills itself -- first time per test only
 gate <file>  waits until <file> exists (a test opens the gate), then behaves like ok
 err <code> <text...>   writes <text> to stderr and exits with <code> (thread.started first)
@@ -70,11 +71,16 @@ if mode == "crashearly" and once("crashearly"):
 if mode != "nothread":
     emit({"type": "thread.started", "thread_id": thread})
 if mode == "wipcrash" and once("wipcrash"):
+    emit({"type": "turn.started"})
     open("wip.txt", "w").write("work in progress\n")
     os.kill(os.getpid(), signal.SIGKILL)
 if (mode == "crash" and once("crash")) or mode == "crashloop":
+    emit({"type": "turn.started"})  # the turn was under way when the process died
+    os.kill(os.getpid(), signal.SIGKILL)
+if mode == "crashunstarted" and once("crashunstarted"):  # thread.started only: the instruction may never have reached the thread
     os.kill(os.getpid(), signal.SIGKILL)
 if mode == "err":
+    emit({"type": "turn.started"})
     sys.stderr.write(" ".join(prompt[2:]) + "\n")
     sys.exit(int(prompt[1]))
 if mode == "gate":
@@ -84,7 +90,7 @@ if mode == "gate":
         time.sleep(0.1)
     mode = "ok"
 # "Previous ..." is the fixed recovery instruction of a retry; the other crash modes behave normally after their first crash.
-if mode in ("ok", "nothread", "newthread", "Previous", "crash", "crashearly", "wipcrash"):
+if mode in ("ok", "nothread", "newthread", "Previous", "crash", "crashearly", "wipcrash", "crashunstarted"):
     open("out.txt", "a").write("hello\n")
     print("this line is not json", flush=True)
     sys.stderr.write("a warning\n")

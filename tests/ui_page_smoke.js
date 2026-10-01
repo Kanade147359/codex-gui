@@ -62,6 +62,9 @@ run("app.js");
   }
   const pick = (names) => Object.fromEntries(names.map((n) => [n, (registry[n] || {}).innerHTML || (registry[n] || {}).textContent || ""]));
   console.log(JSON.stringify({ errors, published: !!(sandbox.window && sandbox.window.CtxUI),
-    html: pick(["#ctx-banners", "#ctx-summary", "#ctx-settings", "#ctx-cache", "#ctx-tooloutputs", "#ctx-agents", "#tasks-body", "#send-btn", "#task-name", "#action-msg"]),
-    sendFastHidden: (registry["#send-fast-btn"] || {}).hidden }));
+    html: pick(["#ctx-banners", "#ctx-summary", "#ctx-settings", "#ctx-cache", "#ctx-tooloutputs", "#ctx-agents", "#tasks-body", "#send-btn", "#task-name", "#action-msg",
+      "#task-status", "#deps-items", "#deps-summary", "#blocks-line", "#recovery-dl", "#recovery-hint", "#attempts-body", "#deps-list", "#instruction-hint"]),
+    sendFastHidden: (registry["#send-fast-btn"] || {}).hidden,
+    hidden: Object.fromEntries(["#deps-section", "#run-anyway-btn", "#retry-deps-btn", "#retry-now-btn", "#retry-btn", "#attempts", "#stop-btn"]
+      .map((n) => [n, (registry[n] || {}).hidden])) }));
 })();

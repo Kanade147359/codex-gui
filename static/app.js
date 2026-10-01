@@ -3,6 +3,8 @@
 
 const $ = (sel) => document.querySelector(sel);
 const ACTIVE = ["queued", "starting", "running"];
+const WAITING = ["waiting_dependencies", "retry_wait"];   // the scheduler holds them; no process is running
+const BUSY = [...ACTIVE, ...WAITING];
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -87,8 +89,32 @@ const repoName = (p) => p.split("/").filter(Boolean).pop() || p;
 const kfmt = (n) => (n == null ? "-" : n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
 const EFFORT_LABELS = { default: "Auto", low: "Low", medium: "Medium", high: "High", xhigh: "XHigh", max: "Max", ultra: "Ultra" };
 const effortLabel = (e) => EFFORT_LABELS[e] || (e ? e[0].toUpperCase() + e.slice(1) : "-");
-const STATUS_TEXT = { "waiting-for-quota": "Waiting for Codex quota" };
+const STATUS_TEXT = { "waiting-for-quota": "Waiting for Codex quota", waiting_dependencies: "Waiting for dependencies", retry_wait: "Retrying", blocked: "Blocked" };
 const statusText = (s) => STATUS_TEXT[s] || s;
+// "Retry 1/3 in 18s": counts down in the browser from next_retry_at (the server only sends the time).
+function retryIn(t) {
+  const s = Math.max(0, Math.ceil((new Date(t.next_retry_at) - Date.now()) / 1000));
+  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+}
+function taskStatusText(t) {
+  if (t.status === "waiting_dependencies") return t.deps_total ? `Waiting (${t.deps_done}/${t.deps_total} complete)` : "Waiting for dependencies";
+  if (t.status === "retry_wait") return `Retry ${t.retry_count}/${t.max_retries} in ${retryIn(t)}`;
+  return statusText(t.status);
+}
+function statusCell(t) {
+  const live = t.status === "retry_wait" ? ` data-retry-at="${esc(t.next_retry_at)}" data-retry="${t.retry_count}/${t.max_retries}"` : "";
+  let html = `<span class="status ${esc(t.status)}"${live}>${esc(taskStatusText(t))}</span>`;
+  if (t.status === "blocked" && t.status_detail) html += `<div class="sub">${esc(t.status_detail)}</div>`;
+  if (t.status === "retry_wait" && t.last_failure_message) html += `<div class="sub" title="${esc(t.last_failure_message)}">${esc(t.last_failure_message.slice(0, 80))}</div>`;
+  return html;
+}
+function tickRetryCountdowns() {
+  document.querySelectorAll("[data-retry-at]").forEach((el) => {
+    el.textContent = `Retry ${el.dataset.retry} in ${retryIn({ next_retry_at: el.dataset.retryAt })}`;
+  });
+}
+setInterval(tickRetryCountdowns, 1000);
+const DEP_MARK = { completed: ["✓", "ok"], failed: ["✗", "bad"], stopped: ["✗", "bad"], blocked: ["✗", "bad"] };
 function resetText(ts) {
   if (!ts) return "";
   const d = new Date(ts * 1000);
@@ -101,6 +127,15 @@ function bar(percent, cls) {
   const p = percent == null ? 0 : Math.max(0, Math.min(100, percent));
   const level = cls || (p >= 95 ? "hot" : p >= 80 ? "warm" : "ok");
   return `<div class="bar ${level}"><div class="fill" style="width:${p}%"></div></div>`;
+}
+
+// Folded sections (<details data-fold>) start closed and remember what the user opened.
+function rememberFolds() {
+  document.querySelectorAll("details[data-fold]").forEach((d) => {
+    const key = "fold:" + d.dataset.fold;
+    try { d.open = localStorage.getItem(key) === "1"; } catch (_) {}
+    d.addEventListener("toggle", () => { try { localStorage.setItem(key, d.open ? "1" : "0"); } catch (_) {} });
+  });
 }
 
 // ---------------- dashboard ----------------
@@ -140,7 +175,7 @@ function initDashboard() {
           <td>${esc(effortLabel(t.reasoning_effort))}${t.service_tier !== "default" ? ` <span class="warn" title="Fast mode consumes included usage more quickly.">fast</span>` : ""}</td>
           <td title="cache hit rate of the latest turn (cached / input)">${esc(pct(t.cache_hit_rate))}</td>
           <td title="current context / model window">${ctxCell(t.context)}${ctxBadges(t)}</td>
-          <td>${statusBadge(t.status)}</td>
+          <td>${statusCell(t)}</td>
           <td>${esc(t.git_summary)}</td>
           <td>${esc(t.branch)}${t.branch_deleted ? " (deleted)" : ""}</td>
           <td>${esc(dt(t.created_at))}</td>
@@ -155,6 +190,7 @@ function initDashboard() {
     $("#summary").innerHTML =
       `Running: <b>${active}</b> &nbsp; Completed: <b>${n("completed")}</b> &nbsp; Failed: <b>${n("failed")}</b>` +
       ` &nbsp; Waiting for quota: <b>${n("waiting-for-quota")}</b>` +
+      ` &nbsp; Waiting: <b>${n("waiting_dependencies") + n("retry_wait")}</b> &nbsp; Blocked: <b>${n("blocked")}</b>` +
       ` &nbsp; Stopped: <b>${n("stopped") + n("interrupted")}</b> &nbsp; Total: <b>${tasks.length}</b>`;
   }
 
@@ -495,6 +531,18 @@ function initDashboard() {
     if (pickerIsGit) { f.repository.value = pickerPath; showPicker(false); loadRefs(); }
   });
 
+  // ----- one-line summaries of the folded groups of the form -----
+
+  function updateGroupSummaries() {
+    const text = (sel) => { const el = $(sel); return el && el.selectedOptions && el.selectedOptions[0] ? el.selectedOptions[0].textContent : ""; };
+    $("#recovery-summary").textContent = f.auto_retry.checked ? `· on, max ${f.max_retries.value} retries` : "· off";
+    const sub = $("#ctx-subagents");
+    $("#ctx-group-summary").textContent = ["Tool profile " + text("#ctx-tool-profile"), "output " + text("#ctx-tool-output"),
+      "subagents " + (sub && sub.checked ? "on" : "off")].join(" · ").replace(/^/, "· ");
+  }
+  form.addEventListener("input", updateGroupSummaries);
+  form.addEventListener("change", updateGroupSummaries);
+
   // ----- new task dialog -----
 
   $("#new-task-btn").addEventListener("click", async () => {
@@ -505,7 +553,11 @@ function initDashboard() {
     } catch (_) {}
     buildModelSelect();
     renderRecent();
+    renderDepChoices();
+    f.auto_retry.checked = options.default_auto_retry !== false;
+    f.max_retries.value = options.default_max_retries ?? 3;
     if (window.CtxUI) CtxUI.initNewTask(options);
+    updateGroupSummaries();
     if (options.error) { formError.textContent = options.error + " (use Custom… to type a model id)"; formError.hidden = false; }
     if (!f.repository.value) f.repository.value = filterEl.dataset.want || options.repos[0] || "";
     refsFor = "";
@@ -513,6 +565,18 @@ function initDashboard() {
     dialog.showModal();
     (f.repository.value ? f.prompt : f.repository).focus();
   });
+  // ----- run after other tasks -----
+
+  function renderDepChoices() {
+    $("#deps-list").innerHTML = allTasks.map((t) =>
+      `<label class="check"><input type="checkbox" name="dep" value="${esc(t.id)}"> ${esc(t.name)} ` +
+      `<span class="muted">${esc(repoName(t.repository))} · ${esc(taskStatusText(t))}</span></label>`).join("") ||
+      `<span class="muted">No tasks yet.</span>`;
+  }
+  form.querySelectorAll('input[name="run_mode"]').forEach((r) => r.addEventListener("change", () => {
+    $("#deps-box").hidden = f.run_mode.value !== "after";
+  }));
+
   f.repository.addEventListener("change", loadRefs);
   f.repository.addEventListener("input", () => { clearTimeout(loadRefs.t); loadRefs.t = setTimeout(loadRefs, 400); });
   $("#cancel-btn").addEventListener("click", () => dialog.close());
@@ -524,7 +588,13 @@ function initDashboard() {
     formError.hidden = formOk.hidden = true;
     try {
       if (!form.reportValidity()) return;
+      const after = f.run_mode.value === "after";
+      const dependsOn = after ? [...form.querySelectorAll('input[name="dep"]:checked')].map((c) => c.value) : [];
+      if (after && !dependsOn.length) throw new Error("Select at least one task to wait for, or choose Immediately.");
       const task = await api("POST", "/api/tasks", {
+        depends_on: dependsOn,
+        auto_retry: f.auto_retry.checked,
+        max_retries: Number(f.max_retries.value),
         repository: f.repository.value,
         base_ref: baseValue(),
         name: f.name.value,
@@ -545,7 +615,9 @@ function initDashboard() {
       f.prompt.value = "";
       f.name.value = "";
       if (keepOpen) {
-        formOk.textContent = `Started “${task.name}” on ${task.branch}. Add the next one.`;
+        formOk.textContent = task.status === "waiting_dependencies"
+          ? `Queued “${task.name}”: it starts when ${dependsOn.length} task(s) have completed. Add the next one.`
+          : `Started “${task.name}” on ${task.branch}. Add the next one.`;
         formOk.hidden = false;
         f.prompt.focus();
       } else {
@@ -577,6 +649,9 @@ function initDashboard() {
   refreshLimits();
   setInterval(refreshLimits, 15000);
   refreshAccount();
+  const effBox = $("#efficiency-box");
+  effBox.open = store.get("efficiencyOpen") !== "0";  // remembered across reloads
+  effBox.addEventListener("toggle", () => store.set("efficiencyOpen", effBox.open ? "1" : "0"));
   let effPeriod = "lifetime";
   const effTabs = $("#efficiency-tabs");
   effTabs.innerHTML = EFFICIENCY_PERIODS.map(([id, label]) => `<button type="button" data-period="${id}">${label}</button>`).join("");
@@ -605,6 +680,7 @@ function initDashboard() {
 // ---------------- task detail ----------------
 
 function initTask() {
+  rememberFolds();
   const id = document.body.dataset.taskId;
   let task = null;
   let offset = 0;
@@ -625,15 +701,19 @@ function initTask() {
   function renderTask() {
     const t = task;
     const active = ACTIVE.includes(t.status);
+    const waiting = WAITING.includes(t.status);
+    const busy = active || waiting;
     document.title = `${t.name} - Codex GUI`;
     $("#task-name").textContent = t.name;
     $("#task-status").className = "status " + t.status;
-    $("#task-status").textContent = t.status;
+    $("#task-status").textContent = taskStatusText(t);
+    if (t.status === "retry_wait") { $("#task-status").dataset.retryAt = t.next_retry_at; $("#task-status").dataset.retry = `${t.retry_count}/${t.max_retries}`; }
+    else { delete $("#task-status").dataset.retryAt; }
     $("#prompt").textContent = t.prompt;
     $("#git-branch").textContent = t.branch;
     const rows = [
-      ["Status", statusText(t.status)], ["Repository", t.repository],
-      ["Branch", t.branch + (t.branch_deleted ? " (deleted)" : "")], ["Worktree", t.worktree + (t.worktree_removed ? " (removed)" : "")],
+      ["Status", taskStatusText(t)], ["Repository", t.repository],
+      ["Branch", t.branch + (t.branch_deleted ? " (deleted)" : "")], ["Worktree", t.worktree + (t.worktree_removed ? " (removed)" : t.worktree_pending ? " (created when the task starts)" : "")],
       ["Base ref", `${t.base_ref} (${t.base_sha.slice(0, 10)})`], ["Model", t.effective_model || t.model || "default"],
       ["Reasoning", effortLabel(t.reasoning_effort)], ["Speed", t.service_tier === "default" ? "Standard" : t.service_tier],
       ["Output verbosity", t.model_verbosity], ["Web search", t.web_search_enabled ? "on" : "off"],
@@ -645,20 +725,23 @@ function initTask() {
     ];
     if (t.status_detail) rows.push(["Detail", t.status_detail]);
     $("#meta").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+    $("#meta-summary").textContent = "· " + [t.effective_model || t.model || "default", effortLabel(t.reasoning_effort),
+      t.service_tier === "default" ? "Standard" : t.service_tier, t.sandbox, t.branch].join(" · ") + (t.status_detail ? ` · ${t.status_detail}` : "");
 
-    if (!active) stopping = false;
-    $("#stop-btn").hidden = !active;
+    if (!busy) stopping = false;
+    $("#stop-btn").hidden = !busy;
     $("#stop-btn").disabled = stopping;
     $("#stop-btn").textContent = stopping ? "Stopping…" : "Stop";
-    const canGit = !active && !t.worktree_removed;
+    const hasWorktree = !t.worktree_removed && !t.worktree_pending;
+    const canGit = !busy && hasWorktree;
     $("#commit-btn").hidden = !canGit;
     $("#push-btn").hidden = !canGit;
-    $("#del-wt-btn").hidden = active || t.worktree_removed;
+    $("#del-wt-btn").hidden = busy || !hasWorktree;
     $("#del-branch-btn").hidden = !(t.worktree_removed && !t.branch_deleted);
-    $("#agents-btn").hidden = t.worktree_removed;
+    $("#agents-btn").hidden = !hasWorktree;
 
     // Additional instruction. Idle: Send resumes the thread. Running (app-server): Send steers the running turn.
-    const idle = !active && !t.worktree_removed;
+    const idle = !busy && t.status !== "blocked" && hasWorktree;
     const steerable = active && t.status === "running" && t.backend === "app-server" && !t.worktree_removed;
     $("#send-btn").textContent = steerable ? "Send to running turn" : "Send Standard";
     $("#send-btn").disabled = sending || !(steerable || (idle && t.codex_thread_id));
@@ -670,6 +753,8 @@ function initTask() {
     $("#instruction").disabled = !(idle || steerable);
     $("#session-id").textContent = t.codex_thread_id ? `thread ${t.codex_thread_id}` : "";
     $("#instruction-hint").textContent =
+      waiting ? "The task is waiting for the scheduler; it takes instructions once it has run." :
+      t.status === "blocked" ? "The task is blocked by a dependency: use Run Anyway or retry the failed dependency." :
       active && !steerable ? (t.backend === "app-server" ? "The turn is starting: you can add an instruction in a moment." :
                                                           "Task is running: send the next instruction when it has finished (the exec backend cannot add to a running turn).") :
       t.worktree_removed ? "The worktree was deleted." :
@@ -704,7 +789,59 @@ function initTask() {
     document.querySelectorAll(".compact-btn").forEach((b) => (b.disabled = !canCompact));
     renderContext(t);
     renderObserved(t);
+    renderDeps(t);
+    renderRecovery(t);
     if (window.CtxUI) CtxUI.renderTask(t, ctxHandlers);
+  }
+
+  // ----- dependencies and recovery -----
+
+  function renderDeps(t) {
+    const deps = t.dependencies || [], blocks = t.dependents || [];
+    $("#deps-section").hidden = !deps.length && !blocks.length;
+    const left = t.deps_total - t.deps_done;
+    $("#deps-summary").textContent = deps.length
+      ? `(${t.deps_done}/${t.deps_total} complete)` + (t.status === "waiting_dependencies" ? ` · Waiting for ${left} task${left === 1 ? "" : "s"}` : "")
+      : "";
+    $("#deps-items").innerHTML = deps.map((d) => {
+      const [mark, cls] = DEP_MARK[d.status] || (ACTIVE.includes(d.status) || WAITING.includes(d.status) ? ["…", "wait"] : ["⏸", "wait"]);
+      return `<li><span class="mark ${cls}">${mark}</span> <a href="/tasks/${esc(d.id)}">${esc(d.name)}</a> <span class="muted">${esc(statusText(d.status))}</span></li>`;
+    }).join("");
+    $("#blocks-line").hidden = !blocks.length;
+    $("#blocks-line").innerHTML = blocks.length ? "Waiting for this task: " + blocks.map((d) => `<a href="/tasks/${esc(d.id)}">${esc(d.name)}</a> (${esc(statusText(d.status))})`).join(", ") : "";
+    $("#run-anyway-btn").hidden = !["waiting_dependencies", "blocked"].includes(t.status);
+    $("#retry-deps-btn").hidden = t.status !== "blocked";
+  }
+
+  function renderRecovery(t) {
+    const rows = [["Auto retry", t.auto_retry_enabled ? "ON" : "OFF"], ["Retries", `${t.retry_count} / ${t.max_retries}`]];
+    if (t.last_failure_message) rows.push(["Last failure", `${t.last_failure_message}${t.last_failure_kind ? ` [${t.last_failure_kind}]` : ""}`]);
+    if (t.status === "retry_wait") rows.push(["Next retry", `${dt(t.next_retry_at)} (in ${retryIn(t)})`]);
+    $("#recovery-summary").textContent = `· auto retry ${t.auto_retry_enabled ? "ON" : "OFF"} · ${t.retry_count}/${t.max_retries}` +
+      (t.last_failure_kind ? ` · last failure: ${t.last_failure_kind}` : "");
+    $("#recovery-dl").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+    $("#retry-now-btn").hidden = t.status !== "retry_wait";
+    $("#retry-btn").hidden = !["failed", "stopped"].includes(t.status);
+    $("#auto-retry-btn").textContent = t.auto_retry_enabled ? "Disable Auto Retry" : "Enable Auto Retry";
+    $("#recovery-hint").textContent =
+      t.status === "retry_wait" ? "The task stopped unexpectedly. It is retried in the same worktree and the same Codex thread, with a short instruction to check the current state first." :
+      t.status === "failed" || t.status === "stopped" ? "Retry runs the task again in the same worktree and Codex thread. Use Start New Session for a different thread." :
+      "Only unexpected stops are retried. Stop, quota, authentication and configuration problems are not.";
+  }
+
+  function renderAttempts(list) {
+    $("#attempts").hidden = !list.length;
+    $("#attempts-body").innerHTML = list.map((a) => {
+      const how = { initial: "first run", instruction: "instruction", new_session: "new session", compact: "compact", auto_retry: "auto retry",
+                    manual_retry: "manual retry", restart_recovery: "GUI restart" }[a.trigger_kind] || a.trigger_kind;
+      const result = a.result + (a.was_resume ? " (resumed same thread)" : "");
+      return `<tr><td>${a.attempt_number}</td><td>${esc(hms(a.started_at))}</td><td>${esc(how)}</td><td>${esc(result)}</td>` +
+        `<td title="${esc(a.codex_thread_id || "")}">${esc((a.codex_thread_id || "-").slice(0, 8))}</td>` +
+        `<td title="${esc(a.failure_message || "")}">${esc(a.failure_kind ? `${a.failure_kind}: ${(a.failure_message || "").slice(0, 70)}` : "")}</td></tr>`;
+    }).join("");
+  }
+  async function refreshAttempts() {
+    try { renderAttempts((await api("GET", `/api/tasks/${id}/attempts`)).attempts); } catch (_) {}
   }
 
   function renderContext(t) {
@@ -730,6 +867,8 @@ function initTask() {
     const row = (label, pair) => pair ? `<dt>${label}</dt><dd>${Math.round(pair[0])}% → ${Math.round(pair[1])}%</dd>` : "";
     $("#observed-dl").innerHTML = row("5 hour", o.five_hour) + row("Weekly", o.weekly);
     $("#observed-note").textContent = o.note;
+    $("#observed-summary").textContent = "· " + [["5 hour", o.five_hour], ["Weekly", o.weekly]].filter(([, p]) => p)
+      .map(([l, p]) => `${l} ${Math.round(p[0])}% → ${Math.round(p[1])}%`).join(", ");
   }
 
   function renderUsage(u) {
@@ -744,7 +883,10 @@ function initTask() {
     $("#latest-usage").innerHTML = l
       ? `<div class="muted">Latest turn (${l.turn})</div><dl class="usage">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
       : "no completed turn yet";
+    $("#usage-summary").textContent = l ? `· input ${num(l.input_tokens)} · cache hit ${pct(l.cache_hit_rate)} · output ${num(l.output_tokens)}` : "";
     $("#efficiency").innerHTML = u.turns.length ? efficiencyHtml(u.efficiency, "task") : "no turn yet";
+    const eff = u.turns.length ? u.efficiency : null, saved = eff && eff.total && eff.total.turns ? eff.total.saved_percent : null;
+    $("#efficiency-summary").textContent = eff ? `· cache hit ${pct(eff.cache_hit_rate)}` + (saved != null ? ` · saved ${pct(saved)}` : "") : "";
     $("#turns").hidden = !u.turns.length;
     $("#turns-body").innerHTML = u.turns.map((r) =>
       `<tr><td>${r.turn}${r.kind === "compact" ? " (compact)" : ""}${r.status !== "completed" ? ` <span class="muted">${esc(r.status)}</span>` : ""}</td><td>${r.session}</td>` +
@@ -839,6 +981,40 @@ function initTask() {
     await tick(true);
   }
 
+  $("#run-anyway-btn").addEventListener("click", () => {
+    if (!confirm("Start this task now, without waiting for its dependencies?")) return;
+    action("Run Anyway", async () => { await api("POST", `/api/tasks/${id}/run-anyway`); return "Run Anyway: started"; });
+  });
+  $("#retry-deps-btn").addEventListener("click", () => action("Retry Failed Dependency", async () => {
+    let r;
+    try {
+      r = await api("POST", `/api/tasks/${id}/retry-dependencies`, {});
+    } catch (e) {
+      if (e.code !== "over_limit" || !confirm(`${e.message}\n\nRetry anyway?`)) throw e;
+      r = await api("POST", `/api/tasks/${id}/retry-dependencies`, { confirm_over_limit: true });
+    }
+    return `Retried ${r.retried.length} task(s)` + (r.problems.length ? `; skipped: ${r.problems.join("; ")}` : "");
+  }));
+  $("#retry-now-btn").addEventListener("click", () => action("Retry Now", async () => { await api("POST", `/api/tasks/${id}/retry`, {}); return "Retry Now: started"; }));
+  $("#retry-btn").addEventListener("click", () => action("Retry", async () => {
+    try {
+      await api("POST", `/api/tasks/${id}/retry`, {});
+    } catch (e) {
+      if (e.code !== "over_limit" || !confirm(`${e.message}\n\nRetry anyway?`)) throw e;
+      await api("POST", `/api/tasks/${id}/retry`, { confirm_over_limit: true });
+    }
+    return "Retry: started (same worktree, same Codex thread)";
+  }));
+  $("#auto-retry-btn").addEventListener("click", () => {
+    const enable = !task.auto_retry_enabled;
+    if (!enable && task.status === "retry_wait" && !confirm("Turn off automatic retry? The pending retry is cancelled and the task is marked failed (Retry still works by hand).")) return;
+    action(enable ? "Enable Auto Retry" : "Disable Auto Retry", async () => { await api("POST", `/api/tasks/${id}/auto-retry`, { enabled: enable }); });
+  });
+  $("#max-retries-btn").addEventListener("click", () => {
+    const v = prompt("Maximum automatic retries (0-10):", String(task.max_retries));
+    if (v === null) return;
+    action("Max retries", async () => { await api("POST", `/api/tasks/${id}/auto-retry`, { max_retries: Number(v) }); });
+  });
   $("#stop-btn").addEventListener("click", () => {
     stopping = true;
     action("Stop", async () => { await api("POST", `/api/tasks/${id}/stop`); });
@@ -954,6 +1130,7 @@ function initTask() {
       if (forceGit || (active && now - lastUsage > 3000) || (wasActive && !active) || lastUsage === 0) {
         lastUsage = now;
         await refreshUsage();
+        await refreshAttempts();
       }
       if (forceGit || (active && now - lastGit > 3000) || (wasActive && !active) || lastGit === 0) {
         lastGit = now;
@@ -968,7 +1145,7 @@ function initTask() {
   // Poll fast while active; slow down once the task is finished.
   (async function loop() {
     await tick();
-    setTimeout(loop, task && ACTIVE.includes(task.status) ? 1000 : 4000);
+    setTimeout(loop, task && BUSY.includes(task.status) ? 1000 : 4000);
   })();
 }
 

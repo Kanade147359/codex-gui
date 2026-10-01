@@ -27,11 +27,11 @@
     <button id="resume-all-btn" hidden title="Continue every interrupted task in its existing Codex thread">Resume interrupted</button></p>
 </section>
 
-<section class="usage-box">
-  <h2><span id="efficiency-title">LIFETIME EFFICIENCY</span> <span class="muted">(equivalent estimate)</span></h2>
+<details class="usage-box" id="efficiency-box" open>
+  <summary title="Click to fold / unfold"><h2><span id="efficiency-title">LIFETIME EFFICIENCY</span> <span class="muted">(equivalent estimate)</span></h2></summary>
   <nav class="tabs" id="efficiency-tabs"></nav>
   <div id="efficiency" class="muted">loading…</div>
-</section>
+</details>
 
 <section class="repo-bar" id="repo-bar" hidden>
   <div><span class="muted">Repository</span> <span id="repo-path"></span></div>
@@ -87,6 +87,17 @@
       <label>Prompt
         <textarea name="prompt" rows="8" required placeholder="What should Codex do?"></textarea>
       </label>
+      <fieldset class="run-group">
+        <legend>Run</legend>
+        <label class="check"><input type="radio" name="run_mode" value="now" checked> Immediately</label>
+        <label class="check"><input type="radio" name="run_mode" value="after"> After other tasks complete</label>
+        <div id="deps-box" hidden>
+          <span class="label">Depends on:</span>
+          <div id="deps-list" class="deps-list"></div>
+          <p class="small muted">Starts when all of them have completed. If one of them fails or is stopped, this task is blocked instead of
+            running (you can then Run Anyway or retry the failed one). Its worktree is created just before it runs.</p>
+        </div>
+      </fieldset>
       <div class="row">
         <label>Model
           <select name="model_choice" id="model-select"></select>
@@ -107,8 +118,18 @@
         <label class="check"><input type="checkbox" name="adaptive_reasoning" checked> Adaptive reasoning <span class="muted">(suggests a retry with more effort; never automatic)</span></label>
         <label class="check"><input type="checkbox" name="context_guard" checked> Context guard <span class="muted">(warn when the thread gets large)</span></label>
       </div>
-      <fieldset class="ctx-group">
-        <legend>Context efficiency <span class="muted small">(fixed for the task: changing tools mid-thread can lose prompt-cache reuse)</span></legend>
+      <details class="advanced" id="recovery-group">
+        <summary>Auto recovery <span class="muted small" id="recovery-summary"></span></summary>
+        <div class="row">
+          <label class="check"><input type="checkbox" name="auto_retry" checked> Retry interrupted task automatically</label>
+          <label class="check">Max retries <input type="number" name="max_retries" min="0" max="10" value="3" class="narrow"></label>
+        </div>
+        <p class="small muted">Only an unexpected stop is retried (10 s, 30 s, 60 s apart), in the same worktree and the same Codex thread.
+          Stop, quota, authentication and configuration problems are never retried.</p>
+      </details>
+      <details class="advanced ctx-group" id="ctx-group">
+        <summary>Context efficiency <span class="muted small" id="ctx-group-summary"></span></summary>
+        <p class="small muted">Fixed for the task: changing tools mid-thread can lose prompt-cache reuse.</p>
         <div class="row">
           <label>Tool output limit
             <select name="ctx_tool_output" id="ctx-tool-output"></select>
@@ -125,7 +146,7 @@
           <summary>AGENTS.md health and skills catalog</summary>
           <div id="ctx-preview" class="small muted">choose a repository</div>
         </details>
-      </fieldset>
+      </details>
       <details class="advanced">
         <summary>Advanced settings</summary>
         <div class="row">
