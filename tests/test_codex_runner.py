@@ -25,6 +25,19 @@ def test_default_command_is_standard_low_verbosity_no_web_search():
     assert "-s" not in cmd and "--model" not in cmd  # the sandbox comes with --approve-for-me; model: Codex default
 
 
+def test_web_search_mode_wins_and_old_tasks_fall_back_to_the_flag():
+    assert configs(CodexRunner("codex").build_command(task(web_search_mode="cached", web_search_enabled=1)))["web_search"] == '"cached"'
+    assert configs(CodexRunner("codex").build_command(task(web_search_mode="", web_search_enabled=1)))["web_search"] == '"live"'
+    assert configs(CodexRunner("codex").build_command(task(web_search_mode="", web_search_enabled=0)))["web_search"] == '"disabled"'
+
+
+def test_network_access_flag_only_for_workspace_write():
+    on = configs(CodexRunner("codex").build_command(task(network_access=1)))
+    assert on["sandbox_workspace_write.network_access"] == "true"
+    for t in (task(network_access=0), task(), task(sandbox="read-only", network_access=1)):
+        assert "sandbox_workspace_write.network_access" not in configs(CodexRunner("codex").build_command(t))
+
+
 def test_prompt_never_in_argv_and_no_dangerous_flag():
     for t in (task(), task(auto_approval=0), task(model="m", reasoning_effort="high"),
               task(sandbox="read-only"), task(web_search_enabled=1)):

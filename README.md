@@ -3,7 +3,7 @@
 Codex CLI を複数同時に動かして一画面で管理する、ローカル Web GUI。Codex は **`codex app-server`**（thread / turn）経由で動かします。
 
 - 1 タスク = 1 Git branch = 1 Git worktree = 1 Codex thread。追加指示は同じ thread の次の turn（`thread/resume` + `turn/start`）なので、会話履歴は Codex が持ち続け、prompt cache（cached input）が効きます。GUI が履歴を貼り直すことはありません
-- 定額枠をできるだけ有効に使うための既定値（GPT-6.1 Sol / Standard / Low / 低 verbosity / web search OFF）、cache hit・context・利用枠の表示（[使用量の最適化](#使用量の最適化)）
+- 定額枠をできるだけ有効に使うための既定値（GPT-6.1 Sol / Standard / Low / 低 verbosity / web search は Codex の既定どおり cached）、cache hit・context・利用枠の表示（[使用量の最適化](#使用量の最適化)）
 - リポジトリと Task worktree の `AGENTS.md` をブラウザで編集（[AGENTS.md エディタ](#agentsmd-エディタ)）
 - worktree は GUI 側が管理（Codex の `--worktree` は使わない）
 - 複数 Codex プロセスの並列実行、ログのリアルタイム表示、Git status / diff / log の確認
@@ -110,7 +110,7 @@ GitHub は `ssh -T` 成功時でも **終了コード 1** を返します。そ�
 | `Host key verification failed` | 初回接続。端末で一度 `ssh -T git@github.com` を実行して host key を承認 |
 | `Could not resolve hostname` / timeout | ネットワーク・DNS・プロキシの問題（WSL の DNS を確認） |
 | remote が `https://` | SSH 認証は使われません。`git remote set-url origin git@github.com:OWNER/REPO.git` |
-| Codex の sandbox 内から push できない | sandbox が agent の socket やネットワークを遮ることがあります。GUI の **Commit / Push** ボタン（GUI プロセスから実行）を使ってください |
+| Codex の sandbox 内から push できない | **Network access**（既定 ON）が OFF の Task、または古い Task（この項目より前に作ったもの）はネットワークが遮られます。ON でも sandbox が SSH agent の socket を遮ることがあります。GUI の **Commit / Push** ボタン（GUI プロセスから実行）を使ってください |
 | 古い agent が残っている | `pkill -f 'ssh-agent -s'` は他の agent も止めるので、`kill $SSH_AGENT_PID`（`~/.ssh/agent.env` の pid）で止める |
 
 手動確認: `. ~/.ssh/agent.env && ssh-add -l && ssh -T git@github.com`
@@ -122,7 +122,7 @@ GitHub は `ssh -T` 成功時でも **終了コード 1** を返します。そ�
    - **Base ref:** 選んだリポジトリのブランチ / 既存 worktree / リモートブランチ / タグから選択（`Custom…` で任意の ref やコミットも可）。
      worktree を選んだ場合は **commit 済みの状態** から分岐します（未コミットの変更は含まれません）
    - **Model / Reasoning / Speed:** 既定は GPT-6.1 Sol（この codex が認識しているとき）/ Low / Standard。選択肢は `codex debug models` の内容（モデルごとの対応 effort・tier）に連動
-   - **Auto approve / Web search / Adaptive reasoning / Context guard**、**Advanced settings**（Output verbosity・Sandbox・追加の書き込み可能ディレクトリ・feature flags）
+   - **Auto approve / Web search / Network access / Adaptive reasoning / Context guard**、**Advanced settings**（Output verbosity・Sandbox・追加の書き込み可能ディレクトリ・feature flags）
    - **Run & add another:** フォームを開いたまま次のタスクを追加。**同じリポジトリで複数タスクを並列実行**できます（タスクごとに別 branch・別 worktree）
 2. worktree と branch が作られ、その中で Codex が起動する（ダッシュボードは 2 秒ごとに自動更新）
 3. ダッシュボードはリポジトリで絞り込み可能。行をクリックすると詳細画面。Codex ログ（種別名をクリックで生イベント JSON）と Git の Status / Diff / Log を確認
@@ -167,7 +167,8 @@ Diff は **base commit との差分**（Codex が作った commit も含む）�
 | Output verbosity | **Low**（Advanced） | `model_verbosity` |
 | Auto approve | **ON** | `--approve-for-me` 相当（下記） |
 | Sandbox | **workspace-write**（Advanced） | `read-only` も選べる。`danger-full-access` は選べない |
-| Web search | **OFF** | Task ごとに ON。Codex がローカルのファイルを読むことは妨げません |
+| Web search | **Cached** | Codex 自身の既定（0.159.2 は web search が既定で有効）に合わせます。**Cached** = OpenAI の検索インデックスの結果、**Live** = 実際の Web、**Off** = 無効（Codex がローカルのファイルを読むことは妨げません）。選べる値は Task 作成時に固定。以前の Task は、ON だったものは Live、OFF は Off のままです |
+| Network access | **ON** | workspace-write sandbox 内のネットワーク（`git fetch` / `git push`、`gh`、パッケージのインストールなど）。OFF にすると sandbox 内の通信はすべて失敗します（ローカルの `git status` / `diff` / `log` は使えます）。Web search（モデルの検索ツール）とは別です。`read-only` では無関係。この項目より前に作った Task は OFF のままです |
 | Adaptive reasoning | ON | 下記 |
 | Context guard | ON | 下記 |
 | Use subscription authentication only | ON（変更不可の表示） | 下記 |
@@ -283,6 +284,9 @@ branch 名は `codex-gui/<task-id>-<slug>`。
 
 ## 自動承認について
 
+Network access（既定 ON）は `sandbox_workspace_write.network_access=true` を thread の config として全ターンに渡します（app-server の `thread/start` が `networkAccess: true` を返すことを確認済み）。
+ON の間、Codex は sandbox の中から任意の外部へ通信できます（プロンプトに紛れた指示でコードや秘密が外に出るリスクが増えます）。信頼できないリポジトリ・指示では OFF にしてください。
+
 Auto approval（既定 ON）は、app-server では `approvalPolicy: "on-request"` + `approvalsReviewer: "auto_review"` + `sandbox: "workspace-write"`、
 `exec` バックエンドでは `codex exec --approve-for-me`（どちらも workspace-write sandbox 内で承認リクエストを自動レビューに回す）です。
 OFF のときは `approvalPolicy: "never"`（sandbox 内で完結。昇格が要る操作は失敗。GUI に承認ダイアログは無いため）。
@@ -367,7 +371,7 @@ New Task の **Run** で **After other tasks complete** を選び、**Depends on
 実 Codex は使わず、`tests/fake_app_server.py`（app-server の JSON-RPC。thread / turn / 累積 usage / rate limit / steer / interrupt / compact / quota エラー）と
 `tests/fake_codex.py`（`codex exec` の従来方式）を、実際の JSON-RPC クライアント・サブプロセス・シグナル・git を通して動かします。
 カバー範囲: Codex へのサインイン（ブラウザ / デバイスコード / 失敗 / 取り消し）、Task と thread id の永続化、同一 thread の再利用（resume）、token / cached の parse と cache hit 計算、rate limit の parse（週次のみ / 2 本）、
-quota 時の状態遷移（再試行しない）、model・reasoning・Standard・auto approval・web search OFF の既定値と送信内容、API キーに fallback しないこと、
+quota 時の状態遷移（再試行しない）、model・reasoning・Standard・auto approval・web search cached の既定値と送信内容、API キーに fallback しないこと、
 context guard の判定、steer / stop / compact、AGENTS.md の読み書き・競合・path 検証・Repository と Task worktree の分離、
 依存関係（DAG・循環 / 自己 / 重複の拒否・複数接続からの同時評価でも 1 回だけ起動・依存先のリトライ中は待機・blocked / Run Anyway）、
 自動復旧（失敗の分類・上限・間隔・同じ thread / worktree の再利用・Stop / quota / 認証はリトライしない・作業ツリーに触れない・worktree 削除時は再作成しない・

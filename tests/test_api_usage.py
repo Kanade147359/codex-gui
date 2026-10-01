@@ -32,7 +32,7 @@ def wait_done(client, task_id, timeout=15):
 
 def test_new_task_defaults_through_the_api(client, git_repo):
     t = client.post("/api/tasks", json={"repository": str(git_repo), "prompt": "ok"}).json()
-    assert (t["service_tier"], t["auto_approval"], t["web_search_enabled"], t["sandbox"]) == ("default", 1, 0, "workspace-write")
+    assert (t["service_tier"], t["auto_approval"], t["web_search_mode"], t["sandbox"]) == ("default", 1, "cached", "workspace-write")
     assert (t["model_verbosity"], t["adaptive_reasoning"], t["context_guard"]) == ("low", 1, 1)
     done = wait_done(client, t["id"])
     assert done["status"] == "completed" and done["backend"] == "app-server"

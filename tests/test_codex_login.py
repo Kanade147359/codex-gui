@@ -47,7 +47,9 @@ def test_signed_out_then_browser_login(make_client):
     assert a["signed_in"] is False and a["account_type"] is None and a["login"] == {"status": "idle"}
 
     r = client.post("/api/codex/login", json={"method": "browser"})
-    assert r.status_code == 200 and r.json()["url"].startswith("https://auth.example.com/authorize")
+    # the fake finishes at once, so the answer is either the pending login (with its page) or, if the completion
+    # notice arrived first, already the finished one
+    assert r.status_code == 200 and (r.json()["status"] == "success" or r.json()["url"].startswith("https://auth.example.com/authorize"))
     a = wait_for_status(client, "success")
     assert a["signed_in"] is True and a["email"] == "me@example.com" and a["plan"] == "pro"
 

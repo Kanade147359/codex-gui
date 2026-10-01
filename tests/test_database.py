@@ -157,6 +157,7 @@ def test_old_database_gets_the_new_columns_and_keeps_its_data(tmp_path):
     # the optimization defaults apply to old rows: Standard, low verbosity, no web search, sandboxed
     assert (t["service_tier"], t["model_verbosity"], t["web_search_enabled"], t["sandbox"]) == ("default", "low", 0, "workspace-write")
     assert (t["adaptive_reasoning"], t["context_guard"], t["latest_input_tokens"], t["five_hour_used_before"]) == (1, 1, None, None)
+    assert t["network_access"] == 0  # a task from before the option keeps running without network
     old_turn = d.list_turns("a1")[0]
     assert old_turn["kind"] == "turn" and old_turn["status"] == "completed" and old_turn["cache_hit_rate"] is None
     d.close()

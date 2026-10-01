@@ -22,12 +22,12 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from . import git_manager as git
 from .appserver import CLOSED, AppServerClient, AppServerError
 from .codex_login import CodexLogin
-from .codex_runner import CodexRunner, approval_params, nested, task_config, terminate_process
+from .codex_runner import WEB_SEARCH_MODES, CodexRunner, approval_params, nested, task_config, terminate_process
 from .config import Settings
 from .database import Database, DependencyError
 from .instructions import load_instructions
@@ -256,7 +256,7 @@ class TaskManager:
     async def create_task(self, *, repository: str, base_ref: str = "main", name: str = "", prompt: str,
                           model: str = "", reasoning_effort: str = "default",
                           auto_approval: bool = True, service_tier: str = "default", model_verbosity: str = "low",
-                          web_search: bool = False, sandbox: str = "workspace-write",
+                          web_search: Union[bool, str] = "cached", sandbox: str = "workspace-write", network_access: bool = True,
                           adaptive_reasoning: bool = True, context_guard: bool = True,
                           writable_dirs: str = "", feature_flags: str = "",
                           depends_on=(), dependency_policy: str = "all_success",
@@ -278,6 +278,10 @@ class TaskManager:
             raise TaskError(f"invalid service tier: {service_tier}")
         if model_verbosity not in VERBOSITIES:
             raise TaskError(f"invalid output verbosity: {model_verbosity}")
+        # Codex's own default is web search ON (cached results). True meant live before there were modes.
+        web_search_mode = {True: "live", False: "disabled"}.get(web_search, web_search)
+        if web_search_mode not in WEB_SEARCH_MODES:
+            raise TaskError(f"invalid web search mode: {web_search} (allowed: {', '.join(WEB_SEARCH_MODES)})")
         if sandbox not in SANDBOXES:
             raise TaskError(f"invalid sandbox: {sandbox} (allowed: {', '.join(SANDBOXES)})")
         dirs = [d.strip() for d in writable_dirs.splitlines() if d.strip()]
@@ -328,8 +332,9 @@ class TaskManager:
                 id=task_id, name=name, repository=repo, worktree=str(wt), branch=branch,
                 base_ref=base_ref, base_sha=base_sha, prompt=prompt, model=model,
                 reasoning_effort=reasoning_effort, auto_approval=int(auto_approval),
-                service_tier=service_tier, model_verbosity=model_verbosity, web_search_enabled=int(web_search),
-                sandbox=sandbox, adaptive_reasoning=int(adaptive_reasoning), context_guard=int(context_guard),
+                service_tier=service_tier, model_verbosity=model_verbosity, web_search_enabled=int(web_search_mode != "disabled"), web_search_mode=web_search_mode,
+                sandbox=sandbox, network_access=int(network_access and sandbox == "workspace-write"),
+                adaptive_reasoning=int(adaptive_reasoning), context_guard=int(context_guard),
                 writable_dirs="\n".join(dirs), feature_flags=" ".join(flags), last_prompt=prompt,
                 status="waiting_dependencies" if deps else "queued",
                 git_summary="not started" if deps else "clean", worktree_pending=int(bool(deps)),

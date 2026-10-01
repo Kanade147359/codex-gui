@@ -104,13 +104,48 @@ def test_history_is_never_resent(git_repo, make_manager, fake_codex_state):
 
 # ---------- settings: defaults and what reaches Codex ----------
 
-def test_defaults_are_standard_auto_approve_sandboxed_web_search_off(git_repo, make_manager, fake_codex_state):
+def test_web_search_modes(git_repo, make_manager, fake_codex_state):
+    m = make_manager(backend="app-server")
+
+    async def scenario():
+        made = {mode: await create(m, git_repo, web_search=mode) for mode in ("cached", "live", "disabled", True, False)}
+        assert [(k, t["web_search_mode"], t["web_search_enabled"]) for k, t in made.items()] == [
+            ("cached", "cached", 1), ("live", "live", 1), ("disabled", "disabled", 0), (True, "live", 1), (False, "disabled", 0)]
+        with pytest.raises(TaskError, match="invalid web search mode"):
+            await create(m, git_repo, web_search="yes")
+        for t in made.values():
+            await finished(m, t["id"])
+        await m.shutdown()
+
+    go(scenario())
+    assert [c["params"]["config"]["web_search"] for c in calls(fake_codex_state, "thread/start")].count("live") == 2
+
+
+def test_network_access_is_on_by_default_and_can_be_turned_off(git_repo, make_manager, fake_codex_state):
+    m = make_manager(backend="app-server")
+
+    async def scenario():
+        on = await create(m, git_repo)
+        off = await create(m, git_repo, network_access=False)
+        ro = await create(m, git_repo, sandbox="read-only")  # a read-only sandbox has no network to enable
+        assert (on["network_access"], off["network_access"], ro["network_access"]) == (1, 0, 0)
+        for t in (on, off, ro):
+            await finished(m, t["id"])
+        await m.shutdown()
+
+    go(scenario())
+    sandbox_cfgs = [c["params"]["config"].get("sandbox_workspace_write") for c in calls(fake_codex_state, "thread/start")]
+    assert sorted(sandbox_cfgs, key=lambda c: c is not None) == [None, None, {"network_access": True}]
+    assert all("danger" not in json.dumps(c["params"]) for c in calls(fake_codex_state, "thread/start"))
+
+
+def test_defaults_are_standard_auto_approve_sandboxed_cached_web_search(git_repo, make_manager, fake_codex_state):
     m = make_manager(backend="app-server")
 
     async def scenario():
         t = await create(m, git_repo)
         assert t["service_tier"] == "default" and t["auto_approval"] == 1
-        assert t["sandbox"] == "workspace-write" and t["web_search_enabled"] == 0
+        assert t["sandbox"] == "workspace-write" and t["web_search_enabled"] == 1 and t["web_search_mode"] == "cached"
         assert t["model_verbosity"] == "low" and t["adaptive_reasoning"] == 1 and t["context_guard"] == 1
         await finished(m, t["id"])
         await m.shutdown()
@@ -120,7 +155,7 @@ def test_defaults_are_standard_auto_approve_sandboxed_web_search_off(git_repo, m
     assert p["serviceTier"] == "default"                                   # Standard, not Fast
     assert p["approvalPolicy"] == "on-request" and p["approvalsReviewer"] == "auto_review"  # --approve-for-me
     assert p["sandbox"] == "workspace-write"
-    assert p["config"]["web_search"] == "disabled" and p["config"]["model_verbosity"] == "low"
+    assert p["config"]["web_search"] == "cached" and p["config"]["model_verbosity"] == "low"  # Codex's own default is ON
     assert "model" not in p  # Codex default model unless one was chosen
     assert "danger" not in json.dumps(p)
 
@@ -145,7 +180,7 @@ def test_model_effort_tier_and_the_rest_are_passed_and_kept_for_every_turn(git_r
         assert p["approvalPolicy"] == "never" and p["sandbox"] == "workspace-write"  # off: nothing may ask a human
         assert p["config"]["model_verbosity"] == "high" and p["config"]["web_search"] == "live"
         assert p["config"]["model_reasoning_effort"] == "medium"
-        assert p["config"]["sandbox_workspace_write"] == {"writable_roots": ["/data/shared"]}
+        assert p["config"]["sandbox_workspace_write"] == {"writable_roots": ["/data/shared"], "network_access": True}
         # the user's flag is kept; nested agents are OFF for a new task (Context Efficiency), see tests/test_ctx_manager.py
         assert p["config"]["features"]["foo"] is True and p["config"]["features"]["multi_agent"] is False
     assert [r["params"]["effort"] for r in calls(fake_codex_state, "turn/start")] == ["medium", "medium"]

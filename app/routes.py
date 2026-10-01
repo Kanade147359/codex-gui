@@ -1,6 +1,6 @@
 """HTTP routes: two HTML pages plus a small JSON API (polled by static/app.js)."""
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -34,8 +34,9 @@ class NewTask(BaseModel):
     # context guard on. (reasoning_effort "default" = whatever Codex / the model defaults to; the form sends "low".)
     service_tier: str = "default"
     model_verbosity: str = "low"
-    web_search: bool = False
+    web_search: Union[bool, Literal["cached", "live", "disabled"]] = "cached"  # True = live, False = disabled
     sandbox: str = "workspace-write"
+    network_access: bool = True  # network inside the workspace-write sandbox (ignored for read-only)
     adaptive_reasoning: bool = True
     context_guard: bool = True
     writable_dirs: str = ""

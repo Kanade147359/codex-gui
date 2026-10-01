@@ -140,7 +140,7 @@ TASK_COLUMNS = (
     "id name repository worktree branch base_ref base_sha prompt model reasoning_effort "
     "auto_approval status pid exit_code git_summary worktree_removed branch_deleted "
     "created_at started_at finished_at codex_thread_id last_turn_at "
-    "service_tier model_verbosity web_search_enabled sandbox adaptive_reasoning context_guard writable_dirs feature_flags "
+    "service_tier model_verbosity web_search_enabled web_search_mode sandbox network_access adaptive_reasoning context_guard writable_dirs feature_flags "
     "latest_input_tokens latest_cached_input_tokens latest_output_tokens context_tokens context_window "
     "five_hour_used_before five_hour_used_after weekly_used_before weekly_used_after quota_overlap "
     "last_prompt status_detail failure_source "
@@ -157,7 +157,11 @@ TASK_MIGRATIONS = [
     ("service_tier", "TEXT NOT NULL DEFAULT 'default'"),
     ("model_verbosity", "TEXT NOT NULL DEFAULT 'low'"),
     ("web_search_enabled", "INTEGER NOT NULL DEFAULT 0"),
+    # "cached" | "live" | "disabled". Empty on tasks that predate it: web_search_enabled then decides (live / disabled).
+    ("web_search_mode", "TEXT NOT NULL DEFAULT ''"),
     ("sandbox", "TEXT NOT NULL DEFAULT 'workspace-write'"),
+    # Network inside the workspace-write sandbox. Tasks that predate it keep what they had: no network.
+    ("network_access", "INTEGER NOT NULL DEFAULT 0"),
     ("adaptive_reasoning", "INTEGER NOT NULL DEFAULT 1"),
     ("context_guard", "INTEGER NOT NULL DEFAULT 1"),
     ("writable_dirs", "TEXT NOT NULL DEFAULT ''"),

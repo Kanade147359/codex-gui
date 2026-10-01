@@ -16,6 +16,17 @@ STREAM_LIMIT = 32 * 1024 * 1024
 MESSAGE_MAX_CHARS = 2000
 
 
+WEB_SEARCH_MODES = ("cached", "live", "disabled")
+
+
+def web_search_mode(task: dict) -> str:
+    """cached / live / disabled. A task from before the mode existed has only the on/off flag (on meant live)."""
+    mode = task.get("web_search_mode")
+    if mode in WEB_SEARCH_MODES:
+        return mode
+    return "live" if task.get("web_search_enabled") else "disabled"
+
+
 def task_config(task: dict) -> dict:
     """The Codex config keys (dotted paths) a task pins, shared by both backends so they behave alike.
 
@@ -25,7 +36,7 @@ def task_config(task: dict) -> dict:
     """
     cfg = {
         "model_verbosity": task["model_verbosity"],
-        "web_search": "live" if task["web_search_enabled"] else "disabled",
+        "web_search": web_search_mode(task),
     }
     if task["reasoning_effort"] not in ("", "default"):
         cfg["model_reasoning_effort"] = task["reasoning_effort"]
@@ -36,6 +47,9 @@ def task_config(task: dict) -> dict:
         dirs.append(task["worktree"])  # a sub-directory as cwd must not shrink what Codex may write: the whole worktree stays writable
     if dirs:
         cfg["sandbox_workspace_write.writable_roots"] = dirs
+    if task.get("network_access") and task.get("sandbox") == "workspace-write":
+        # Without it the workspace-write sandbox has no network at all (git fetch / push, gh, package installs fail).
+        cfg["sandbox_workspace_write.network_access"] = True
     for flag in (task.get("feature_flags") or "").replace(",", " ").split():
         cfg[f"features.{flag}"] = True
     return cfg

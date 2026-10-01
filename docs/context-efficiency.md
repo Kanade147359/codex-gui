@@ -92,7 +92,7 @@ custom cwd のときは worktree 全体を writable root に追加し、適用�
 
 ### 11–12. Web/Search/Browser と Standard / Fast
 
-- Web search は既定 OFF のまま。browser / MCP / apps は tool profile で外せます（thread 途中では変えない）。
+- Web search は Codex の既定（cached）のまま。browser / MCP / apps は tool profile で外せます（thread 途中では変えない）。
 - 通常の送信は **Send Standard**、明示操作で **Send Fast**（確認ダイアログ付き）。同じ thread 内で毎ターン切替でき、要求した tier を各 turn に保存します。
   Fast / Standard 変更後に cache hit が落ちた場合は、Cache Health の原因に `service tier change` が出ます。
 

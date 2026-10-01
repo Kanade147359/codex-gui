@@ -114,7 +114,11 @@
       </div>
       <div class="checks">
         <label class="check"><input type="checkbox" name="auto_approval" checked> Auto approve <span class="muted">(sandboxed review, <code>--approve-for-me</code>)</span></label>
-        <label class="check"><input type="checkbox" name="web_search"> Web search</label>
+        <label class="check">Web search
+          <select name="web_search" title="Cached = results from OpenAI's search index (Codex's default). Live = the real web.">
+            <option value="cached" selected>Cached (Codex default)</option><option value="live">Live</option><option value="disabled">Off</option>
+          </select></label>
+        <label class="check"><input type="checkbox" name="network_access" checked> Network access <span class="muted">(git push / fetch, <code>gh</code>, installs; sandbox only)</span></label>
         <label class="check"><input type="checkbox" name="adaptive_reasoning" checked> Adaptive reasoning <span class="muted">(suggests a retry with more effort; never automatic)</span></label>
         <label class="check"><input type="checkbox" name="context_guard" checked> Context guard <span class="muted">(warn when the thread gets large)</span></label>
       </div>
