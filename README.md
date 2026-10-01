@@ -1,28 +1,57 @@
 # Codex GUI
 
-Codex CLI を複数同時に動かして一画面で管理する、ローカル Web GUI。Codex は **`codex app-server`**（thread / turn）経由で動かします。
+**English** | [日本語](README.ja.md)
 
-- 1 タスク = 1 Git branch = 1 Git worktree = 1 Codex thread。追加指示は同じ thread の次の turn（`thread/resume` + `turn/start`）なので、会話履歴は Codex が持ち続け、prompt cache（cached input）が効きます。GUI が履歴を貼り直すことはありません
-- 定額枠をできるだけ有効に使うための既定値（GPT-6.1 Sol / Standard / Low / 低 verbosity / web search は Codex の既定どおり cached）、cache hit・context・利用枠の表示（[使用量の最適化](#使用量の最適化)）
-- リポジトリと Task worktree の `AGENTS.md` をブラウザで編集（[AGENTS.md エディタ](#agentsmd-エディタ)）
-- worktree は GUI 側が管理（Codex の `--worktree` は使わない）
-- 複数 Codex プロセスの並列実行、ログのリアルタイム表示、Git status / diff / log の確認
-- Stop、Commit / Push、Worktree / Branch の削除、SQLite による履歴保存
+A local web GUI for running several Codex CLI instances at once and managing them from a single screen. Codex is driven through **`codex app-server`** (threads / turns).
 
-## セキュリティ
+- 1 task = 1 Git branch = 1 Git worktree = 1 Codex thread. A follow-up instruction is simply the next turn of the same thread (`thread/resume` + `turn/start`), so Codex keeps the conversation history and the prompt cache (cached input) stays effective. The GUI never re-pastes history
+- Defaults chosen to make the most of a flat-rate plan (GPT-6.1 Sol / Standard / Low / low verbosity / web search left at Codex's own default, cached), plus cache hit, context and usage-limit displays ([Usage Optimization](#usage-optimization))
+- Edit `AGENTS.md` for the repository and for each task worktree in the browser ([AGENTS.md Editor](#agentsmd-editor))
+- Worktrees are managed by the GUI (Codex's `--worktree` is not used)
+- Run multiple Codex processes in parallel, watch logs in real time, and inspect Git status / diff / log
+- Stop, Commit / Push, delete worktrees / branches, and keep history in SQLite
 
-この GUI 自体にはログイン（認証）がありません。開ける人は誰でも、サーバー上で Codex（＝コマンド実行・ファイル編集・Git push）を操作できます。
-既定では `127.0.0.1` だけで待ち受けます。ほかのマシンへ公開するなら、認証付きの reverse proxy か VPN（Tailscale / WireGuard など）の内側に置いてください。
-（下の「Codex へのサインイン」は Codex（ChatGPT アカウント）へのサインインで、GUI のログインではありません。）
+> **Note:** The GUI itself has no login (authentication). Read [Security](#security) before exposing it to anyone else.
 
-## 必要環境
+## Table of Contents
 
-- Linux / WSL2、Python 3.10+、git
-- `codex` コマンドがインストール済みであること（`codex app-server --help` が動くこと）。ChatGPT アカウントへのサインインは GUI のダッシュボードからできます（[Codex へのサインイン](#codex-へのサインイン)）。`codex login` で済ませておいても構いません
-  - 動作確認したバージョン: codex-cli 0.159.2（調査記録: [docs/codex-capabilities.md](docs/codex-capabilities.md)）
-  - app-server が使えない古い CLI では `CODEX_GUI_BACKEND=exec`（従来の `codex exec` 方式。利用枠表示・実行中の追加指示・compact は使えません）
+**Getting Started**
 
-## 起動
+1. [Requirements](#requirements)
+2. [Getting Started](#getting-started)
+3. [Usage](#usage)
+4. [Security](#security)
+
+**Features**
+
+5. [Signing in to Codex](#signing-in-to-codex)
+6. [Follow-up Instructions](#follow-up-instructions)
+7. [Usage Optimization](#usage-optimization)
+8. [Context Efficiency](#context-efficiency)
+9. [AGENTS.md Editor](#agentsmd-editor)
+10. [Task Dependencies](#task-dependencies)
+11. [Automatic Recovery](#automatic-recovery)
+12. [Git Worktree Handling](#git-worktree-handling)
+13. [Restarting the GUI](#restarting-the-gui)
+14. [Auto Approval and Network Access](#auto-approval-and-network-access)
+
+**Reference**
+
+15. [Environment Variables](#environment-variables)
+16. [SSH Authentication](#ssh-authentication)
+17. [Data Location](#data-location)
+18. [Testing](#testing)
+19. [Limitations](#limitations)
+20. [Project Layout](#project-layout)
+
+## Requirements
+
+- Linux / WSL2, Python 3.10+, git
+- The `codex` command must be installed (`codex app-server --help` must work). You can sign in to your ChatGPT account from the GUI dashboard ([Signing in to Codex](#signing-in-to-codex)); running `codex login` beforehand also works
+  - Tested version: codex-cli 0.159.2 (research notes: [docs/codex-capabilities.md](docs/codex-capabilities.md))
+  - For older CLIs without app-server, use `CODEX_GUI_BACKEND=exec` (the legacy `codex exec` mode; usage-limit display, follow-ups to a running turn and compact are unavailable)
+
+## Getting Started
 
 ```bash
 git clone https://github.com/Kanade147359/codex-gui.git
@@ -30,177 +59,119 @@ cd codex-gui
 ./run.sh
 ```
 
-初回は `.venv` を作って依存パッケージを入れます。起動後、ブラウザ（WSL2 なら Windows 側のブラウザ）で <http://127.0.0.1:8765> を開いてください。
+The first run creates `.venv` and installs the dependencies. Once it is up, open <http://127.0.0.1:8765> in a browser (on WSL2, a browser on the Windows side works).
 
-## Codex へのサインイン
+Settings can be changed with environment variables ([Environment Variables](#environment-variables)). If you push to SSH remotes, also see [SSH Authentication](#ssh-authentication).
 
-Codex が ChatGPT アカウントにサインインしていないとき（または API キーでサインインしているとき）、ダッシュボードの上部に **Codex sign-in** が出ます。`codex login` と同じことを GUI からできます。
+## Usage
 
-| ボタン | 動き |
+1. If needed, sign in to Codex from **Codex sign-in** at the top of the dashboard ([Signing in to Codex](#signing-in-to-codex))
+2. Click `+ New Task`, fill in the form, and Run (everything can be chosen in the GUI)
+   - **Repository:** Pick a folder on the server with `Browse…` (git repositories carry a `git` badge). Recently used repositories are available as one-click chips. After you choose one, `Git: clean` / `AGENTS.md: Found | Not found` is shown
+   - **Base ref:** Choose from the repository's branches / existing worktrees / remote branches / tags (`Custom…` accepts any ref or commit).
+     If you pick a worktree, the new task branches from its **committed state** (uncommitted changes are not included)
+   - **Model / Reasoning / Speed:** Defaults are GPT-6.1 Sol (when this codex recognises it) / Low / Standard. The choices follow `codex debug models` (efforts and tiers supported per model)
+   - **Auto approve / Web search / Network access / Adaptive reasoning / Context guard**, and **Advanced settings** (output verbosity, sandbox, extra writable directories, feature flags)
+   - **Run & add another:** Keep the form open and add the next task. You can **run multiple tasks in parallel on the same repository** (each task gets its own branch and worktree)
+   - **After other tasks complete:** Start automatically once other tasks have finished ([Task Dependencies](#task-dependencies))
+3. A worktree and branch are created, and Codex starts inside it (the dashboard refreshes every 2 seconds)
+4. The dashboard can be filtered by repository. Click a row to open the detail page, where you can inspect the Codex log (click an event type to see the raw event JSON) and Git Status / Diff / Log
+5. Send follow-ups from **Additional instruction** on the detail page ([Follow-up Instructions](#follow-up-instructions))
+6. Stop / Commit / Push / Delete Worktree / Delete Branch are all on the detail page ([Git Worktree Handling](#git-worktree-handling))
+
+The diff shown is the **difference from the base commit** (including commits Codex made), plus untracked files.
+
+## Security
+
+The GUI itself has no login (authentication). Anyone who can open it can drive Codex on the server — that means running commands, editing files and pushing to Git.
+By default it listens on `127.0.0.1` only. If you expose it to other machines, put it behind an authenticated reverse proxy or a VPN (Tailscale / WireGuard, etc.).
+([Signing in to Codex](#signing-in-to-codex) is a sign-in to Codex (your ChatGPT account), not a login to the GUI.)
+
+## Signing in to Codex
+
+When Codex is not signed in to a ChatGPT account (or is signed in with an API key), a **Codex sign-in** panel appears at the top of the dashboard. It does what `codex login` does, from the GUI.
+
+| Button | What it does |
 | --- | --- |
-| **Sign in with ChatGPT (open browser)** | サインイン用のページをブラウザの新しいタブで開きます（開けなかったときは **Open sign-in page** を押す）。サインインが終わるとこの画面が自動で更新され、表示が消えます。サインイン後の戻り先は **Codex が動いているマシンの localhost** なので、Codex と同じマシンのブラウザで行ってください |
-| **Use a device code** | 表示されたコードを、ページ（**Open sign-in page**）に入力します。別のマシンのブラウザからでも使えます（リモートで GUI を開いているときはこちら） |
-| **Cancel** | 進行中のサインインを取り消します |
+| **Sign in with ChatGPT (open browser)** | Opens the sign-in page in a new browser tab (press **Open sign-in page** if it could not be opened). When sign-in finishes, this screen refreshes automatically and the panel disappears. The post-sign-in redirect goes to **localhost on the machine where Codex runs**, so do this from a browser on that same machine |
+| **Use a device code** | Enter the displayed code on the page (**Open sign-in page**). Works from a browser on a different machine (use this when you open the GUI remotely) |
+| **Cancel** | Cancels a sign-in in progress |
 
-- サインイン済みなら、ダッシュボードに `Codex: signed in as <メール> (<プラン>)` と出ます。
-- パスワードやトークンは GUI を通りません。ブラウザが OpenAI と直接やりとりし、結果は Codex 自身の保管場所（`~/.codex`）に保存されます。GUI は何も保存しません。
-- 失敗したときは理由を表示します。API キーでのサインインはできません（`CODEX_GUI_SUBSCRIPTION_ONLY=1` の既定では、API キー認証だと Task も開始しません）。サインアウトの操作はありません（必要なら `codex logout`）。
-- 実体は app-server の `account/read` / `account/login/start`（`chatgpt` / `chatgptDeviceCode`）/ `account/login/completed` / `account/login/cancel` です。API は `GET /api/codex/account`、`POST /api/codex/login`（`{"method": "browser" | "device"}`）、`POST /api/codex/login/cancel`。
+- When signed in, the dashboard shows `Codex: signed in as <email> (<plan>)`.
+- Passwords and tokens never pass through the GUI. The browser talks to OpenAI directly, and the result is stored in Codex's own location (`~/.codex`). The GUI stores nothing.
+- On failure the reason is shown. Signing in with an API key is not possible (with the default `CODEX_GUI_SUBSCRIPTION_ONLY=1`, tasks do not start under API-key authentication either). There is no sign-out action (use `codex logout` if you need it).
+- Under the hood this uses the app-server methods `account/read` / `account/login/start` (`chatgpt` / `chatgptDeviceCode`) / `account/login/completed` / `account/login/cancel`. The API endpoints are `GET /api/codex/account`, `POST /api/codex/login` (`{"method": "browser" | "device"}`) and `POST /api/codex/login/cancel`.
 
-環境変数:
+## Follow-up Instructions
 
-| 変数 | 既定値 | 内容 |
+A task keeps using a single Codex thread.
+
+| Situation | Action | What happens |
 | --- | --- | --- |
-| `CODEX_GUI_HOME` | `~/.local/share/codex-gui` | データ保存先 |
-| `CODEX_BIN` | `codex` | codex 実行ファイル |
-| `CODEX_GUI_MAX_CONCURRENT` | `0` (無制限) | 同時実行数。超過分は `queued` で待つ（利用枠から自動で変えることはありません） |
-| `CODEX_GUI_BACKEND` | `app-server` | `app-server`（thread / turn）または `exec`（従来の `codex exec`） |
-| `CODEX_GUI_SUBSCRIPTION_ONLY` | `1` | `1`: ChatGPT ログイン以外では実行せず、codex の環境から API キー変数を除く |
-| `CODEX_GUI_CONTEXT_WARN_PERCENT` | `80` | Context Guard が警告する context 使用率（%） |
-| `CODEX_GUI_PREFERRED_MODEL` | `gpt-6.1-sol` | 推奨モデル。`codex debug models` に無ければ「Codex default」 |
-| `CODEX_GUI_HOST` / `CODEX_GUI_PORT` | `127.0.0.1` / `8765` | 待ち受け先 |
-| `CODEX_GUI_AUTO_RETRY` / `CODEX_GUI_MAX_RETRIES` | `1` / `3` | 予期しない停止の自動リトライの既定（Task ごとに変更可） |
-| `CODEX_GUI_RETRY_BACKOFF` | `10,30,60` | リトライまでの待ち秒数（カンマ区切り。最後の値を以降も使う） |
-| `CODEX_GUI_SCHEDULER_INTERVAL` | `2` | 待機中・リトライ待ちタスクを見に行く間隔（秒） |
-| `CODEX_GUI_SSH_KEY` | `~/.ssh/id_ed25519` | agent が空のときに `ssh-add` する鍵 |
-| `CODEX_GUI_SSH_AGENT_ENV` | `~/.ssh/agent.env` | agent の環境変数の保存先 |
-| `CODEX_GUI_SSH_DIAGNOSTICS` | `1` | `0` で起動時の SSH 診断ログを無効化 |
-| `CODEX_GUI_SSH_GITHUB_TEST` | `1` | `0` で起動時の `ssh -T git@github.com` を無効化 |
+| Creating a task | Run | `thread/start` (settings are fixed) → `turn/start`. The thread id is saved to `tasks.codex_thread_id` |
+| Stopped / after completion | **Send** | `thread/resume` (same settings as at creation) → `turn/start`. The next turn of the same thread |
+| **While running** | **Send to running turn** | `turn/steer` (adds to the running turn). app-server backend only |
+| After completion | **Compact Thread** | `thread/compact/start` (with confirmation; task / worktree / branch / thread are kept) |
+| Any time (once stopped) | **Start New Session** | A new thread in the same worktree. The old thread's conversation and cache are not carried over. With confirmation |
 
-## SSH 認証
+- The text you enter is sent **as is**. The GUI never adds timestamps, IDs or earlier exchanges (history lives in the Codex thread; the GUI keeps the instruction text in its log for display only and does not resend it).
+- Model / reasoning effort / Speed / sandbox / approval / web search are **fixed when the task is created and the same values are sent on every turn** (there is no UI for changing them midway, because changing them alters the prompt prefix and weakens the cache).
+  The only exception is the reasoning effort when you press **Retry with Medium / High** (only when pressed; it is recorded in the log).
+- `codex queue` is not used: in codex-cli 0.159.2, a message sent with `codex queue` to a running `codex exec` ends up in the thread history, but
+  exec aborts that turn with `turn_aborted` and exits, so the message is **lost without being answered**. The app-server's `turn/steer` is used instead.
+  With the `exec` backend, follow-ups to a running turn are not possible (Send is disabled; the API returns 409).
+- If Codex does not report a thread id, this is logged and Send is unavailable for that task (Start New Session still works). If a different thread id comes back on resume, a `WARNING` is logged.
+- The thread stays on the Codex side even if you restart the GUI, so it can be resumed from `codex_thread_id` in the DB (verified on a real Codex).
 
-Push（GUI の Push ボタン）や Codex 内の git 操作が SSH リモート（`git@github.com:...`）に届くよう、`run.sh` が WSL 上の `ssh-agent` を管理します。
+## Usage Optimization
 
-### 仕組み
+The goal is not frugality but to **reduce wasted context sending, session re-creation, unnecessary high reasoning, and uncached input**.
+There is no usage-limit evasion, automatic fallback to an API key, multi-account support, automatic pacing to "burn through the allowance", or parallelism computed from the usage limit.
 
-`./run.sh` は起動時に次の順で agent を決めます。
+### Defaults
 
-1. 環境にある `SSH_AUTH_SOCK` の agent が応答すればそれを使う
-2. `~/.ssh/agent.env`（前回起動した agent の `SSH_AUTH_SOCK` / `SSH_AGENT_PID`）を読み、応答すれば再利用する
-3. どちらも使えないときだけ `ssh-agent` を新規起動し、`~/.ssh/agent.env`（権限 600）に保存する
-
-その後 `ssh-add -l` で鍵を確認し、**1 つも登録されていなければ** `~/.ssh/id_ed25519` を `ssh-add` します。
-パスフレーズがある鍵は通常の `ssh-add` プロンプトで入力します（`run.sh` を端末から起動してください）。
-
-`SSH_AUTH_SOCK` は `export` されたまま uvicorn → FastAPI → Codex / git のサブプロセスに継承されます。
-Codex task を開始するたびに agent を起こすことはありません（agent は `run.sh` 起動時の 1 回だけ）。
-`run.sh` を経由せずに uvicorn を直接起動した場合も、`~/.ssh/agent.env` の socket が生きていればサブプロセスにはそれを渡します。
-
-他のシェルでも同じ agent を使いたいときは `. ~/.ssh/agent.env` を実行してください。
-
-### 起動時の診断ログ
-
-GUI 起動時に、次の結果をログ（`run.sh` を実行した端末）に出します。
-
-- `ssh-add -l`（終了コード 0 = 鍵あり / 1 = agent はあるが鍵なし / 2 = agent に接続できない）
-- `git config --get remote.origin.url`（GUI の起動ディレクトリと、最近使ったリポジトリ）
-- リモートが GitHub の SSH URL なら `ssh -T git@github.com`
-
-GitHub は `ssh -T` 成功時でも **終了コード 1** を返します。そのため終了コードでは判定せず、出力に
-`successfully authenticated` が含まれるかで成否を判断します。診断は非同期に実行され、起動を待たせません。
-
-### トラブルシューティング
-
-| 症状 | 確認・対処 |
-| --- | --- |
-| ログに `ssh-add -l (exit 2)` | agent に繋がっていません。`./run.sh` で起動し直す。`~/.ssh/agent.env` を消して再起動しても可 |
-| `ssh-add -l (exit 1)` / `no keys` | `ssh-add ~/.ssh/id_ed25519`。別の鍵なら `CODEX_GUI_SSH_KEY` を指定 |
-| `ssh-add` がパスフレーズを聞けず失敗 | 端末から `./run.sh` を実行するか、先に手動で `ssh-add` しておく |
-| `ssh -T` が `Permission denied (publickey)` | agent の鍵が GitHub に登録されていない。`ssh-add -l` の公開鍵と <https://github.com/settings/keys> を比較 |
-| `Host key verification failed` | 初回接続。端末で一度 `ssh -T git@github.com` を実行して host key を承認 |
-| `Could not resolve hostname` / timeout | ネットワーク・DNS・プロキシの問題（WSL の DNS を確認） |
-| remote が `https://` | SSH 認証は使われません。`git remote set-url origin git@github.com:OWNER/REPO.git` |
-| Codex の sandbox 内から push できない | **Network access**（既定 ON）が OFF の Task、または古い Task（この項目より前に作ったもの）はネットワークが遮られます。ON でも sandbox が SSH agent の socket を遮ることがあります。GUI の **Commit / Push** ボタン（GUI プロセスから実行）を使ってください |
-| 古い agent が残っている | `pkill -f 'ssh-agent -s'` は他の agent も止めるので、`kill $SSH_AGENT_PID`（`~/.ssh/agent.env` の pid）で止める |
-
-手動確認: `. ~/.ssh/agent.env && ssh-add -l && ssh -T git@github.com`
-
-## 使い方
-
-1. `+ New Task` で入力して Run（すべて GUI で選べます）
-   - **Repository:** `Browse…` でサーバー側のフォルダを辿って選択（git リポジトリは `git` バッジ付き）。最近使ったリポジトリはチップで 1 クリック。選ぶと `Git: clean` / `AGENTS.md: Found | Not found` が出ます
-   - **Base ref:** 選んだリポジトリのブランチ / 既存 worktree / リモートブランチ / タグから選択（`Custom…` で任意の ref やコミットも可）。
-     worktree を選んだ場合は **commit 済みの状態** から分岐します（未コミットの変更は含まれません）
-   - **Model / Reasoning / Speed:** 既定は GPT-6.1 Sol（この codex が認識しているとき）/ Low / Standard。選択肢は `codex debug models` の内容（モデルごとの対応 effort・tier）に連動
-   - **Auto approve / Web search / Network access / Adaptive reasoning / Context guard**、**Advanced settings**（Output verbosity・Sandbox・追加の書き込み可能ディレクトリ・feature flags）
-   - **Run & add another:** フォームを開いたまま次のタスクを追加。**同じリポジトリで複数タスクを並列実行**できます（タスクごとに別 branch・別 worktree）
-2. worktree と branch が作られ、その中で Codex が起動する（ダッシュボードは 2 秒ごとに自動更新）
-3. ダッシュボードはリポジトリで絞り込み可能。行をクリックすると詳細画面。Codex ログ（種別名をクリックで生イベント JSON）と Git の Status / Diff / Log を確認
-4. 追加指示は詳細画面の **Additional instruction** から（下記「追加指示」）
-5. Stop / Commit / Push / Delete Worktree / Delete Branch は詳細画面から
-
-Diff は **base commit との差分**（Codex が作った commit も含む）に、未追跡ファイルを加えたものです。
-
-## 追加指示
-
-1 タスクは 1 つの Codex thread を使い続けます。
-
-| 状況 | 操作 | 実行されること |
+| Setting | Default | Notes |
 | --- | --- | --- |
-| タスク作成 | Run | `thread/start`（設定を固定）→ `turn/start`。thread id を `tasks.codex_thread_id` に保存 |
-| 停止中・完了後 | **Send** | `thread/resume`（作成時と同じ設定）→ `turn/start`。同じ thread の次の turn |
-| **実行中** | **Send to running turn** | `turn/steer`（実行中の turn に追加）。app-server バックエンドのみ |
-| 完了後 | **Compact Thread** | `thread/compact/start`（確認あり。Task / worktree / branch / thread はそのまま） |
-| いつでも（停止後） | **Start New Session** | 同じ worktree で新しい thread。旧 thread の会話と cache は引き継がない。確認あり |
+| Model | GPT-6.1 Sol (when this codex lists it), otherwise Codex default | `Use Codex default` / `Other…` are also selectable |
+| Reasoning | **Low** | `Auto` = the Codex / model default. Only values supported by the model can be chosen (Low–Ultra) |
+| Speed | **Standard** | Choosing Fast shows a small note: *Fast mode consumes included usage more quickly.* |
+| Output verbosity | **Low** (Advanced) | `model_verbosity` |
+| Auto approve | **ON** | Equivalent to `--approve-for-me` ([Auto Approval and Network Access](#auto-approval-and-network-access)) |
+| Sandbox | **workspace-write** (Advanced) | `read-only` is also selectable. `danger-full-access` is not |
+| Web search | **Cached** | Matches Codex's own default (web search is on by default in 0.159.2). **Cached** = results from OpenAI's search index, **Live** = the real web, **Off** = disabled (this does not stop Codex from reading local files). The value is fixed when the task is created. Earlier tasks keep Live if they had it ON and Off if they had it OFF |
+| Network access | **ON** | Network inside the workspace-write sandbox (`git fetch` / `git push`, `gh`, installing packages, etc.). With OFF, all network traffic inside the sandbox fails (local `git status` / `diff` / `log` still work). Separate from Web search (the model's search tool). Irrelevant with `read-only`. Tasks created before this option stay OFF |
+| Adaptive reasoning | ON | See below |
+| Context guard | ON | See below |
+| Use subscription authentication only | ON (shown, not changeable) | See below |
 
-- 入力した文字列を**そのまま**送ります。日時・ID・過去のやり取りを GUI が足すことはありません（履歴は Codex の thread が持ちます。GUI のログには表示用に指示文を残しますが、再送はしません）。
-- model / reasoning effort / Speed / sandbox / approval / web search は**タスク作成時に決まり、全ターンで同じ値**を送ります（途中変更の UI はありません。変えると prompt prefix が変わって cache が効きにくくなるため）。
-  例外は **Retry with Medium / High** を押したときの reasoning effort だけです（押したときだけ。ログに記録されます）。
-- `codex queue` は使いません: codex-cli 0.159.2 では、実行中の `codex exec` に `codex queue` で送ると、メッセージは thread の履歴には入りますが
-  exec がその turn を `turn_aborted` にして終了するため**回答されずに失われます**。app-server の `turn/steer` を使います。
-  `exec` バックエンドでは実行中の追加指示は不可です（Send は無効、API は 409）。
-- Codex が thread id を報告しなかった場合はログに記録し、そのタスクでは Send できません（Start New Session は可能）。resume 時に別の thread id が返った場合は、ログに `WARNING` を出します。
-- GUI を再起動しても thread は Codex 側に残っているので、DB の `codex_thread_id` から再開できます（実測済み）。
+- **Ultra** ("Maximum reasoning with automatic task delegation") is used **only when you choose it explicitly**. Choosing it shows *Ultra may use substantially more compute.* It is never selected or escalated to automatically.
+- **Adaptive reasoning** only highlights and recommends **Retry with Medium / High** on the detail page when Codex itself reports a turn as `failed` (and it is not a quota stop).
+  It **never raises the effort automatically** (nor on the basis of a process exit code alone). Suggestions go up to High; XHigh / Max / Ultra are never suggested automatically.
+- Common working guidelines (don't read huge files or logs whole; use `rg`, ranged `sed`, `head` / `tail`, narrow tests, short output) are passed as `developerInstructions` **once, when a new thread starts** (not resent every turn).
+  The default text is in [app/instructions.py](app/instructions.py). Placing `$CODEX_GUI_HOME/instructions.md` replaces it, and leaving it empty disables it. The repository's `AGENTS.md` is never modified automatically.
+- **Keeping the prompt cache intact**: the fixed instructions the GUI adds are constants and contain no variable values such as timestamps, PIDs, task IDs, UUIDs, worktree creation times or quota (this is tested).
+  The settings above are not changed within a task.
 
-## 使用量の最適化
+### Cache and usage
 
-目的は節約ではなく、**無駄な context 送信・session 再作成・不要な高 reasoning・非 cache の入力を減らす**ことです。
-利用枠の回避・API キーへの自動 fallback・複数アカウント・「枠を使い切るペース」の自動制御・利用枠からの並列数計算はありません。
+The task detail shows the latest turn's Input / Cached / Uncached / Cache hit / Output (and Reasoning, if any), a **per-turn table**, and the dashboard's **CACHE** column shows the latest turn's hit rate.
 
-### 既定値
+- The app-server's `thread/tokenUsage/updated` (for exec, `turn.completed.usage`) is the **cumulative value for the thread**. The GUI stores the difference from the previous cumulative value as "that turn's usage" in the `turns` table.
+  If the cumulative value decreases, it is treated as a per-turn value and the raw value is used (this is logged).
+- Cache hit = `cached_input_tokens / input_tokens × 100`. Not shown when `input_tokens == 0`.
+- Compaction also consumes tokens, so it is kept in `turns` as a row with `kind = compact` (shown as `(compact)` in the table).
+- The prompt cache is best-effort. Sending turns back to back can give a low hit rate (measured: 76% → 76% → 99%).
 
-| 設定 | 既定 | 備考 |
-| --- | --- | --- |
-| Model | GPT-6.1 Sol（この codex が一覧に出しているとき）、無ければ Codex default | `Use Codex default` / `Other…` も選べる |
-| Reasoning | **Low** | `Auto` = Codex / モデルの既定。選べるのはそのモデルが対応する値だけ（Low〜Ultra） |
-| Speed | **Standard** | Fast を選ぶと小さく *Fast mode consumes included usage more quickly.* |
-| Output verbosity | **Low**（Advanced） | `model_verbosity` |
-| Auto approve | **ON** | `--approve-for-me` 相当（下記） |
-| Sandbox | **workspace-write**（Advanced） | `read-only` も選べる。`danger-full-access` は選べない |
-| Web search | **Cached** | Codex 自身の既定（0.159.2 は web search が既定で有効）に合わせます。**Cached** = OpenAI の検索インデックスの結果、**Live** = 実際の Web、**Off** = 無効（Codex がローカルのファイルを読むことは妨げません）。選べる値は Task 作成時に固定。以前の Task は、ON だったものは Live、OFF は Off のままです |
-| Network access | **ON** | workspace-write sandbox 内のネットワーク（`git fetch` / `git push`、`gh`、パッケージのインストールなど）。OFF にすると sandbox 内の通信はすべて失敗します（ローカルの `git status` / `diff` / `log` は使えます）。Web search（モデルの検索ツール）とは別です。`read-only` では無関係。この項目より前に作った Task は OFF のままです |
-| Adaptive reasoning | ON | 下記 |
-| Context guard | ON | 下記 |
-| Use subscription authentication only | ON（変更不可の表示） | 下記 |
+### Context and Context Guard
 
-- **Ultra**（"Maximum reasoning with automatic task delegation"）は**明示的に選んだときだけ**使います。選ぶと *Ultra may use substantially more compute.* と出ます。自動選択・自動昇格の対象外です。
-- **Adaptive reasoning** は、Codex 自身が turn を `failed` と報告した（かつ quota 停止ではない）ときに、詳細画面で **Retry with Medium / High** を強調して勧めるだけです。
-  **自動では上げません**（process の exit code だけで上げることもしません）。提案は High まで。XHigh / Max / Ultra は自動では出ません。
-- 共通の作業方針（巨大なファイル・ログを丸ごと読まない、`rg` / 範囲指定の `sed` / `head`・`tail` / 絞ったテスト / 短い出力）は、**新しい thread の開始時に一度だけ** `developerInstructions` として渡します（毎 turn の再送なし）。
-  既定の文面は [app/instructions.py](app/instructions.py)。`$CODEX_GUI_HOME/instructions.md` を置くと差し替わり、空にすると無効です。リポジトリの `AGENTS.md` は自動では変更しません。
-- **prompt cache を壊しにくくする**: GUI が加える固定 instruction は定数で、日時・PID・Task ID・UUID・worktree 作成時刻・quota などの可変値を含みません（テストあり）。
-  同一タスクでは上の設定を変更しません。
+The **Context** panel on the task detail (Current / Model window / bar) and the dashboard's **CTX** column. The context size is the `last.totalTokens` reported by Codex, and the window is `modelContextWindow` (from the model's metadata; the GUI hard-codes no values).
 
-### cache と usage
+- **Context Guard** (ON by default): above 80% of the window (`CODEX_GUI_CONTEXT_WARN_PERCENT`), it shows *This thread has become large. Compaction may reduce repeated context processing.* and a **[Compact]** button (warning only; no automatic compact).
+- **Compact Thread**: runs `thread/compact/start` after a confirmation dialog. The context size after compaction is known only on the next turn (unknown until then).
 
-Task 詳細に最新ターンの Input / Cached / Uncached / Cache hit / Output（あれば Reasoning）、**ターンごとの表**、ダッシュボードの **CACHE** 列に最新ターンの hit 率を表示します。
+### Codex Usage (usage limits)
 
-- app-server の `thread/tokenUsage/updated`（exec では `turn.completed.usage`）は **thread の累積値**です。GUI は前回累積値との差を「そのターンの usage」として `turns` テーブルに保存します。
-  累積値が減った場合は、ターン単位の値とみなして生の値を使います（ログに記録）。
-- Cache hit = `cached_input_tokens / input_tokens × 100`。`input_tokens == 0` のときは表示しません。
-- compaction も token を使うため、`turns` に `kind = compact` の行として残ります（表では `(compact)`）。
-- Prompt cache は best-effort です。直後に連続して送ると hit 率が低いことがあります（実測では 76% → 76% → 99%）。
-
-### Context と Context Guard
-
-Task 詳細の **Context**（Current / Model window / バー）と、ダッシュボードの **CTX** 列。context サイズは Codex が報告する `last.totalTokens`、窓は `modelContextWindow`（モデルのメタデータ由来。GUI に値は決め打ちしていません）です。
-
-- **Context Guard**（既定 ON）: 窓の 80%（`CODEX_GUI_CONTEXT_WARN_PERCENT`）を超えると、*This thread has become large. Compaction may reduce repeated context processing.* と **[Compact]** を出します（警告のみ。自動 compact はしません）。
-- **Compact Thread**: 確認ダイアログの後に `thread/compact/start`。compact 後の context サイズは次のターンで分かります（それまで unknown）。
-
-### Codex Usage（利用枠）
-
-ダッシュボード上部に `account/rateLimits/read` の内容を表示します（15 秒ごと。サーバー側 30 秒 cache）。
+The top of the dashboard shows the result of `account/rateLimits/read` (every 15 seconds; cached for 30 seconds on the server).
 
 ```text
 Codex Usage (prolite)
@@ -208,223 +179,287 @@ Weekly   ██░░░░░░░░   11%   Reset: Oct 8 18:20
 Running: 4
 ```
 
-- ウィンドウは `windowDurationMins` で **5 hour / Weekly** に分類します。**プランによっては週次の 1 本だけで 5 時間枠は返ってきません**（確認した環境では週次のみ。2 本返るプランもあります）。無い枠は表示しません。
-- `Available resets: N`（利用可能な reset 数）も表示のみ。**reset を GUI が使うことはありません。**
-- 利用枠の履歴を `rate_limit_history` テーブルに保存します（Task の各ターンの開始時・終了時は必ず、Codex からの更新通知は 5 分に 1 回まで）。後から Task ごとの消費を分析するためで、**自動制御には使いません**。
-  `GET /api/limits/history?task_id=...` で取れます。
-- Task 詳細の **Observed quota change**: 最新ターンの開始前後の使用率（`5 hour 31% → 33%` / `Weekly 12% → 13%`）。
-  整数 % の粗い値なので *Observed only; not an exact per-task cost.* と表示し、**他の Task が同時に動いていたときは個別 Task の消費として断定しません**（その旨を表示）。
+- Windows are classified as **5 hour / Weekly** by `windowDurationMins`. **Depending on the plan, only a single weekly window is returned and there is no 5-hour window** (only weekly in the environment checked; some plans return two). Windows that do not exist are not shown.
+- `Available resets: N` (number of available resets) is display only. **The GUI never uses a reset.**
+- Usage-limit history is saved to the `rate_limit_history` table (always at the start and end of each task turn; update notifications from Codex at most once every 5 minutes). It is for analysing per-task consumption later and is **not used for automatic control**.
+  It can be fetched from `GET /api/limits/history?task_id=...`.
+- **Observed quota change** on the task detail: the usage percentage before and after the latest turn (`5 hour 31% → 33%` / `Weekly 12% → 13%`).
+  These are coarse integer percentages, so it says *Observed only; not an exact per-task cost.* and **does not attribute the change to a single task when other tasks were running at the same time** (it says so).
 
-### 利用枠が尽きたとき
+### When the usage limit runs out
 
-Codex が「枠が使えない」と言ったとき（`ordinaryUsageAllowed: false`、`rateLimitReachedType`、`usageLimitExceeded` / `rateLimitExceeded` エラー）、Task は **`waiting-for-quota`**（ダッシュボードでは *Waiting for Codex quota*）になります。
+When Codex says the allowance cannot be used (`ordinaryUsageAllowed: false`, `rateLimitReachedType`, a `usageLimitExceeded` / `rateLimitExceeded` error), the task becomes **`waiting-for-quota`** (*Waiting for Codex quota* on the dashboard).
 
-- **自動で再試行しません。** 別の課金経路にも移りません。枠が戻ったら詳細画面の **Retry last instruction** で、同じ thread に最後の指示を送り直せます。
-- 開始前に枠が無いと分かった場合は、turn を開始しません。
-- 単に Codex がエラーで `failed` になった場合は quota 扱いにしません。
+- **It is not retried automatically.** It does not move to any other billing path either. Once the allowance is back, use **Retry last instruction** on the detail page to resend the last instruction to the same thread.
+- If it is known before starting that there is no allowance, the turn is not started.
+- If Codex merely fails with an error and goes to `failed`, it is not treated as a quota problem.
 
-### サブスクリプション認証のみ
+### Subscription authentication only
 
-- ターン開始前に `account/read` で認証が ChatGPT（`type: "chatgpt"`）であることを確認します。API キー認証・未ログインなら**開始せず `failed`**（理由を表示）。API キー課金に切り替えることはありません。
-- codex の子プロセスには `OPENAI_API_KEY` / `CODEX_API_KEY` / `OPENAI_BASE_URL` などを渡しません。
-- 解除は `CODEX_GUI_SUBSCRIPTION_ONLY=0`（既定は ON。GUI からは変更できません）。
+- Before each turn, `account/read` is used to confirm that authentication is ChatGPT (`type: "chatgpt"`). With API-key authentication or when not signed in, the task **does not start and becomes `failed`** (the reason is shown). It never switches to API-key billing.
+- `OPENAI_API_KEY` / `CODEX_API_KEY` / `OPENAI_BASE_URL` and similar variables are not passed to the codex child process.
+- Disable with `CODEX_GUI_SUBSCRIPTION_ONLY=0` (ON by default; not changeable from the GUI).
 
 ## Context Efficiency
 
-多数の Task を並列に動かすとき、品質を落とさずに無駄な token / context を減らすための機能です。**何が実際に効くか（実 Codex での測定結果）は
-[docs/context-efficiency.md](docs/context-efficiency.md)** にまとめています。要点:
+Features for cutting wasted tokens / context without lowering quality when many tasks run in parallel. **What actually helps (measured on a real Codex) is written up in
+[docs/context-efficiency.md](docs/context-efficiency.md)**. In short:
 
-- **AGENTS.md は自動で編集しません。** Health Check（New Task の preview と Task Detail）が chain・サイズ・budget 使用率・重複・「毎回読め」系の指示を
-  警告するだけで、直すのは Edit ボタンから人が行います。
-- New Task の **Context efficiency**: Tool output limit / Tool profile（Full・Development・Minimal）/ Allow subagents（既定 OFF）、Advanced に Skills catalog budget と
-  Working directory。設定は Task 作成時に決まり、同じ thread では凍結されます。tool profile が「最適化済み」と表示されるのは、実 Codex で tool 数が減ったことを測れたときだけです。
-- Task Detail の **Context efficiency**: Context と Compactions、Cache age（HOT/WARM/COLD、参考表示のみ。cache を温めるための prompt は送りません）、
-  ターンごとの cache read / write / uncached と cache miss の原因候補、大きな tool output、long-context の警告
-  （`≥272K` で **Continue / Compact / Start New Session in Same Worktree** を提示、自動 compact はしません）。
-- 送信は **Send Standard**（通常）と **Send Fast**（明示操作）。要求した speed は各ターンに保存されます。
-- quota 枯渇・context 超過・認証エラー・同じ tool 失敗の繰り返しは無限に retry せず、状態を表示して止まります。
-- 閾値はダッシュボードの **Efficiency settings** で変更できます。
+- **AGENTS.md is never edited automatically.** The Health Check (in the New Task preview and Task Detail) only warns about the chain, size, budget usage, duplicates and "always read X" style instructions;
+  fixing them is up to you via the Edit button.
+- **Context efficiency** in New Task: Tool output limit / Tool profile (Full · Development · Minimal) / Allow subagents (OFF by default), and under Advanced the Skills catalog budget and
+  Working directory. Settings are fixed at task creation and frozen within a thread. A tool profile is shown as "optimized" only when a reduced tool count was actually measured on a real Codex.
+- **Context efficiency** in Task Detail: Context and Compactions, Cache age (HOT / WARM / COLD; informational only — no prompt is sent to keep the cache warm),
+  per-turn cache read / write / uncached with likely causes of cache misses, large tool outputs, and a long-context warning
+  (at `≥272K` it offers **Continue / Compact / Start New Session in Same Worktree**; no automatic compact).
+- Sending is **Send Standard** (normal) or **Send Fast** (explicit action). The requested speed is saved for each turn.
+- Quota exhaustion, context overflow, authentication errors and repeated failures of the same tool are not retried endlessly; the state is shown and the task stops.
+- Thresholds can be changed under **Efficiency settings** on the dashboard.
 
-```bash
-.venv/bin/python -m pytest                                              # モデルは呼ばない（実 codex は使う）
-CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_ab.py -s   # 実モデルでの A/B（少量消費）
-```
+## AGENTS.md Editor
 
-## AGENTS.md エディタ
+So that project-wide rules can live in `AGENTS.md` instead of being sent in every prompt, the GUI lets you view and edit it. The GUI never adds the contents of `AGENTS.md` to the prompt (Codex loads it itself, which avoids duplicated prompt / context and a shifting cache prefix).
 
-プロジェクト共通のルールを毎回 prompt で送る代わりに `AGENTS.md` に置けるよう、GUI から確認・編集できます。GUI が `AGENTS.md` の中身を prompt に足すことはありません（Codex 自身が読み込みます。prompt の重複・context の重複・cache prefix の変動を避けるため）。
-
-| 種類 | 対象 | 開き方 |
+| Kind | Target | How to open |
 | --- | --- | --- |
-| **Repository AGENTS.md** | リポジトリ**本体（main checkout）**の `AGENTS.md` | ダッシュボードでリポジトリを選ぶと出る `[AGENTS.md]`（`/agents?repository=…`）。New Task のフォームからも |
-| **Task Worktree AGENTS.md** | その Task の **worktree 内のコピー** | Task 詳細の `[Edit Worktree AGENTS.md]`（`/tasks/<id>/agents`） |
+| **Repository AGENTS.md** | The `AGENTS.md` of the **repository itself (main checkout)** | `[AGENTS.md]` shown when you select a repository on the dashboard (`/agents?repository=…`). Also from the New Task form |
+| **Task Worktree AGENTS.md** | The **copy inside that task's worktree** | `[Edit Worktree AGENTS.md]` on the task detail (`/tasks/<id>/agents`) |
 
-この 2 つは**別のファイル**です。画面にも種別が表示され、Task worktree の編集は main 側に影響しません（逆も同じ）。リポジトリ用エディタに Task の worktree を渡すと拒否します。
-Task の worktree には作成時に base ref の `AGENTS.md` が入ります。以降 main 側を編集しても既存 worktree のコピーは変わりません。
+These are **two separate files**. The kind is shown on screen, editing a task worktree does not affect main (and vice versa), and passing a task's worktree to the repository editor is rejected.
+A task's worktree receives the base ref's `AGENTS.md` at creation. Editing main afterwards does not change the copy in an existing worktree.
 
-- **存在しない**ときは `AGENTS.md does not exist` と `Create AGENTS.md`。Save で作成します。
-- textarea ベース（monospace、行番号、Tab 入力、**Ctrl+S** で保存、未保存の印）。**Reload / Save**。保存成功で `Saved AGENTS.md`、失敗はエラー内容を表示。内容が同じなら書き込みません。
-- 読み込み後にファイルが外で変更されていたら、上書きせず **409**（Reload を促す）。CRLF のファイルは CRLF のまま保存します。UTF-8 以外・1 MiB 超は拒否します。
-- **Git status**（`M AGENTS.md` / Untracked など）と **View Diff**（`git diff HEAD -- AGENTS.md` 相当。未追跡ファイルは全行追加として表示）。**commit はしません**（Commit は別途）。
-- **Nested AGENTS.md**: リポジトリ内のサブディレクトリにある `AGENTS.md`（`.gitignore` されたものを除く）を **File** セレクタで選んで編集できます。
-- ダッシュボードのリポジトリ行に `Git: clean` / `AGENTS.md: found` を表示します。
-- 書けるのは「リポジトリ（または worktree）内の、名前が `AGENTS.md` のファイル」だけです（`..`・絶対パス・リポジトリ外へ出る symlink は拒否）。
+- When the file **does not exist**, you see `AGENTS.md does not exist` and `Create AGENTS.md`. Save creates it.
+- Textarea based (monospace, line numbers, Tab input, **Ctrl+S** to save, unsaved indicator). **Reload / Save**. Success shows `Saved AGENTS.md`; failures show the error. Nothing is written if the content is unchanged.
+- If the file was changed externally after loading, the save is not applied and returns **409** (prompting a Reload). CRLF files are saved with CRLF. Non-UTF-8 files and files over 1 MiB are rejected.
+- **Git status** (`M AGENTS.md` / Untracked, etc.) and **View Diff** (equivalent to `git diff HEAD -- AGENTS.md`; an untracked file is shown as all lines added). **It does not commit** (Commit is separate).
+- **Nested AGENTS.md**: `AGENTS.md` files in subdirectories of the repository (except those ignored by `.gitignore`) can be chosen and edited with the **File** selector.
+- The dashboard's repository row shows `Git: clean` / `AGENTS.md: found`.
+- Only files named `AGENTS.md` inside the repository (or worktree) can be written (`..`, absolute paths and symlinks leading outside the repository are rejected).
 
-## 保存場所
+## Task Dependencies
+
+Choose **After other tasks complete** under **Run** in New Task and pick the tasks to wait for in **Depends on**; the task starts automatically once all of them are `completed`
+(A, B, C → D. The policy is `all_success`; the design allows adding things like `all_terminal` later).
+
+- **The worktree is created just before running.** A waiting task holds only a branch name and a worktree path, with no worktree (no useless worktrees are created).
+  The base ref is checked for existence at creation, and the task branches from **the ref at start time**.
+- States: `waiting_dependencies` (waiting; the dashboard shows `Waiting (2/3 complete)`) → `queued` (ready, not yet claimed by a runner) → `starting` → `running`.
+- If a dependency becomes `failed` / `stopped` / `blocked`, this task becomes **`blocked`** (`Dependency B failed`) and is not run on its own.
+  Proceed with **Run Anyway** (start ignoring dependencies) or **Retry Failed Dependency** (rerun the failed dependency in the same worktree and thread, then wait again) on the detail page.
+- While a dependency is **being retried (`retry_wait`), the task keeps waiting**. A transient failure alone does not make it `blocked`; it becomes `blocked` once the dependency finally reaches `failed`.
+  Dependencies in `waiting-for-quota` / `interrupted` are also resumable pauses, so the task keeps waiting.
+- Stopping a dependency makes it `stopped`, so tasks depending on it become `blocked`.
+- Dependencies form a DAG. **Self-dependencies, duplicates and cycles are rejected** (the same check applies when replacing the dependencies of a not-yet-started task with `PUT /api/tasks/{id}/dependencies`).
+- How double starts are prevented: `waiting_dependencies → queued` is **a single conditional UPDATE** that includes the "all dependencies completed" check, and `queued → run` is
+  **a single UPDATE conditioned on `claimed_by IS NULL` (the claim)**. Even if parents finish at the same moment and the listener, scheduler and API evaluate repeatedly, the task can start only once.
+
+## Automatic Recovery
+
+Unexpected stops (the Codex child process died, the app-server died, a transient connection / I/O error, an unexplained failure) are by default resumed automatically **up to 3 times** (**Auto recovery** in New Task; changeable per task). Resuming uses **the same task, worktree, branch and Codex thread**.
+
+| Class | Examples | Behaviour |
+| --- | --- | --- |
+| retryable | process killed by a signal / app-server exit or timeout / `httpConnectionFailed` / `responseStreamDisconnected` / `serverOverloaded` / `internalServerError` / EAGAIN, etc. | Retry |
+| unknown | failures that cannot be classified | **Retry** (the limit is always respected) |
+| quota | `usageLimitExceeded` / `rateLimitExceeded` / rate limit | No retry; `waiting-for-quota` (does not consume the retry count; resume manually; no API billing or fallback to another model) |
+| non-retryable | **user Stop** / authentication / configuration / invalid model / invalid arguments / invalid Git repository / permanent worktree-creation error / dependency failure / worktree missing / thread does not exist / context window exceeded / limit reached | `stopped` / `failed` (no retry) |
+
+- **Intervals:** 10 s → 30 s → 60 s (`CODEX_GUI_RETRY_BACKOFF`). No back-to-back retries. While waiting it shows `Retry 1/3 in 18s`.
+- **How it resumes:** The original instruction is not resent; a fixed short recovery instruction is sent to the same thread. Codex checks the current state (`git status` / `git log` and the conversation) and does not redo finished work
+  (no duplicate commits / pushes).
+  It was confirmed on a real machine that Codex 0.159.2 has **no** feature to automatically continue an interrupted turn (`codex exec resume <id>` requires a prompt).
+- **If it died before the turn started** (before Codex returned `turn/started`), the instruction may not have reached the thread, so instead of the recovery instruction **the original instruction is sent again** to the same thread
+  (nothing had run yet, so nothing is executed twice). If there is no thread id yet, a new thread is created in the same worktree and the log records
+  `Retry started a new Codex thread because no previous thread ID existed.`
+- **Git safety:** Before resuming, the worktree's existence is checked (**if it is gone, it is not recreated and the task becomes `failed`**). `git status` / HEAD / push state are **only recorded**; `reset` / `clean` / `checkout` are never run.
+  Codex looks at the current state and continues any partial changes. The GUI never rewrites history.
+- **Stop** is an explicit action, so the task becomes `stopped` and is not retried (dependent tasks become `blocked`).
+- **Manual Retry** (`failed` / `stopped`): reruns in the same worktree and thread. If the automatic retry limit has been exceeded, a confirmation dialog appears. Use **Start New Session** for a different thread.
+  During `retry_wait`, **Retry Now** and **Disable Auto Retry** let you cancel the pending retry.
+- **History:** The `task_attempts` table records each run (first run / follow-up / automatic or manual retry / recovery after a GUI restart): start, end, exit code, result, failure type, thread id, whether it was a resume, service tier,
+  reasoning effort and the git state before resuming (separate from the token-usage `turns` table). They are listed under Recovery on the detail page.
+
+### When the GUI itself goes down
+
+On startup, tasks in `running` / `starting` / `retry_wait` / `queued` are reviewed.
+
+- `running` / `starting`: if the recorded **process is still alive** (pid, **start time** and command line all match; a reused pid counts as a different process) it is left alone and monitored, and retried when it ends.
+  If it is gone, the task becomes `retry_wait` when automatic retry is enabled and within the limit, otherwise `failed`. **Restarting the GUI alone never causes the same task to run twice.**
+- `retry_wait`: the timer lives in the DB, so it continues (`failed` if the worktree is gone).
+- `queued` (claimed but not started): the claim is released and the scheduler starts it.
+- A task stopped by a normal exit (Ctrl+C) is `interrupted` as before (continue with Send / Resume interrupted).
+- Premise: **one GUI process per DB** (startup recovery takes over the previous process's claims).
+
+## Git Worktree Handling
+
+- A worktree is not removed when you Stop, so you can inspect the work in progress.
+- **Delete Worktree** is available only for finished tasks (completed / failed / stopped / interrupted). A confirmation dialog appears if there are uncommitted changes or untracked files.
+- Deleting a worktree **leaves the branch** (and its commits). Delete the branch separately with **Delete Branch** (reconfirmed if it is unmerged).
+- Branch names are `codex-gui/<task-id>-<slug>`.
+
+## Restarting the GUI
+
+- History stays in SQLite.
+- On a **normal exit** (Ctrl+C) of the GUI, running turns are stopped and become `interrupted`, and the app-server exits too. **The thread remains on the Codex side**, so after a restart you can continue the same thread with Send.
+- For recovery after a forced kill of the GUI, see "When the GUI itself goes down" under [Automatic Recovery](#automatic-recovery) (a surviving process is monitored; otherwise automatic retry applies).
+
+## Auto Approval and Network Access
+
+Network access (ON by default) passes `sandbox_workspace_write.network_access=true` as thread config on every turn (it was confirmed that the app-server's `thread/start` returns `networkAccess: true`).
+While ON, Codex can reach any external host from inside the sandbox (instructions hidden in a prompt can more easily leak code or secrets). Turn it OFF for untrusted repositories or instructions.
+
+Auto approval (ON by default) is `approvalPolicy: "on-request"` + `approvalsReviewer: "auto_review"` + `sandbox: "workspace-write"` on the app-server, and
+`codex exec --approve-for-me` on the `exec` backend (in both cases approval requests inside the workspace-write sandbox go to automatic review).
+When OFF it is `approvalPolicy: "never"` (everything must complete inside the sandbox; operations needing escalation fail, since the GUI has no approval dialog).
+`--dangerously-bypass-approvals-and-sandbox` and `danger-full-access` are never used (this is verified by tests).
+
+Because of the sandbox, Codex itself may be unable to write to the `.git` outside the worktree. In that case, commit with the GUI's **Commit** button.
+
+## Environment Variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CODEX_GUI_HOME` | `~/.local/share/codex-gui` | Data directory |
+| `CODEX_BIN` | `codex` | codex executable |
+| `CODEX_GUI_MAX_CONCURRENT` | `0` (unlimited) | Concurrent runs. Excess tasks wait as `queued` (never changed automatically from the usage limit) |
+| `CODEX_GUI_BACKEND` | `app-server` | `app-server` (thread / turn) or `exec` (legacy `codex exec`) |
+| `CODEX_GUI_SUBSCRIPTION_ONLY` | `1` | `1`: run only with a ChatGPT login, and strip API-key variables from codex's environment |
+| `CODEX_GUI_CONTEXT_WARN_PERCENT` | `80` | Context usage (%) at which Context Guard warns |
+| `CODEX_GUI_PREFERRED_MODEL` | `gpt-6.1-sol` | Preferred model. Falls back to "Codex default" if it is not in `codex debug models` |
+| `CODEX_GUI_HOST` / `CODEX_GUI_PORT` | `127.0.0.1` / `8765` | Listen address |
+| `CODEX_GUI_AUTO_RETRY` / `CODEX_GUI_MAX_RETRIES` | `1` / `3` | Defaults for automatic retry after unexpected stops (changeable per task) |
+| `CODEX_GUI_RETRY_BACKOFF` | `10,30,60` | Seconds to wait before retries (comma-separated; the last value is reused afterwards) |
+| `CODEX_GUI_SCHEDULER_INTERVAL` | `2` | Interval (seconds) for checking waiting / retry-waiting tasks |
+| `CODEX_GUI_SSH_KEY` | `~/.ssh/id_ed25519` | Key to `ssh-add` when the agent is empty |
+| `CODEX_GUI_SSH_AGENT_ENV` | `~/.ssh/agent.env` | Where the agent's environment variables are saved |
+| `CODEX_GUI_SSH_DIAGNOSTICS` | `1` | `0` disables the SSH diagnostic log at startup |
+| `CODEX_GUI_SSH_GITHUB_TEST` | `1` | `0` disables `ssh -T git@github.com` at startup |
+
+## SSH Authentication
+
+`run.sh` manages an `ssh-agent` on WSL so that Push (the GUI's Push button) and git operations inside Codex can reach SSH remotes (`git@github.com:...`).
+
+### How it works
+
+On startup, `./run.sh` picks an agent in this order:
+
+1. If the agent at `SSH_AUTH_SOCK` in the environment responds, use it
+2. Read `~/.ssh/agent.env` (the `SSH_AUTH_SOCK` / `SSH_AGENT_PID` of the previously started agent) and reuse it if it responds
+3. Only if neither works, start a new `ssh-agent` and save it to `~/.ssh/agent.env` (mode 600)
+
+It then checks the keys with `ssh-add -l` and, **if none is registered**, runs `ssh-add ~/.ssh/id_ed25519`.
+For a key with a passphrase, enter it at the normal `ssh-add` prompt (start `run.sh` from a terminal).
+
+`SSH_AUTH_SOCK` stays exported and is inherited uvicorn → FastAPI → Codex / git subprocesses.
+The agent is not started again for each Codex task (only once, when `run.sh` starts).
+Even if you launch uvicorn directly without `run.sh`, subprocesses are given the socket from `~/.ssh/agent.env` if it is alive.
+
+To use the same agent in other shells, run `. ~/.ssh/agent.env`.
+
+### Diagnostic log at startup
+
+On startup the GUI logs the following (to the terminal where you ran `run.sh`):
+
+- `ssh-add -l` (exit code 0 = keys present / 1 = agent present but no keys / 2 = cannot connect to the agent)
+- `git config --get remote.origin.url` (for the GUI's launch directory and recently used repositories)
+- `ssh -T git@github.com` if the remote is a GitHub SSH URL
+
+GitHub returns **exit code 1** even when `ssh -T` succeeds. So success is judged not by the exit code but by whether the output contains
+`successfully authenticated`. Diagnostics run asynchronously and do not delay startup.
+
+### Troubleshooting
+
+| Symptom | Check / fix |
+| --- | --- |
+| `ssh-add -l (exit 2)` in the log | Cannot connect to an agent. Restart with `./run.sh`. Deleting `~/.ssh/agent.env` and restarting also works |
+| `ssh-add -l (exit 1)` / `no keys` | `ssh-add ~/.ssh/id_ed25519`. For a different key, set `CODEX_GUI_SSH_KEY` |
+| `ssh-add` fails because it cannot ask for the passphrase | Run `./run.sh` from a terminal, or run `ssh-add` manually beforehand |
+| `ssh -T` gives `Permission denied (publickey)` | The agent's key is not registered with GitHub. Compare the public key from `ssh-add -l` with <https://github.com/settings/keys> |
+| `Host key verification failed` | First connection. Run `ssh -T git@github.com` once in a terminal to accept the host key |
+| `Could not resolve hostname` / timeout | Network, DNS or proxy problem (check WSL's DNS) |
+| Remote is `https://` | SSH authentication is not used. `git remote set-url origin git@github.com:OWNER/REPO.git` |
+| Cannot push from inside Codex's sandbox | Tasks with **Network access** OFF, and old tasks (created before that option existed), have the network blocked. Even when ON, the sandbox may block the SSH agent socket. Use the GUI's **Commit / Push** buttons (run from the GUI process) |
+| A stale agent is left over | `pkill -f 'ssh-agent -s'` also stops other agents, so stop it with `kill $SSH_AGENT_PID` (the pid in `~/.ssh/agent.env`) |
+
+Manual check: `. ~/.ssh/agent.env && ssh-add -l && ssh -T git@github.com`
+
+## Data Location
 
 ```text
 $CODEX_GUI_HOME/
-├── codex-gui.db              タスク履歴・ターンごとの usage・利用枠の履歴 (SQLite)
-├── instructions.md           （任意）共通の作業方針。無ければ既定の文面
-├── logs/<task-id>.jsonl      タスクごとのログ（stdout の生イベント、JSON でない行、stderr、system）
+├── codex-gui.db              Task history, per-turn usage, usage-limit history (SQLite)
+├── instructions.md           (optional) common working guidelines; the default text is used if absent
+├── logs/<task-id>.jsonl      Per-task log (raw stdout events, non-JSON lines, stderr, system)
 └── worktrees/<repo>/<task-id>/
 ```
 
-branch 名は `codex-gui/<task-id>-<slug>`。
+Branch names are `codex-gui/<task-id>-<slug>`.
 
-## 自動承認について
-
-Network access（既定 ON）は `sandbox_workspace_write.network_access=true` を thread の config として全ターンに渡します（app-server の `thread/start` が `networkAccess: true` を返すことを確認済み）。
-ON の間、Codex は sandbox の中から任意の外部へ通信できます（プロンプトに紛れた指示でコードや秘密が外に出るリスクが増えます）。信頼できないリポジトリ・指示では OFF にしてください。
-
-Auto approval（既定 ON）は、app-server では `approvalPolicy: "on-request"` + `approvalsReviewer: "auto_review"` + `sandbox: "workspace-write"`、
-`exec` バックエンドでは `codex exec --approve-for-me`（どちらも workspace-write sandbox 内で承認リクエストを自動レビューに回す）です。
-OFF のときは `approvalPolicy: "never"`（sandbox 内で完結。昇格が要る操作は失敗。GUI に承認ダイアログは無いため）。
-`--dangerously-bypass-approvals-and-sandbox` と `danger-full-access` は一切使いません（テストでも検証しています）。
-
-sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き込めないことがあります。その場合は GUI の **Commit** ボタンで commit してください。
-
-## Task の依存関係（After other tasks complete）
-
-New Task の **Run** で **After other tasks complete** を選び、**Depends on** で待つ Task を選ぶと、それらがすべて `completed` になってから自動で始まります
-（A・B・C → D。ポリシーは `all_success`。将来 `all_terminal` などを足せる作りです）。
-
-- **worktree は実行直前に作ります。** 待機中の Task は branch 名と worktree のパスだけを持ち、worktree はありません（無駄な worktree を作りません）。
-  base ref は作成時に存在確認し、**開始時点の ref** から分岐します。
-- 状態: `waiting_dependencies`（待機中。Dashboard は `Waiting (2/3 complete)`）→ `queued`（準備完了、まだ runner に claim されていない）→ `starting` → `running`。
-- 依存先が `failed` / `stopped` / `blocked` になると、この Task は **`blocked`**（`Dependency B failed`）になり、勝手には実行されません。
-  詳細画面の **Run Anyway**（依存を無視して開始）か **Retry Failed Dependency**（失敗した依存先を同じ worktree・同じ thread で再実行し、もう一度待つ）で進めます。
-- 依存先が **リトライ中（`retry_wait`）の間は待ちます**。一時的な失敗だけでは `blocked` になりません。最終的に `failed` になった時点で `blocked` です。
-  `waiting-for-quota` / `interrupted` の依存先も「再開できる一時停止」なので待ち続けます。
-- 依存先を Stop すると `stopped` なので、依存する Task は `blocked` になります。
-- 依存は DAG です。**自己依存・重複・循環は拒否**します（`PUT /api/tasks/{id}/dependencies` で未開始の Task の依存先を差し替えるときも同じ検査）。
-- 二重起動しない仕組み: `waiting_dependencies → queued` は「全依存先が completed」の判定を含む **1 本の条件付き UPDATE**、`queued → 実行` は `claimed_by IS NULL` を条件にした
-  **1 本の UPDATE（claim）** です。親が同時に終わっても、リスナー・スケジューラ・API が何度評価しても、起動できるのは 1 回だけです。
-
-## 自動復旧（リトライ）
-
-予期しない停止（Codex の子プロセスが落ちた、app-server が落ちた、一時的な接続 / I/O エラー、原因不明の失敗）は、既定で **最大 3 回** まで自動で再開します（New Task の
-**Auto recovery**、Task ごとに変更可）。再開は **同じ Task・同じ worktree・同じ branch・同じ Codex thread** です。
-
-| 分類 | 例 | 動作 |
-| --- | --- | --- |
-| retryable | プロセスが signal で終了 / app-server の終了・タイムアウト / `httpConnectionFailed` / `responseStreamDisconnected` / `serverOverloaded` / `internalServerError` / EAGAIN 等 | リトライ |
-| unknown | 分類できない失敗 | **リトライ**（ただし上限は必ず守る） |
-| quota | `usageLimitExceeded` / `rateLimitExceeded` / rate limit | リトライせず `waiting-for-quota`（回数を消費しない。手動で再開。API 課金・別モデルへの fallback なし） |
-| non-retryable | **ユーザーの Stop** / 認証 / 設定 / 不正な model / 不正な引数 / 不正な Git リポジトリ / worktree 作成の恒久エラー / 依存先の失敗 / worktree が消えている / thread が存在しない / context window 超過 / 上限到達 | `stopped` / `failed`（リトライしない） |
-
-- **間隔:** 10 秒 → 30 秒 → 60 秒（`CODEX_GUI_RETRY_BACKOFF`）。連続リトライはしません。待機中は `Retry 1/3 in 18s`。
-- **再開の方法:** 元の指示を送り直さず、固定の短い recovery instruction を同じ thread に送ります。Codex が現在の状態（`git status` / `git log`・会話）を確認し、終わっている作業はやり直しません
-  （同じ commit / push を重複しない）。
-  Codex 0.159.2 には「中断した turn を自動で続ける」機能が **ない**ことを実機で確認しています（`codex exec resume <id>` はプロンプト必須）。
-- **turn が始まる前に落ちた場合**（Codex が `turn/started` を返す前）は、指示が thread に届いていない可能性があるため、recovery instruction ではなく **元の指示をもう一度**、同じ thread に送ります
-  （まだ何も実行されていないので二重実行になりません）。thread id がまだ無い場合は、同じ worktree で新しい thread を作り、ログに
-  `Retry started a new Codex thread because no previous thread ID existed.` と残します。
-- **Git の安全:** 再開前に worktree の存在を確認します（**消えていても作り直さず `failed`**）。`git status` / HEAD / push 状況を **記録するだけ**で、`reset` / `clean` / `checkout` はしません。
-  途中の変更は Codex が現在の状態を見て続けます。GUI が履歴を書き換えることはありません。
-- **Stop** は明示的な操作なので `stopped`。リトライしません（依存する Task は `blocked`）。
-- **手動 Retry**（`failed` / `stopped`）: 同じ worktree・同じ thread で再実行。自動リトライの上限を超えているときは確認ダイアログが出ます。別の thread にしたいときは **Start New Session**。
-  `retry_wait` 中は **Retry Now**、**Disable Auto Retry** で待機中のリトライを取り消せます。
-- **履歴:** `task_attempts` テーブルに 1 回の実行ごと（初回 / 追加指示 / 自動・手動リトライ / GUI 再起動後の復旧）の開始・終了・exit code・結果・失敗の種類・thread id・resume か否か・service tier・
-  reasoning effort・再開前の git 状態を記録します（token usage の `turns` とは別）。詳細画面の Recovery に一覧が出ます。
-
-### GUI 自体が落ちたとき
-
-起動時に `running` / `starting` / `retry_wait` / `queued` の Task を見直します。
-
-- `running` / `starting`: 記録した **プロセスがまだ生きていれば**（pid・**起動時刻**・コマンドラインがすべて一致。pid の使い回しは別プロセス扱い）そのままにして監視し、終了したらリトライします。
-  いなければ、自動リトライが有効で上限内なら `retry_wait`、そうでなければ `failed`。**GUI の再起動だけが原因で同じ Task を二重に実行することはありません。**
-- `retry_wait`: タイマーは DB にあるので続きます（worktree が消えていたら `failed`）。
-- `queued`（claim 済みで未開始）: claim を解放し、スケジューラが開始します。
-- 通常終了（Ctrl+C）で止めた Task は、これまで通り `interrupted`（Send / Resume interrupted で続行）。
-- 前提: **1 つの DB に GUI プロセスは 1 つ**です（起動時の復旧は前のプロセスの claim を引き継ぎます）。
-
-## Git worktree の扱い
-
-- Stop しても worktree は消えません。途中の変更を確認できます。
-- **Delete Worktree** は完了済み（completed / failed / stopped / interrupted）のタスクのみ。未コミットの変更や未追跡ファイルがあると確認ダイアログが出ます。
-- worktree を消しても **branch は残ります**（commit も残る）。branch は **Delete Branch** で別途削除します（未マージなら再確認）。
-
-## GUI の再起動
-
-- 履歴は SQLite に残ります。
-- GUI を **通常終了**（Ctrl+C）すると、実行中の turn は止められ `interrupted` になり、app-server も終了します。**thread は Codex 側に残る**ので、再起動後に Send で同じ thread を続けられます。
-- GUI が強制終了された場合の復旧は「自動復旧（リトライ）」の「GUI 自体が落ちたとき」を参照（プロセスが残っていれば監視、いなければ自動リトライ）。
-
-## テスト
+## Testing
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
 
-実 Codex は使わず、`tests/fake_app_server.py`（app-server の JSON-RPC。thread / turn / 累積 usage / rate limit / steer / interrupt / compact / quota エラー）と
-`tests/fake_codex.py`（`codex exec` の従来方式）を、実際の JSON-RPC クライアント・サブプロセス・シグナル・git を通して動かします。
-カバー範囲: Codex へのサインイン（ブラウザ / デバイスコード / 失敗 / 取り消し）、Task と thread id の永続化、同一 thread の再利用（resume）、token / cached の parse と cache hit 計算、rate limit の parse（週次のみ / 2 本）、
-quota 時の状態遷移（再試行しない）、model・reasoning・Standard・auto approval・web search cached の既定値と送信内容、API キーに fallback しないこと、
-context guard の判定、steer / stop / compact、AGENTS.md の読み書き・競合・path 検証・Repository と Task worktree の分離、
-依存関係（DAG・循環 / 自己 / 重複の拒否・複数接続からの同時評価でも 1 回だけ起動・依存先のリトライ中は待機・blocked / Run Anyway）、
-自動復旧（失敗の分類・上限・間隔・同じ thread / worktree の再利用・Stop / quota / 認証はリトライしない・作業ツリーに触れない・worktree 削除時は再作成しない・
-GUI を SIGKILL した後の復旧・pid 使い回しの判別）。
+The tests do not use a real Codex. They drive `tests/fake_app_server.py` (the app-server JSON-RPC: thread / turn / cumulative usage / rate limit / steer / interrupt / compact / quota errors) and
+`tests/fake_codex.py` (the legacy `codex exec` mode) through the real JSON-RPC client, subprocesses, signals and git.
+Coverage: signing in to Codex (browser / device code / failure / cancel), persistence of tasks and thread ids, reuse of the same thread (resume), parsing of token / cached and cache-hit calculation, rate-limit parsing (weekly only / two windows),
+state transitions on quota (no retry), defaults and sent values for model, reasoning, Standard, auto approval and cached web search, no fallback to an API key,
+context-guard decisions, steer / stop / compact, AGENTS.md read / write / conflict / path validation and the separation of Repository and Task worktree,
+dependencies (DAG, rejection of cycles / self / duplicates, starting exactly once even when evaluated from multiple connections, waiting while a dependency is retrying, blocked / Run Anyway),
+and automatic recovery (failure classification, limits, intervals, reuse of the same thread / worktree, no retry for Stop / quota / authentication, leaving the working tree untouched, no recreation of a deleted worktree,
+recovery after SIGKILL of the GUI, telling apart a reused pid).
 
-実 Codex に接続する統合テストは分離してあり、`CODEX_GUI_REAL=1` のときだけ動きます（トークンを少し使います。cache hit は表示のみで、成否は同一 thread・usage 取得・context window・利用枠の取得で判定）:
+Integration tests against a real Codex are kept separate and run only when `CODEX_GUI_REAL=1` (they use a small number of tokens; cache hit is display only, and pass / fail is decided by same thread, usage retrieval, context window and usage-limit retrieval):
 
 ```bash
 CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_codex.py -s
-CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_codex.py -s -k killed_mid_turn   # 実 Codex を turn の途中で SIGKILL → 同じ thread・worktree で復旧
+CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_codex.py -s -k killed_mid_turn   # SIGKILL a real Codex mid-turn → recover in the same thread and worktree
 CODEX_GUI_REAL=1 CODEX_GUI_REAL_MODEL=gpt-6.1-sol CODEX_GUI_REAL_PAUSE=15 .venv/bin/python -m pytest tests/test_real_codex.py -s -k app_server
+CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_ab.py -s                          # A/B on a real model (small token use)
 ```
 
-## 制約
+## Limitations
 
-- `Profile`（codex の config profile）は GUI から選べません。
-- app-server のプロトコルは experimental です（0.159.2 で確認）。`CODEX_GUI_BACKEND=exec` で従来方式に戻せます。
-- compact の効果（context がどれだけ縮むか）は、小さい thread でしか実機確認していません（約 13k の thread では縮みませんでした）。
-- `exec` バックエンドには、利用枠・context 取得・quota 検出・steer・compact がありません。
-- Adaptive reasoning は提案のみで、自動昇格はしません。
-- compact 直後の context サイズは次のターンまで不明です。
-- 利用枠の % は整数で粗く、Task ごとの消費は並列実行時に分離できません。
-- GUI 自体のログイン（認証）はありません。Codex へのサインインは ChatGPT アカウントのみ（API キー・サインアウトの操作なし）。
+- `Profile` (codex config profiles) cannot be selected from the GUI.
+- The app-server protocol is experimental (checked with 0.159.2). `CODEX_GUI_BACKEND=exec` switches back to the legacy mode.
+- The effect of compact (how much the context shrinks) has only been verified on a real machine with small threads (a ~13k thread did not shrink).
+- The `exec` backend has no usage limits, context retrieval, quota detection, steer or compact.
+- Adaptive reasoning only suggests; it never escalates automatically.
+- The context size right after a compact is unknown until the next turn.
+- Usage-limit percentages are coarse integers, and per-task consumption cannot be separated during parallel runs.
+- The GUI itself has no login (authentication). Signing in to Codex is for a ChatGPT account only (no API key, no sign-out action).
 
-## 構成
+## Project Layout
 
 ```text
 app/
-  main.py           アプリ生成・起動時の復旧・終了処理
-  codex_login.py    Codex（ChatGPT）へのサインイン（app-server の account/login/*）
-  routes.py         HTML ページと JSON API
-  task_manager.py   タスク作成・追加指示(resume / steer)・並列実行・Stop・compact・復旧・Git 操作・usage / 利用枠の記録
-  appserver.py      codex app-server の JSON-RPC クライアント（共有プロセス・通知の振り分け・API キーを渡さない環境）
-  notifications.py  app-server 通知 → タスクログ
-  codex_runner.py   `codex exec` 方式のコマンド組み立て・イベント解析・設定（task_config / approval_params）
-  usage.py          token usage・ターン差分・cache hit 率・context 判定・rate limit の parse
-  instructions.py   共通の作業方針（thread 開始時に一度だけ渡す定数）
-  agents_md.py      AGENTS.md の読み書き・Git 状態・diff・ネスト探索
-  logstore.py       タスク別 JSONL ログの書き込み/増分読み出し
-  git_manager.py    git CLI ラッパー
+  main.py           App creation, startup recovery, shutdown handling
+  codex_login.py    Signing in to Codex (ChatGPT) (app-server account/login/*)
+  routes.py         HTML pages and JSON API
+  task_manager.py   Task creation, follow-ups (resume / steer), parallel runs, Stop, compact, recovery, Git operations, usage / limit recording
+  appserver.py      JSON-RPC client for codex app-server (shared process, notification routing, environment without API keys)
+  notifications.py  app-server notifications → task log
+  codex_runner.py   `codex exec` mode: command building, event parsing, settings (task_config / approval_params)
+  usage.py          Token usage, per-turn deltas, cache hit rate, context checks, rate-limit parsing
+  instructions.py   Common working guidelines (a constant passed once when a thread starts)
+  agents_md.py      AGENTS.md read / write, Git status, diff, nested discovery
+  logstore.py       Per-task JSONL log writing / incremental reading
+  git_manager.py    git CLI wrapper
   database.py       SQLite
-  models.py         ステータス遷移・命名規則
-  config.py         設定
-  ssh_agent.py      サブプロセスへの SSH_AUTH_SOCK 継承・起動時の SSH 診断
-  scheduler.py      待機中 / キュー / リトライ待ちタスクを定期的に進めるバックグラウンド処理
-  recovery.py       予期しない停止の分類とリトライの間隔
-  efficiency.py     cache・モデル選択による節約量の見積もり（クレジット / API 換算の推定。実際の節約額ではありません）
-  cache_health.py   ターンごとの cache hit の記録・miss の原因候補・compact の監視
-  ctx_config.py / ctx_guard.py / ctx_manager.py / turn_observer.py   Context Efficiency（設定・ガード・ターンの観測）
-  agents_audit.py   AGENTS.md の健全性チェック（読み取り専用）
-  tool_probe.py / fake_responses.py   実 codex に偽の Responses API を向けてツール一覧などを測る
-  procinfo.py / tokens.py             pid の同一性確認（/proc）・token の概算
-docs/               Codex CLI / app-server の調査記録
-static/ templates/  UI（素の HTML/CSS/JS、ポーリング）
+  models.py         Status transitions and naming rules
+  config.py         Settings
+  ssh_agent.py      SSH_AUTH_SOCK inheritance for subprocesses, startup SSH diagnostics
+  scheduler.py      Background loop that advances waiting / queued / retry-waiting tasks
+  recovery.py       Classification of unexpected stops and retry intervals
+  efficiency.py     Estimates of savings from cache and model choice (credit / API-equivalent estimates; not actual savings)
+  cache_health.py   Per-turn cache-hit recording, likely causes of misses, compact monitoring
+  ctx_config.py / ctx_guard.py / ctx_manager.py / turn_observer.py   Context Efficiency (settings, guard, turn observation)
+  agents_audit.py   AGENTS.md health check (read-only)
+  tool_probe.py / fake_responses.py   Point a real codex at a fake Responses API to measure things such as the tool list
+  procinfo.py / tokens.py             pid identity checks (/proc), token estimation
+docs/               Research notes on Codex CLI / app-server
+static/ templates/  UI (plain HTML/CSS/JS, polling)
 tests/
 ```
