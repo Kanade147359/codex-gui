@@ -24,8 +24,16 @@ FAKE = str(Path(__file__).parent / "fake_codex.py")
 class FakeRunner(CodexRunner):
     """Runs tests/fake_codex.py instead of codex, through the real spawn/stream/stop code."""
 
-    def build_command(self, task):
-        return [sys.executable, FAKE]
+    def build_command(self, task, resume_thread=None):
+        return [sys.executable, FAKE] + (["resume", resume_thread] if resume_thread else [])
+
+
+@pytest.fixture(autouse=True)
+def fake_codex_state(tmp_path_factory, monkeypatch):
+    """Where tests/fake_codex.py keeps per-thread usage totals and its invocation log."""
+    state = tmp_path_factory.mktemp("fake_state")
+    monkeypatch.setenv("FAKE_CODEX_STATE", str(state))
+    return state
 
 
 @pytest.fixture

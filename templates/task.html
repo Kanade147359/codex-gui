@@ -21,6 +21,27 @@
 </section>
 
 <section>
+  <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
+  <textarea id="instruction" rows="4" placeholder="Next instruction for this task's Codex session"></textarea>
+  <div class="inline-actions">
+    <button id="send-btn" class="primary" title="Continue the existing Codex session (codex exec resume)">Send</button>
+    <button id="new-session-btn" title="Start a fresh Codex session in this worktree (the old session's cache is not reused)">Start New Session</button>
+    <span id="instruction-hint" class="muted"></span>
+  </div>
+  <p class="muted small">Send continues the same Codex session, so its prompt cache is reused. Model, reasoning effort and approval
+    mode are fixed for the task: changing them mid-session can lower cache reuse.</p>
+</section>
+
+<section>
+  <h2>Usage <span class="muted">(per turn, from <code>turn.completed</code>)</span></h2>
+  <div id="latest-usage" class="muted">no completed turn yet</div>
+  <table class="usage" id="turns" hidden>
+    <thead><tr><th>TURN</th><th>SESSION</th><th>INPUT</th><th>CACHED</th><th>HIT</th><th>OUTPUT</th></tr></thead>
+    <tbody id="turns-body"></tbody>
+  </table>
+</section>
+
+<section>
   <h2>Codex Log <span class="muted" id="log-count"></span></h2>
   <div id="log" class="log"></div>
 </section>

@@ -19,8 +19,15 @@ class CodexRunner:
     def __init__(self, codex_bin: str = "codex"):
         self.codex_bin = codex_bin
 
-    def build_command(self, task: dict) -> list[str]:
-        """argv for one task. The prompt is NOT in argv: it is written to stdin ("-")."""
+    def build_command(self, task: dict, resume_thread: Optional[str] = None) -> list[str]:
+        """argv for one turn of a task. The prompt is NOT in argv: it is written to stdin ("-").
+
+        A first turn is `codex exec ...`; a later turn is `codex exec ... resume <thread> -`, which continues
+        the same Codex thread so its prompt cache stays warm. Verified with codex-cli 0.159.2: `resume` has no
+        -C / --approve-for-me of its own, but accepts them in front of the subcommand, so both turn kinds get
+        the identical options (model, effort, approval and cwd must not drift inside one task).
+        No daemon flag is passed: Codex decides how it reaches its shared app-server.
+        """
         cmd = [self.codex_bin, "exec", "--json", "-C", task["worktree"]]
         if task["auto_approval"]:
             # Automatic review inside the workspace-write sandbox. Never the dangerous bypass flag.
@@ -29,13 +36,15 @@ class CodexRunner:
             cmd += ["--model", task["model"]]
         if task["reasoning_effort"] not in ("", "default"):
             cmd += ["-c", f'model_reasoning_effort="{task["reasoning_effort"]}"']
+        if resume_thread:
+            cmd += ["resume", resume_thread]
         cmd.append("-")
         return cmd
 
-    async def spawn(self, task: dict) -> asyncio.subprocess.Process:
+    async def spawn(self, task: dict, resume_thread: Optional[str] = None) -> asyncio.subprocess.Process:
         """Start the process in its own session so the whole group can be signalled."""
         return await asyncio.create_subprocess_exec(
-            *self.build_command(task),
+            *self.build_command(task, resume_thread),
             cwd=task["worktree"],
             env=child_env(),  # carries SSH_AUTH_SOCK; the agent is shared, never started per task
             stdin=asyncio.subprocess.PIPE,

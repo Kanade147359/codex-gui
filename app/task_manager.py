@@ -1,6 +1,8 @@
 """Creates tasks (branch + worktree), runs codex processes in parallel, and keeps the DB in sync."""
 import asyncio
+import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -9,12 +11,22 @@ from .codex_runner import CodexRunner, pid_is_codex, terminate_process
 from .config import Settings
 from .database import Database
 from .logstore import TaskLog, read_log
+from .usage import REQUIRED_KEYS, cache_hit_rate, dumps, extract_usage, turn_delta
 from .models import (
     ACTIVE_STATUSES, EFFORT_RE, TERMINAL_STATUSES,
     branch_name, make_task_id, now_iso, worktree_path,
 )
 
 READER_DRAIN_SECONDS = 5.0
+INSTRUCTION_LOG_CHARS = 4000
+
+
+@dataclass
+class _Turn:
+    """What one codex process (= one turn) has told us so far."""
+    prompt: str
+    resume_thread: Optional[str] = None  # None: this process starts a new Codex session
+    thread_id: Optional[str] = None      # from its thread.started event
 
 
 class TaskError(Exception):
@@ -97,20 +109,65 @@ class TaskManager:
             status="queued", git_summary="clean", created_at=now_iso(),
         )
         self.db.touch_repo(repo, now_iso())
-        job = asyncio.create_task(self._run(task_id))
-        job.add_done_callback(lambda _: self._jobs.pop(task_id, None))
-        self._jobs[task_id] = job
+        self._launch(task_id, _Turn(prompt))
         return task
+
+    # ---------- further turns ----------
+
+    def _require_idle_with_worktree(self, task: dict) -> None:
+        if task["status"] in ACTIVE_STATUSES:
+            # `codex queue` was tried and is not safe against a running `codex exec`: the queued message is
+            # taken off the queue but the exec process exits before answering it, so it is lost (README).
+            raise TaskError(f"task is {task['status']}; send the next instruction when it has finished", 409, "active")
+        self._require_worktree(task)
+
+    async def send_instruction(self, task_id: str, prompt: str) -> dict:
+        """Another turn in the task's existing Codex session: `codex exec resume <thread>`."""
+        prompt = prompt.strip()
+        if not prompt:
+            raise TaskError("instruction is required")
+        task = self.get(task_id)
+        self._require_idle_with_worktree(task)
+        thread = task["codex_thread_id"]
+        if not thread:
+            raise TaskError("this task has no recorded Codex session id; use Start New Session", 409, "no_session")
+        return self._begin_turn(task, _Turn(prompt, resume_thread=thread))
+
+    async def start_new_session(self, task_id: str, prompt: str) -> dict:
+        """A fresh Codex session in the same worktree. Deliberately separate from send_instruction: it
+        gives up the old session's conversation and the cached input that goes with it."""
+        prompt = prompt.strip()
+        if not prompt:
+            raise TaskError("prompt is required")
+        task = self.get(task_id)
+        self._require_idle_with_worktree(task)
+        return self._begin_turn(task, _Turn(prompt))
+
+    def _begin_turn(self, task: dict, turn: _Turn) -> dict:
+        # No await between the status checks of the caller and this transition, so two requests cannot both pass.
+        updated = self.db.set_status(task["id"], "queued", pid=None, exit_code=None, finished_at=None)
+        self._launch(task["id"], turn)
+        return updated
+
+    def _launch(self, task_id: str, turn: _Turn) -> None:
+        job = asyncio.create_task(self._run(task_id, turn))
+        self._jobs[task_id] = job
+        job.add_done_callback(lambda j: self._forget_job(task_id, j))
+
+    def _forget_job(self, task_id: str, job: asyncio.Task) -> None:
+        if self._jobs.get(task_id) is job:  # a newer turn of the same task may already be registered
+            del self._jobs[task_id]
 
     # ---------- running ----------
 
-    async def _run(self, task_id: str) -> None:
+    async def _run(self, task_id: str, turn: _Turn) -> None:
         log = TaskLog(self.log_path(task_id))
+        me = asyncio.current_task()
         try:
             if self._slots:
                 await self._slots.acquire()
             try:
-                await self._run_process(task_id, log)
+                await self._run_process(task_id, log, turn)
             finally:
                 if self._slots:
                     self._slots.release()
@@ -122,20 +179,27 @@ class TaskManager:
                 self.db.set_status(task_id, "failed", finished_at=now_iso())
         finally:
             log.close()
-            self._jobs.pop(task_id, None)
-            self._procs.pop(task_id, None)
-            self._stop_requested.discard(task_id)
+            if self._jobs.get(task_id) is me:
+                del self._jobs[task_id]
+                self._procs.pop(task_id, None)
+                self._stop_requested.discard(task_id)
 
-    async def _run_process(self, task_id: str, log: TaskLog) -> None:
+    async def _run_process(self, task_id: str, log: TaskLog, turn: _Turn) -> None:
         task = self.db.set_status(task_id, "starting")
         try:
-            proc = await self.runner.spawn(task)
+            proc = await self.runner.spawn(task, turn.resume_thread)
         except OSError as e:
             log.add_system(f"failed to start codex: {e}")
             self.db.set_status(task_id, "failed", finished_at=now_iso())
             return
         self._procs[task_id] = proc
-        log.add_system(f"started pid {proc.pid}: {' '.join(self.runner.build_command(task))}")
+        if turn.resume_thread:
+            log.add_system(f"turn: resuming Codex session {turn.resume_thread}")
+        else:
+            log.add_system("turn: starting a new Codex session")
+        log.add_system("instruction:\n" + turn.prompt[:INSTRUCTION_LOG_CHARS] +
+                       (f"\n… (+{len(turn.prompt) - INSTRUCTION_LOG_CHARS} chars)" if len(turn.prompt) > INSTRUCTION_LOG_CHARS else ""))
+        log.add_system(f"started pid {proc.pid}: {' '.join(self.runner.build_command(task, turn.resume_thread))}")
         self.db.set_status(task_id, "running", pid=proc.pid, started_at=now_iso())
         if task_id in self._stop_requested:  # stop arrived while starting
             asyncio.create_task(terminate_process(proc, self.settings.stop_grace_seconds))
@@ -149,13 +213,16 @@ class TaskManager:
 
         async def feed_prompt():
             try:
-                proc.stdin.write(task["prompt"].encode())
+                proc.stdin.write(turn.prompt.encode())
                 await proc.stdin.drain()
                 proc.stdin.close()
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
-        readers = [asyncio.create_task(pump(proc.stdout, log.add_stdout)),
+        def on_stdout(line: str) -> None:
+            self._on_event(task_id, log, turn, log.add_stdout(line)["event"])
+
+        readers = [asyncio.create_task(pump(proc.stdout, on_stdout)),
                    asyncio.create_task(pump(proc.stderr, log.add_stderr)),
                    asyncio.create_task(feed_prompt())]
         refresher = asyncio.create_task(self._refresh_loop(task_id))
@@ -173,8 +240,62 @@ class TaskManager:
         else:
             status = "completed" if code == 0 else "failed"
         log.add_system(f"process exited with code {code} -> {status}")
-        self.db.set_status(task_id, status, exit_code=code, finished_at=now_iso())
+        if turn.thread_id is None:
+            log.add_system("no thread.started event with a thread_id was seen in this process's output" +
+                           ("" if turn.resume_thread else "; the Codex session id is unknown, so this task "
+                            "cannot be resumed (only Start New Session is possible)"))
+        # Last, and with nothing awaited afterwards: once the status is terminal a new turn may be started.
         await self.refresh_git_summary(task_id)
+        self.db.set_status(task_id, status, exit_code=code, finished_at=now_iso())
+
+    # ---------- codex events: session id and token usage ----------
+
+    def _on_event(self, task_id: str, log: TaskLog, turn: _Turn, event: Optional[dict]) -> None:
+        """React to the parsed JSON events that matter here. Never raises: the log must keep flowing."""
+        try:
+            etype = event.get("type") if event else None
+            if etype == "thread.started":
+                self._on_thread_started(task_id, log, turn, event)
+            elif etype == "turn.completed":
+                self._on_turn_completed(task_id, log, turn, event)
+        except Exception as e:
+            log.add_system(f"could not process a codex event: {e!r}")
+
+    def _on_thread_started(self, task_id: str, log: TaskLog, turn: _Turn, event: dict) -> None:
+        thread_id = event.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            log.add_system(f"thread.started event has no usable thread_id: {json.dumps(event)[:300]}")
+            return
+        turn.thread_id = thread_id
+        if turn.resume_thread:
+            if thread_id != turn.resume_thread:
+                log.add_system(f"WARNING: asked to resume Codex session {turn.resume_thread} but codex reported "
+                               f"{thread_id}; the session was NOT continued, so cached input is not reused")
+            return
+        self.db.update_task(task_id, codex_thread_id=thread_id)
+        log.add_system(f"codex session id: {thread_id}")
+
+    def _on_turn_completed(self, task_id: str, log: TaskLog, turn: _Turn, event: dict) -> None:
+        total = extract_usage(event)
+        if total is None or not all(k in total for k in REQUIRED_KEYS):
+            log.add_system(f"turn.completed without the expected usage fields; not recorded: {json.dumps(event)[:300]}")
+            return
+        thread_id = turn.thread_id or turn.resume_thread or ""
+        turns = self.db.list_turns(task_id)
+        previous = next((json.loads(t["total_json"]) for t in reversed(turns) if t["thread_id"] == thread_id), None)
+        delta, not_cumulative = turn_delta(total, previous)
+        if not_cumulative:
+            log.add_system("usage went down since the previous turn of this thread; treating it as per-turn usage")
+        threads = list(dict.fromkeys(t["thread_id"] for t in turns))
+        session = threads.index(thread_id) + 1 if thread_id in threads else len(threads) + 1
+        now = now_iso()
+        self.db.add_turn(
+            task_id=task_id, turn=(turns[-1]["turn"] + 1) if turns else 1, session=session, thread_id=thread_id,
+            created_at=now, input_tokens=delta["input_tokens"], cached_input_tokens=delta["cached_input_tokens"],
+            output_tokens=delta["output_tokens"], cache_write_input_tokens=delta.get("cache_write_input_tokens"),
+            reasoning_output_tokens=delta.get("reasoning_output_tokens"), total_json=dumps(total),
+        )
+        self.db.update_task(task_id, last_turn_at=now)
 
     async def _refresh_loop(self, task_id: str) -> None:
         while True:
@@ -313,6 +434,29 @@ class TaskManager:
         return self.db.update_task(task_id, branch_deleted=1)
 
     # ---------- views ----------
+
+    @staticmethod
+    def present_turn(row: dict) -> dict:
+        """A turns row for the API: only this turn's own figures plus the derived ones."""
+        out = {k: row[k] for k in ("turn", "session", "thread_id", "created_at", "input_tokens", "cached_input_tokens",
+                                   "output_tokens", "cache_write_input_tokens", "reasoning_output_tokens")}
+        out["uncached_input_tokens"] = row["input_tokens"] - row["cached_input_tokens"]
+        out["cache_hit_rate"] = cache_hit_rate(row["input_tokens"], row["cached_input_tokens"])
+        return out
+
+    def list_tasks_view(self) -> list[dict]:
+        """Tasks for the dashboard, each with the cache hit rate (%) of its latest turn (None: nothing to show)."""
+        latest = self.db.latest_turns()
+        tasks = self.db.list_tasks()
+        for t in tasks:
+            row = latest.get(t["id"])
+            t["cache_hit_rate"] = self.present_turn(row)["cache_hit_rate"] if row else None
+        return tasks
+
+    def usage(self, task_id: str) -> dict:
+        self.get(task_id)
+        turns = [self.present_turn(r) for r in self.db.list_turns(task_id)]
+        return {"turns": turns, "latest": turns[-1] if turns else None}
 
     def counts(self, tasks: list[dict]) -> dict:
         counts = {}

@@ -72,7 +72,7 @@ def test_spawn_passes_ssh_auth_sock(tmp_path, monkeypatch):
     monkeypatch.setenv("SSH_AUTH_SOCK", "/shared/agent.sock")
 
     class Echo(CodexRunner):
-        def build_command(self, task):
+        def build_command(self, task, resume_thread=None):
             return [sys.executable, "-c", "import os; print(os.environ['SSH_AUTH_SOCK'])"]
 
     async def go():

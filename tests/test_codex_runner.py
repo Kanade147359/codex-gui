@@ -24,6 +24,21 @@ def test_prompt_never_in_argv_and_no_dangerous_flag():
         assert cmd[-1] == "-"  # prompt is read from stdin
 
 
+def test_resume_command_keeps_options_and_continues_the_thread():
+    t = task(model="gpt-x", reasoning_effort="high")
+    fresh = CodexRunner("codex").build_command(t)
+    resumed = CodexRunner("codex").build_command(t, "01a0f766-f849-7ef2-92a5-a6d01e361b64")
+    # same options in front, then `resume <thread> -` (the order verified against codex-cli 0.159.2)
+    assert resumed == fresh[:-1] + ["resume", "01a0f766-f849-7ef2-92a5-a6d01e361b64", "-"]
+    assert resumed[:5] == ["codex", "exec", "--json", "-C", "/wt/x"]
+    assert t["prompt"] not in resumed
+
+
+def test_never_passes_daemon_flags():
+    for resume in (None, "tid"):
+        assert not any("daemon" in a for a in CodexRunner().build_command(task(), resume))
+
+
 def test_auto_approval_off_omits_flag():
     assert "--approve-for-me" not in CodexRunner().build_command(task(auto_approval=0))
 

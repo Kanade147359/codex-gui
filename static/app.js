@@ -38,6 +38,8 @@ async function api(method, url, body) {
   return data;
 }
 const statusBadge = (s) => `<span class="status ${esc(s)}">${esc(s)}</span>`;
+const num = (n) => (n == null ? "-" : Number(n).toLocaleString("en-US"));
+const pct = (r) => (r == null ? "-" : r.toFixed(r >= 99.95 || r === 0 ? 0 : 1) + "%");
 const repoName = (p) => p.split("/").filter(Boolean).pop() || p;
 
 // ---------------- dashboard ----------------
@@ -75,6 +77,7 @@ function initDashboard() {
           <td title="${esc(t.repository)}">${esc(repoName(t.repository))}</td>
           <td>${esc(t.model || "default")}${t.reasoning_effort !== "default" ? " / " + esc(t.reasoning_effort) : ""}</td>
           <td>${statusBadge(t.status)}</td>
+          <td title="cache hit rate of the latest turn (cached / input)">${esc(pct(t.cache_hit_rate))}</td>
           <td>${esc(t.git_summary)}</td>
           <td>${esc(t.branch)}${t.branch_deleted ? " (deleted)" : ""}</td>
           <td>${esc(dt(t.created_at))}</td>
@@ -306,6 +309,7 @@ function initTask() {
   let gitTab = "status";
   let entryCount = 0;
   let stopping = false;
+  let sending = false;
   const logEl = $("#log");
   const MAX_ROWS = 5000;
 
@@ -332,6 +336,7 @@ function initTask() {
       ["Reasoning effort", t.reasoning_effort], ["Auto approval", t.auto_approval ? "on (--approve-for-me)" : "off"],
       ["Started at", dt(t.started_at)], ["Finished at", dt(t.finished_at)],
       ["PID", t.pid ?? "-"], ["Exit code", t.exit_code ?? "-"],
+      ["Codex session", t.codex_thread_id || "-"], ["Last turn at", dt(t.last_turn_at)],
     ];
     $("#meta").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
 
@@ -344,6 +349,39 @@ function initTask() {
     $("#push-btn").hidden = !canGit;
     $("#del-wt-btn").hidden = active || t.worktree_removed;
     $("#del-branch-btn").hidden = !(t.worktree_removed && !t.branch_deleted);
+
+    // Additional instruction: Send resumes the session, Start New Session is the explicit alternative.
+    const canSend = !active && !t.worktree_removed;
+    $("#send-btn").disabled = !canSend || !t.codex_thread_id || sending;
+    $("#new-session-btn").disabled = !canSend || sending;
+    $("#instruction").disabled = !canSend;
+    $("#session-id").textContent = t.codex_thread_id ? `session ${t.codex_thread_id}` : "";
+    $("#instruction-hint").textContent =
+      active ? "Task is running: send the next instruction when it has finished." :
+      t.worktree_removed ? "The worktree was deleted." :
+      !t.codex_thread_id ? "No Codex session id was recorded for this task: use Start New Session." : "";
+  }
+
+  function renderUsage(u) {
+    const l = u.latest;
+    const rows = l ? [
+      ["Input", num(l.input_tokens)], ["Cached", num(l.cached_input_tokens)],
+      ["Uncached", num(l.uncached_input_tokens)], ["Cache hit", pct(l.cache_hit_rate)],
+      ...(l.cache_write_input_tokens != null ? [["Cache write", num(l.cache_write_input_tokens)]] : []),
+      ["Output", num(l.output_tokens)],
+      ...(l.reasoning_output_tokens != null ? [["Reasoning", num(l.reasoning_output_tokens)]] : []),
+    ] : [];
+    $("#latest-usage").innerHTML = l
+      ? `<div class="muted">Latest usage (turn ${l.turn})</div><dl class="usage">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
+      : "no completed turn yet";
+    $("#turns").hidden = !u.turns.length;
+    $("#turns-body").innerHTML = u.turns.map((r) =>
+      `<tr><td>${r.turn}</td><td>${r.session}</td><td>${num(r.input_tokens)}</td><td>${num(r.cached_input_tokens)}</td>` +
+      `<td>${esc(pct(r.cache_hit_rate))}</td><td>${num(r.output_tokens)}</td></tr>`).join("");
+  }
+
+  async function refreshUsage() {
+    try { renderUsage(await api("GET", `/api/tasks/${id}/usage`)); } catch (_) {}
   }
 
   function addEntries(entries) {
@@ -468,7 +506,29 @@ function initTask() {
     return "branch deleted";
   }));
 
+  async function sendInstruction(path, label, confirmText) {
+    const prompt = $("#instruction").value;
+    if (!prompt.trim()) { setMsg("Write an instruction first.", true); return; }
+    if (confirmText && !confirm(confirmText)) return;
+    sending = true;
+    renderTask();
+    try {
+      await action(label, async () => {
+        await api("POST", `/api/tasks/${id}/${path}`, { prompt });
+        $("#instruction").value = "";
+        return label + ": started";
+      });
+    } finally {
+      sending = false;
+      renderTask();
+    }
+  }
+  $("#send-btn").addEventListener("click", () => sendInstruction("messages", "Send"));
+  $("#new-session-btn").addEventListener("click", () => sendInstruction("new-session", "Start New Session",
+    "Start a NEW Codex session in this worktree?\n\nThe conversation so far is not carried over and the previous session's cached input is not reused."));
+
   let lastGit = 0;
+  let lastUsage = 0;
   let wasActive = true;
   async function tick(forceGit) {
     try {
@@ -477,6 +537,10 @@ function initTask() {
       await pullLog();
       const active = ACTIVE.includes(task.status);
       const now = Date.now();
+      if (forceGit || (active && now - lastUsage > 3000) || (wasActive && !active) || lastUsage === 0) {
+        lastUsage = now;
+        await refreshUsage();
+      }
       if (forceGit || (active && now - lastGit > 3000) || (wasActive && !active) || lastGit === 0) {
         lastGit = now;
         await refreshGit();

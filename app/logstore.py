@@ -22,8 +22,11 @@ class TaskLog:
         self._f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._f.flush()
 
-    def add_stdout(self, line: str) -> None:
-        self._write({"ts": now_iso(), "stream": "stdout", **parse_line(line)})
+    def add_stdout(self, line: str) -> dict:
+        """Write one stdout line; returns parse_line()'s result so callers need not parse it twice."""
+        parsed = parse_line(line)
+        self._write({"ts": now_iso(), "stream": "stdout", **parsed})
+        return parsed
 
     def add_stderr(self, line: str) -> None:
         self._write({"ts": now_iso(), "stream": "stderr", "type": "stderr",

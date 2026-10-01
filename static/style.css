@@ -104,3 +104,14 @@ dialog label.check.inline { padding: 8px 0 0; }
 .picker-list li .name { flex: 1; color: var(--muted); }
 .picker-list .badge { font-size: 11px; color: var(--green); border: 1px solid #2c7a57; border-radius: 3px; padding: 0 5px; }
 .picker-list .pick { padding: 0 8px; font-size: 12px; }
+
+/* additional instruction + usage */
+.small { font-size: 12px; margin: 6px 0 0; }
+.inline-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+table.usage { border-collapse: collapse; margin-top: 10px; }
+table.usage th { text-align: right; color: var(--muted); font-weight: normal; padding: 3px 14px; border-bottom: 1px solid var(--border); }
+table.usage td { text-align: right; padding: 3px 14px; border-bottom: 1px solid #1b2028; }
+table.usage th:first-child, table.usage td:first-child { text-align: left; }
+dl.usage { display: grid; grid-template-columns: max-content max-content; gap: 2px 24px; margin: 6px 0; }
+dl.usage dt { color: var(--muted); }
+dl.usage dd { margin: 0; text-align: right; }

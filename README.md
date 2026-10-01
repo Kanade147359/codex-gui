@@ -2,7 +2,8 @@
 
 Codex CLI (`codex exec --json`) を複数同時に動かして一画面で管理する、自分専用のローカル Web GUI。
 
-- 1 タスク = 1 Git branch = 1 Git worktree（worktree は GUI 側が管理。Codex の `--worktree` は使わない）
+- 1 タスク = 1 Git branch = 1 Git worktree = 1 Codex session（thread）。追加指示は `codex exec resume` で同じ session を続けるので、prompt cache（cached input）が効きやすい
+- worktree は GUI 側が管理（Codex の `--worktree` は使わない）
 - 複数 Codex プロセスの並列実行、ログのリアルタイム表示、Git status / diff / log の確認
 - Stop、Commit / Push、Worktree / Branch の削除、SQLite による履歴保存
 
@@ -93,15 +94,41 @@ GitHub は `ssh -T` 成功時でも **終了コード 1** を返します。そ�
    - **Run & add another:** フォームを開いたまま次のタスクを追加。**同じリポジトリで複数タスクを並列実行**できます（タスクごとに別 branch・別 worktree）
 2. worktree と branch が作られ、その中で Codex が起動する（ダッシュボードは 2 秒ごとに自動更新）
 3. ダッシュボードはリポジトリで絞り込み可能。行をクリックすると詳細画面。Codex ログ（種別名をクリックで生イベント JSON）と Git の Status / Diff / Log を確認
-4. Stop / Commit / Push / Delete Worktree / Delete Branch は詳細画面から
+4. 追加指示は詳細画面の **Additional instruction** から（下記「追加指示と prompt cache」）
+5. Stop / Commit / Push / Delete Worktree / Delete Branch は詳細画面から
 
 Diff は **base commit との差分**（Codex が作った commit も含む）に、未追跡ファイルを加えたものです。
+
+## 追加指示と prompt cache
+
+1 タスクは 1 つの Codex session を使い続けます。
+
+| 操作 | 実行されるコマンド | 備考 |
+| --- | --- | --- |
+| タスク作成 | `codex exec --json -C <worktree> [--approve-for-me] [--model …] [-c model_reasoning_effort=…] -` | 初回の `thread.started` の `thread_id` を `tasks.codex_thread_id` に保存 |
+| **Send** | 上と同じオプション + `resume <thread_id> -` | 同じ session を継続。completed / failed / stopped / interrupted で、session id があるとき |
+| **Start New Session** | 初回と同じ `codex exec …` | 同じ worktree で新しい session を作る（旧 session の会話と cache は引き継がない）。確認ダイアログあり |
+
+- prompt は argv ではなく stdin（`-`）で渡し、**ユーザーが入力した文字列をそのまま**送ります。GUI が日時・ID・過去のやり取りを足すことはありません（会話履歴は Codex の session が持ちます。GUI のログには表示用に指示文を残しますが、再送はしません）。
+- model / reasoning effort / approval はタスク作成時に決まり、そのタスクの全ターンで同じ引数を使います（途中変更の UI はありません。変えると cache が効きにくくなるため。変えたいときは新しいタスクを作ります）。
+- `--no-daemon` などは付けません。Codex 側の既定（共有 app-server）に任せます。
+- **実行中のタスクには送れません**（Send は無効、API は 409）。`codex queue` は使いません: codex-cli 0.159.2 では、実行中の `codex exec` に `codex queue` で送ると、メッセージはキューから取り出されて thread の履歴には入りますが、exec はその新しいターンを `turn_aborted` にして終了するため、**回答されないまま失われます**。終了を待ってから Send してください。
+- Codex が `thread.started` を出さなかった（session id が取れない）場合はログに記録し、そのタスクでは Send できません（Start New Session は可能）。resume 時に Codex が別の thread id を報告した場合は、ログに `WARNING` を出します。
+
+### Cache usage
+
+`turn.completed` イベントの `usage`（`input_tokens` / `cached_input_tokens` / `output_tokens`、あれば `cache_write_input_tokens` / `reasoning_output_tokens`）を **ターンごと** に `turns` テーブルへ保存します。
+
+- codex-cli 0.159.2 の `usage` は **thread の累積値**です（resume しても増え続けます）。GUI は同じ thread の前回累積値との差を「そのターンの usage」として保存・表示します。累積値が減った場合は、ターン単位の値とみなして生の値を使います（ログに記録）。
+- Cache hit = `cached_input_tokens / input_tokens × 100`。`input_tokens == 0` のときは表示しません。
+- 詳細画面に **Latest usage** と **ターンごとの表**、ダッシュボードの **CACHE** 列に最新ターンの hit 率を表示します。
+- Prompt cache は best-effort です。直後に連続して送ると cache がまだ使えず hit 率が低いことがあります。
 
 ## 保存場所
 
 ```text
 $CODEX_GUI_HOME/
-├── codex-gui.db              タスク履歴 (SQLite)
+├── codex-gui.db              タスク履歴・ターンごとの usage (SQLite)
 ├── logs/<task-id>.jsonl      タスクごとのログ（stdout の生イベント、JSON でない行、stderr、system）
 └── worktrees/<repo>/<task-id>/
 ```
@@ -134,8 +161,15 @@ sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き
 .venv/bin/python -m pytest
 ```
 
-実 Codex は使わず、`tests/fake_codex.py` を `CodexRunner` の差し替えで起動します。
+実 Codex は使わず、`tests/fake_codex.py`（thread id と累積 usage を実 CLI と同じ形で出す）を `CodexRunner` の差し替えで起動します。
 実際のサブプロセス・シグナル・git を使うので、並列実行や Stop → SIGKILL 昇格もテストされます。
+
+実 Codex で同一 session の resume を確かめる（トークンを少し使います。cache hit は表示のみで、成否は同一 thread を resume できたかだけで判定）:
+
+```bash
+CODEX_GUI_REAL=1 .venv/bin/python -m pytest tests/test_real_codex.py -s
+CODEX_GUI_REAL=1 CODEX_GUI_REAL_PAUSE=15 .venv/bin/python -m pytest tests/test_real_codex.py -s   # ターン間を空ける
+```
 
 ## 構成
 
@@ -143,8 +177,9 @@ sandbox の都合で、Codex 自身は worktree の外にある `.git` に書き
 app/
   main.py           アプリ生成・起動時の復旧・終了処理
   routes.py         HTML ページと JSON API
-  task_manager.py   タスク作成・並列実行・Stop・復旧・Git 操作
+  task_manager.py   タスク作成・追加指示(resume)・並列実行・Stop・復旧・Git 操作・usage 記録
   codex_runner.py   codex コマンド組み立て・イベント解析・プロセス停止
+  usage.py          turn.completed の usage 抽出・ターン差分・cache hit 率
   logstore.py       タスク別 JSONL ログの書き込み/増分読み出し
   git_manager.py    git CLI ラッパー
   database.py       SQLite

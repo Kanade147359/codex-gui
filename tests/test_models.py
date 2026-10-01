@@ -33,6 +33,7 @@ def test_status_sets_are_consistent():
     ("queued", "starting"), ("starting", "running"), ("running", "completed"),
     ("running", "failed"), ("running", "stopped"), ("queued", "stopped"),
     ("running", "interrupted"), ("starting", "failed"),
+    ("completed", "queued"), ("failed", "queued"), ("stopped", "queued"), ("interrupted", "queued"),  # next turn
 ])
 def test_allowed_transitions(old, new):
     assert can_transition(old, new)

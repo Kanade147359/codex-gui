@@ -29,6 +29,10 @@ class NewTask(BaseModel):
     auto_approval: bool = True
 
 
+class Instruction(BaseModel):
+    prompt: str
+
+
 class CommitRequest(BaseModel):
     message: str = ""
 
@@ -58,7 +62,7 @@ async def task_page(request: Request, task_id: str):
 @router.get("/api/tasks")
 async def list_tasks(request: Request):
     m = manager(request)
-    tasks = m.db.list_tasks()
+    tasks = m.list_tasks_view()
     return {"tasks": tasks, "counts": m.counts(tasks)}
 
 
@@ -120,6 +124,31 @@ async def get_log(request: Request, task_id: str, offset: int = 0):
 async def get_git(request: Request, task_id: str):
     try:
         return await manager(request).git_info(task_id)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.get("/api/tasks/{task_id}/usage")
+async def get_usage(request: Request, task_id: str):
+    try:
+        return manager(request).usage(task_id)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/messages")
+async def send_instruction(request: Request, task_id: str, body: Instruction):
+    """Additional instruction: continues the task's existing Codex session (codex exec resume)."""
+    try:
+        return await manager(request).send_instruction(task_id, body.prompt)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/new-session")
+async def start_new_session(request: Request, task_id: str, body: Instruction):
+    try:
+        return await manager(request).start_new_session(task_id, body.prompt)
     except TaskError as e:
         raise api_error(e)
 

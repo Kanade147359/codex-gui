@@ -9,14 +9,16 @@ TERMINAL_STATUSES = frozenset({"completed", "failed", "stopped", "interrupted"})
 STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES
 
 # "interrupted" = the GUI went away while the task was active (see TaskManager.recover).
+# A finished task goes back to "queued" when it is given another turn (codex exec resume, or a
+# new session): one task keeps one worktree and, normally, one Codex thread across many turns.
 TRANSITIONS = {
     "queued": {"starting", "stopped", "failed", "interrupted"},
     "starting": {"running", "stopped", "failed", "interrupted"},
     "running": {"completed", "failed", "stopped", "interrupted"},
-    "completed": set(),
-    "failed": set(),
-    "stopped": set(),
-    "interrupted": set(),
+    "completed": {"queued"},
+    "failed": {"queued"},
+    "stopped": {"queued"},
+    "interrupted": {"queued"},
 }
 
 # The CLI decides which efforts a model supports (the UI offers those); we only keep the argv value sane.
