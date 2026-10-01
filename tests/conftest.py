@@ -13,12 +13,14 @@ os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
                   GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
                   CODEX_GUI_SSH_DIAGNOSTICS="0")  # no ssh-add / ssh -T from tests
 
+from app.appserver import AppServerClient  # noqa: E402
 from app.codex_runner import CodexRunner  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.database import Database  # noqa: E402
 from app.task_manager import TaskManager  # noqa: E402
 
 FAKE = str(Path(__file__).parent / "fake_codex.py")
+FAKE_APP_SERVER = str(Path(__file__).parent / "fake_app_server.py")
 
 
 class FakeRunner(CodexRunner):
@@ -26,6 +28,13 @@ class FakeRunner(CodexRunner):
 
     def build_command(self, task, resume_thread=None):
         return [sys.executable, FAKE] + (["resume", resume_thread] if resume_thread else [])
+
+
+class FakeAppServer(AppServerClient):
+    """The real JSON-RPC client talking to tests/fake_app_server.py instead of `codex app-server`."""
+
+    def build_command(self):
+        return [sys.executable, FAKE_APP_SERVER]
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +58,8 @@ def git_repo(tmp_path):
 
 @pytest.fixture
 def settings(tmp_path):
-    s = Settings(home=tmp_path / "home", stop_grace_seconds=1.0, git_refresh_seconds=0.2)
+    # The exec backend is what the older tests were written for; app-server tests ask for it via make_manager.
+    s = Settings(home=tmp_path / "home", stop_grace_seconds=1.0, git_refresh_seconds=0.2, backend="exec")
     s.ensure_dirs()
     return s
 
@@ -63,11 +73,27 @@ def db(settings):
 
 @pytest.fixture
 def make_manager(settings, db):
+    """make(**settings overrides). backend="app-server" gives the manager a fake app-server process."""
+    created = []
+
     def make(**overrides):
         for k, v in overrides.items():
             setattr(settings, k, v)
-        return TaskManager(settings, db, FakeRunner())
-    return make
+        server = FakeAppServer("fake", settings.subscription_only) if settings.backend == "app-server" else None
+        manager = TaskManager(settings, db, FakeRunner(), server)
+        if server:
+            server.on_global(manager._on_global_notification)
+        created.append(manager)
+        return manager
+
+    yield make
+    for m in created:  # a test that failed half way must not leave fake servers behind
+        proc = getattr(m._app_server, "_proc", None)
+        if proc is not None and proc.returncode is None:
+            try:
+                os.kill(proc.pid, 9)
+            except ProcessLookupError:
+                pass
 
 
 async def wait_for(predicate, timeout=15.0, interval=0.05):

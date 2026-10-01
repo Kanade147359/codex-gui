@@ -37,10 +37,28 @@ async function api(method, url, body) {
   }
   return data;
 }
-const statusBadge = (s) => `<span class="status ${esc(s)}">${esc(s)}</span>`;
+const statusBadge = (s) => `<span class="status ${esc(s)}">${esc(statusText(s))}</span>`;
 const num = (n) => (n == null ? "-" : Number(n).toLocaleString("en-US"));
 const pct = (r) => (r == null ? "-" : r.toFixed(r >= 99.95 || r === 0 ? 0 : 1) + "%");
 const repoName = (p) => p.split("/").filter(Boolean).pop() || p;
+const kfmt = (n) => (n == null ? "-" : n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
+const EFFORT_LABELS = { default: "Auto", low: "Low", medium: "Medium", high: "High", xhigh: "XHigh", max: "Max", ultra: "Ultra" };
+const effortLabel = (e) => EFFORT_LABELS[e] || (e ? e[0].toUpperCase() + e.slice(1) : "-");
+const STATUS_TEXT = { "waiting-for-quota": "Waiting for Codex quota" };
+const statusText = (s) => STATUS_TEXT[s] || s;
+function resetText(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+    : d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function bar(percent, cls) {
+  const p = percent == null ? 0 : Math.max(0, Math.min(100, percent));
+  const level = cls || (p >= 95 ? "hot" : p >= 80 ? "warm" : "ok");
+  return `<div class="bar ${level}"><div class="fill" style="width:${p}%"></div></div>`;
+}
 
 // ---------------- dashboard ----------------
 
@@ -52,7 +70,7 @@ function initDashboard() {
   const formOk = $("#form-ok");
   const filterEl = $("#repo-filter");
   let allTasks = [];
-  let options = { models: [], default_model: "", default_effort: "", repos: [] };
+  let options = { models: [], default_model: "", default_effort: "", recommended_model: "", repos: [] };
 
   const store = {
     get(k) { try { return localStorage.getItem(k) || ""; } catch (_) { return ""; } },
@@ -75,20 +93,91 @@ function initDashboard() {
         <tr data-id="${esc(t.id)}">
           <td class="wrap"><a href="/tasks/${esc(t.id)}">${esc(t.name)}</a></td>
           <td title="${esc(t.repository)}">${esc(repoName(t.repository))}</td>
-          <td>${esc(t.model || "default")}${t.reasoning_effort !== "default" ? " / " + esc(t.reasoning_effort) : ""}</td>
-          <td>${statusBadge(t.status)}</td>
+          <td title="${esc(t.effective_model || "")}">${esc(modelName(t.effective_model || t.model))}</td>
+          <td>${esc(effortLabel(t.reasoning_effort))}${t.service_tier !== "default" ? ` <span class="warn" title="Fast mode consumes included usage more quickly.">fast</span>` : ""}</td>
           <td title="cache hit rate of the latest turn (cached / input)">${esc(pct(t.cache_hit_rate))}</td>
+          <td title="current context / model window">${ctxCell(t.context)}</td>
+          <td>${statusBadge(t.status)}</td>
           <td>${esc(t.git_summary)}</td>
           <td>${esc(t.branch)}${t.branch_deleted ? " (deleted)" : ""}</td>
           <td>${esc(dt(t.created_at))}</td>
         </tr>`).join("")
-      : `<tr><td colspan="7" class="muted">No tasks yet. Click "+ New Task".</td></tr>`;
+      : `<tr><td colspan="10" class="muted">No tasks yet. Click "+ New Task".</td></tr>`;
     const n = (k) => tasks.filter((t) => t.status === k).length;
     const active = n("queued") + n("starting") + n("running");
+    $("#running-count").textContent = active;
     $("#summary").innerHTML =
       `Running: <b>${active}</b> &nbsp; Completed: <b>${n("completed")}</b> &nbsp; Failed: <b>${n("failed")}</b>` +
+      ` &nbsp; Waiting for quota: <b>${n("waiting-for-quota")}</b>` +
       ` &nbsp; Stopped: <b>${n("stopped") + n("interrupted")}</b> &nbsp; Total: <b>${tasks.length}</b>`;
   }
+
+  // "GPT-6.1-Sol" for gpt-6.1-sol when the catalog knows it; otherwise the id; "default" when nothing is pinned.
+  function modelName(slug) {
+    if (!slug) return "default";
+    const m = options.models.find((x) => x.slug === slug);
+    return m ? m.name.replace(/^GPT-/i, "").replace(/-/g, " ") : slug;
+  }
+  function ctxCell(c) {
+    if (!c || c.tokens == null) return "-";
+    const text = kfmt(c.tokens);
+    return c.warn ? `<span class="warn" title="Context usage ${Math.round(c.percent)}%: this thread is large">${text} ⚠</span>` : text;
+  }
+
+  // ----- Codex usage (display only) -----
+
+  async function refreshLimits() {
+    try {
+      const l = await api("GET", "/api/limits");
+      renderLimits(l);
+    } catch (e) {
+      $("#limits").textContent = "cannot read usage: " + e.message;
+    }
+  }
+  function renderLimits(l) {
+    const box = $("#limits");
+    if (!l.available) {
+      box.innerHTML = `<span class="muted">not available${l.error ? " (" + esc(l.error) + ")" : ""}</span>`;
+      $("#limits-note").textContent = "";
+      return;
+    }
+    $("#usage-plan").textContent = l.plan_type ? `(${l.plan_type})` : "";
+    box.className = "";
+    box.innerHTML = l.windows.map((w) => `
+      <div class="limit-row"><span class="limit-label">${esc(w.label)}</span>${bar(w.used_percent)}
+        <span class="limit-pct">${Math.round(w.used_percent)}%</span>
+        <span class="muted limit-reset">${w.resets_at ? "Reset: " + esc(resetText(w.resets_at)) : ""}</span></div>`).join("") ||
+      `<span class="muted">Codex reported no usage windows</span>`;
+    const notes = [];
+    if (l.ordinary_usage_allowed === false) notes.push(`<span class="error">Ordinary usage is not available${l.reached_type ? " (" + esc(l.reached_type) + ")" : ""}.</span>`);
+    if (l.available_resets != null) notes.push(`Available resets: ${l.available_resets}`);
+    $("#limits-note").innerHTML = notes.join(" &nbsp; ");
+  }
+
+  // ----- repository bar: git state and AGENTS.md -----
+
+  const repoInfoCache = {};
+  async function repoInfo(repo) {
+    try {
+      repoInfoCache[repo] = await api("GET", `/api/repo-info?repository=${encodeURIComponent(repo)}`);
+    } catch (_) {
+      repoInfoCache[repo] = null;
+    }
+    return repoInfoCache[repo];
+  }
+  async function renderRepoBar() {
+    const repo = filterEl.dataset.want;
+    $("#repo-bar").hidden = !repo;
+    if (!repo) return;
+    $("#repo-path").textContent = repo;
+    $("#repo-agents-btn").href = `/agents?repository=${encodeURIComponent(repo)}`;
+    const info = await repoInfo(repo);
+    if (filterEl.dataset.want !== repo) return;
+    $("#repo-git").textContent = info ? info.git.label : "unknown";
+    const a = info && info.agents_md;
+    $("#repo-agents").textContent = !a ? "unknown" : (a.found ? "found" : "not found") + (a.nested.length ? ` (+${a.nested.length} nested)` : "");
+  }
+  $("#repo-new-btn").addEventListener("click", () => $("#new-task-btn").click());
 
   async function refresh() {
     try {
@@ -103,39 +192,73 @@ function initDashboard() {
     filterEl.dataset.want = filterEl.value;
     store.set("repoFilter", filterEl.value);
     renderTasks();
+    renderRepoBar();
   });
   $("#tasks-body").addEventListener("click", (ev) => {
     const tr = ev.target.closest("tr[data-id]");
     if (tr && !ev.target.closest("a")) location.href = "/tasks/" + tr.dataset.id;
   });
 
-  // ----- model / effort selects -----
+  // ----- model / effort / speed selects -----
 
   const modelSel = $("#model-select");
   const effortSel = $("#effort-select");
+  const tierSel = $("#tier-select");
   const CUSTOM = "__custom__";
+  const FALLBACK_EFFORTS = ["low", "medium", "high"];
 
   function buildModelSelect() {
+    // "Use Codex default" / the recommended model (GPT-6.1 Sol when this codex lists it) / the rest / Other…
+    const rec = options.recommended_model;
     const def = options.default_model ? ` (${options.default_model})` : "";
+    const recInfo = options.models.find((m) => m.slug === rec);
+    const rest = options.models.filter((m) => m.slug !== rec);
     modelSel.innerHTML =
-      `<option value="">Codex default${esc(def)}</option>` +
-      options.models.map((m) => `<option value="${esc(m.slug)}">${esc(m.name)} — ${esc(m.slug)}</option>`).join("") +
-      `<option value="${CUSTOM}">Custom…</option>`;
-    buildEffortSelect();
+      (recInfo ? `<option value="${esc(rec)}">${esc(recInfo.name)} — recommended</option>` : "") +
+      `<option value="">Use Codex default${esc(def)}</option>` +
+      rest.map((m) => `<option value="${esc(m.slug)}">${esc(m.name)} — ${esc(m.slug)}</option>`).join("") +
+      `<option value="${CUSTOM}">Other…</option>`;
+    modelSel.value = recInfo ? rec : "";
+    buildEffortSelect(true);
   }
 
-  function buildEffortSelect() {
+  function currentModelInfo() {
     const slug = modelSel.value || options.default_model;
-    const info = options.models.find((m) => m.slug === slug);
-    const efforts = info && info.efforts.length ? info.efforts : ["low", "medium", "high"];
-    const dflt = !modelSel.value && options.default_effort ? options.default_effort : info ? info.default_effort : "";
-    const prev = effortSel.value;
-    effortSel.innerHTML = `<option value="default">default${dflt ? " (" + esc(dflt) + ")" : ""}</option>` +
-      efforts.map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join("");
-    if ([...effortSel.options].some((o) => o.value === prev)) effortSel.value = prev;
-    $("#model-custom").hidden = modelSel.value !== CUSTOM;
+    return options.models.find((m) => m.slug === slug);
   }
-  modelSel.addEventListener("change", buildEffortSelect);
+
+  function buildEffortSelect(reset) {
+    // Only the efforts this model supports are offered. Default Low (the model's own default when it has no "low").
+    const info = currentModelInfo();
+    const efforts = info && info.efforts.length ? info.efforts : FALLBACK_EFFORTS;
+    const prev = reset ? "" : effortSel.value;
+    const dflt = !modelSel.value && options.default_effort ? options.default_effort : info ? info.default_effort : "";
+    effortSel.innerHTML = `<option value="default">Auto${dflt ? " (Codex default: " + esc(effortLabel(dflt)) + ")" : ""}</option>` +
+      efforts.map((e) => `<option value="${esc(e)}">${esc(effortLabel(e))}</option>`).join("");
+    const wanted = [...effortSel.options].some((o) => o.value === prev) ? prev : efforts.includes("low") ? "low" : "default";
+    effortSel.value = wanted;
+    $("#model-custom").hidden = modelSel.value !== CUSTOM;
+    buildTierSelect();
+    showNotes();
+  }
+
+  function buildTierSelect() {
+    // Standard is the default and always possible; Fast (or whatever else the model offers) only if listed.
+    const info = currentModelInfo();
+    const tiers = info ? info.service_tiers : [];
+    const prev = tierSel.value;
+    tierSel.innerHTML = `<option value="default">Standard</option>` +
+      tiers.map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("");
+    tierSel.value = [...tierSel.options].some((o) => o.value === prev) ? prev : "default";
+  }
+
+  function showNotes() {
+    $("#ultra-note").hidden = effortSel.value !== "ultra";
+    $("#fast-note").hidden = tierSel.value === "default";
+  }
+  modelSel.addEventListener("change", () => buildEffortSelect(false));
+  effortSel.addEventListener("change", showNotes);
+  tierSel.addEventListener("change", showNotes);
 
   function selectedModel() {
     return modelSel.value === CUSTOM ? f.model_custom.value.trim() : modelSel.value;
@@ -158,6 +281,7 @@ function initDashboard() {
     let r = null;
     try { r = await api("GET", `/api/refs?repository=${encodeURIComponent(repo)}`); } catch (_) {}
     if (repo !== f.repository.value.trim()) return; // the field changed while we were waiting
+    showRepoAgents();
     const opt = (v, label) => `<option value="${esc(v)}">${esc(label)}</option>`;
     const group = (title, items) => items.length ? `<optgroup label="${esc(title)}">${items.join("")}</optgroup>` : "";
     if (!r) {
@@ -176,6 +300,21 @@ function initDashboard() {
     $("#base-custom").hidden = baseSel.value !== CUSTOM;
   }
   baseSel.addEventListener("change", () => { $("#base-custom").hidden = baseSel.value !== CUSTOM; });
+
+  async function showRepoAgents() {
+    const repo = f.repository.value.trim();
+    const line = $("#repo-agents-line");
+    if (!repo) { line.hidden = true; return; }
+    const info = await repoInfo(repo);
+    if (repo !== f.repository.value.trim()) return;
+    line.hidden = !info;
+    if (info) {
+      const a = info.agents_md;
+      line.innerHTML = `Git: ${esc(info.git.label)} &nbsp; AGENTS.md: <b>${a.found ? "Found" : "Not found"}</b>` +
+        (a.nested.length ? ` (+${a.nested.length} nested)` : "") +
+        ` &nbsp; <a href="/agents?repository=${encodeURIComponent(repo)}" target="_blank">${a.found ? "edit" : "create"}</a>`;
+    }
+  }
 
   // ----- recent repositories -----
 
@@ -274,6 +413,14 @@ function initDashboard() {
         model: selectedModel(),
         reasoning_effort: effortSel.value,
         auto_approval: f.auto_approval.checked,
+        service_tier: tierSel.value,
+        model_verbosity: f.model_verbosity.value,
+        web_search: f.web_search.checked,
+        sandbox: f.sandbox.value,
+        adaptive_reasoning: f.adaptive_reasoning.checked,
+        context_guard: f.context_guard.checked,
+        writable_dirs: f.writable_dirs.value,
+        feature_flags: f.feature_flags.value,
       });
       f.prompt.value = "";
       f.name.value = "";
@@ -296,8 +443,21 @@ function initDashboard() {
   form.addEventListener("submit", (ev) => { ev.preventDefault(); submitTask(false); });
   $("#run-more-btn").addEventListener("click", () => submitTask(true));
 
+  async function loadOptions() {
+    try {
+      options = await api("GET", "/api/options");
+      $("#default-model").textContent = options.recommended_model ? modelName(options.recommended_model) : (options.default_model || "Codex default");
+      $("#backend-note").textContent = options.backend === "app-server" ? "via codex app-server" : "legacy codex exec backend";
+    } catch (_) {}
+  }
+
+  loadOptions().then(() => { renderTasks(); });
   refresh();
   setInterval(refresh, 2000);
+  refreshLimits();
+  setInterval(refreshLimits, 15000);
+  setTimeout(renderRepoBar, 300);
+  setInterval(() => { delete repoInfoCache[filterEl.dataset.want]; renderRepoBar(); }, 20000);
 }
 
 // ---------------- task detail ----------------
@@ -330,14 +490,18 @@ function initTask() {
     $("#prompt").textContent = t.prompt;
     $("#git-branch").textContent = t.branch;
     const rows = [
-      ["Status", t.status], ["Repository", t.repository],
+      ["Status", statusText(t.status)], ["Repository", t.repository],
       ["Branch", t.branch + (t.branch_deleted ? " (deleted)" : "")], ["Worktree", t.worktree + (t.worktree_removed ? " (removed)" : "")],
-      ["Base ref", `${t.base_ref} (${t.base_sha.slice(0, 10)})`], ["Model", t.model || "default"],
-      ["Reasoning effort", t.reasoning_effort], ["Auto approval", t.auto_approval ? "on (--approve-for-me)" : "off"],
+      ["Base ref", `${t.base_ref} (${t.base_sha.slice(0, 10)})`], ["Model", t.effective_model || t.model || "default"],
+      ["Reasoning", effortLabel(t.reasoning_effort)], ["Speed", t.service_tier === "default" ? "Standard" : t.service_tier],
+      ["Output verbosity", t.model_verbosity], ["Web search", t.web_search_enabled ? "on" : "off"],
+      ["Auto approval", t.auto_approval ? "on (--approve-for-me)" : "off"], ["Sandbox", t.sandbox],
+      ["Adaptive reasoning", t.adaptive_reasoning ? "on (suggestions only)" : "off"], ["Context guard", t.context_guard ? "on" : "off"],
       ["Started at", dt(t.started_at)], ["Finished at", dt(t.finished_at)],
-      ["PID", t.pid ?? "-"], ["Exit code", t.exit_code ?? "-"],
-      ["Codex session", t.codex_thread_id || "-"], ["Last turn at", dt(t.last_turn_at)],
+      ["Backend", t.backend], ["Exit code", t.exit_code ?? "-"],
+      ["Codex thread", t.codex_thread_id || "-"], ["Last turn at", dt(t.last_turn_at)],
     ];
+    if (t.status_detail) rows.push(["Detail", t.status_detail]);
     $("#meta").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
 
     if (!active) stopping = false;
@@ -349,17 +513,76 @@ function initTask() {
     $("#push-btn").hidden = !canGit;
     $("#del-wt-btn").hidden = active || t.worktree_removed;
     $("#del-branch-btn").hidden = !(t.worktree_removed && !t.branch_deleted);
+    $("#agents-btn").hidden = t.worktree_removed;
 
-    // Additional instruction: Send resumes the session, Start New Session is the explicit alternative.
-    const canSend = !active && !t.worktree_removed;
-    $("#send-btn").disabled = !canSend || !t.codex_thread_id || sending;
-    $("#new-session-btn").disabled = !canSend || sending;
-    $("#instruction").disabled = !canSend;
-    $("#session-id").textContent = t.codex_thread_id ? `session ${t.codex_thread_id}` : "";
+    // Additional instruction. Idle: Send resumes the thread. Running (app-server): Send steers the running turn.
+    const idle = !active && !t.worktree_removed;
+    const steerable = active && t.status === "running" && t.backend === "app-server" && !t.worktree_removed;
+    $("#send-btn").textContent = steerable ? "Send to running turn" : "Send";
+    $("#send-btn").disabled = sending || !(steerable || (idle && t.codex_thread_id));
+    $("#new-session-btn").disabled = !idle || sending;
+    $("#instruction").disabled = !(idle || steerable);
+    $("#session-id").textContent = t.codex_thread_id ? `thread ${t.codex_thread_id}` : "";
     $("#instruction-hint").textContent =
-      active ? "Task is running: send the next instruction when it has finished." :
+      active && !steerable ? (t.backend === "app-server" ? "The turn is starting: you can add an instruction in a moment." :
+                                                          "Task is running: send the next instruction when it has finished (the exec backend cannot add to a running turn).") :
       t.worktree_removed ? "The worktree was deleted." :
-      !t.codex_thread_id ? "No Codex session id was recorded for this task: use Start New Session." : "";
+      !t.codex_thread_id ? "No Codex thread was recorded for this task: use Start New Session." : "";
+
+    // Retry with more reasoning: only ever on click. The suggested step is highlighted after a failed turn.
+    const ladder = ["low", "medium", "high"];
+    // "default" (Auto) is below both steps; xhigh / max / ultra are above them: never offer a step down.
+    const at = ladder.includes(t.reasoning_effort) ? ladder.indexOf(t.reasoning_effort) : t.reasoning_effort === "default" ? -1 : 99;
+    const canRetry = idle && t.codex_thread_id && t.adaptive_reasoning !== 0 && !sending;
+    for (const [id, effort, rank] of [["#retry-medium-btn", "medium", 1], ["#retry-high-btn", "high", 2]]) {
+      const el = $(id);
+      el.hidden = !(canRetry && at < rank);
+      el.classList.toggle("primary", !!t.retry_suggestion && t.retry_suggestion.effort === effort);
+    }
+    $("#retry-hint").hidden = $("#retry-medium-btn").hidden && $("#retry-high-btn").hidden;
+    $("#retry-hint").textContent = t.retry_suggestion
+      ? `The last turn failed. Retry with ${effortLabel(t.retry_suggestion.effort)} sends the instruction below (or the last one) again in the same thread with that effort.`
+      : "Retry with … sends the instruction below (or the last one) again in the same thread with more reasoning effort.";
+
+    // Quota
+    $("#quota-banner").hidden = t.status !== "waiting-for-quota";
+    $("#quota-detail").textContent = t.status_detail ? `(${t.status_detail})` : "";
+    $("#quota-retry-btn").disabled = sending;
+
+    // Context guard (warning only) and manual compaction
+    const ctx = t.context || {};
+    $("#context-guard").hidden = !ctx.warn;
+    if (ctx.warn) $("#guard-title").textContent = `Context usage: ${Math.round(ctx.percent)}%`;
+    const canCompact = idle && t.codex_thread_id && t.backend === "app-server" && !sending;
+    $("#compact-btn").hidden = !(t.backend === "app-server" && t.codex_thread_id);
+    document.querySelectorAll(".compact-btn").forEach((b) => (b.disabled = !canCompact));
+    renderContext(t);
+    renderObserved(t);
+  }
+
+  function renderContext(t) {
+    const c = t.context || {};
+    const known = c.window != null || c.tokens != null;
+    $("#context-box").hidden = !known && !t.codex_thread_id;
+    if ($("#context-box").hidden) return;
+    $("#context-dl").innerHTML =
+      `<dt>Current</dt><dd>${c.tokens == null ? "unknown" : esc(kfmt(c.tokens))}</dd>` +
+      `<dt>Model window</dt><dd>${c.window == null ? "unknown" : esc(kfmt(c.window))}</dd>`;
+    const bar_ = $("#context-bar");
+    bar_.className = "bar " + (c.warn ? "warm" : "ok");
+    bar_.firstElementChild.style.width = (c.percent == null ? 0 : Math.min(100, c.percent)) + "%";
+    $("#context-note").textContent =
+      c.tokens == null ? "Measured from the next turn (Codex reports the context size with each model request)." :
+      c.percent == null ? "" : `${c.percent.toFixed(0)}% of the model window`;
+  }
+
+  function renderObserved(t) {
+    const o = t.observed_quota;
+    $("#observed-box").hidden = !o;
+    if (!o) return;
+    const row = (label, pair) => pair ? `<dt>${label}</dt><dd>${Math.round(pair[0])}% → ${Math.round(pair[1])}%</dd>` : "";
+    $("#observed-dl").innerHTML = row("5 hour", o.five_hour) + row("Weekly", o.weekly);
+    $("#observed-note").textContent = o.note;
   }
 
   function renderUsage(u) {
@@ -367,17 +590,18 @@ function initTask() {
     const rows = l ? [
       ["Input", num(l.input_tokens)], ["Cached", num(l.cached_input_tokens)],
       ["Uncached", num(l.uncached_input_tokens)], ["Cache hit", pct(l.cache_hit_rate)],
-      ...(l.cache_write_input_tokens != null ? [["Cache write", num(l.cache_write_input_tokens)]] : []),
       ["Output", num(l.output_tokens)],
       ...(l.reasoning_output_tokens != null ? [["Reasoning", num(l.reasoning_output_tokens)]] : []),
+      ...(l.cache_write_input_tokens ? [["Cache write", num(l.cache_write_input_tokens)]] : []),
     ] : [];
     $("#latest-usage").innerHTML = l
-      ? `<div class="muted">Latest usage (turn ${l.turn})</div><dl class="usage">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
+      ? `<div class="muted">Latest turn (${l.turn})</div><dl class="usage">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
       : "no completed turn yet";
     $("#turns").hidden = !u.turns.length;
     $("#turns-body").innerHTML = u.turns.map((r) =>
-      `<tr><td>${r.turn}</td><td>${r.session}</td><td>${num(r.input_tokens)}</td><td>${num(r.cached_input_tokens)}</td>` +
-      `<td>${esc(pct(r.cache_hit_rate))}</td><td>${num(r.output_tokens)}</td></tr>`).join("");
+      `<tr><td>${r.turn}${r.kind === "compact" ? " (compact)" : ""}${r.status !== "completed" ? ` <span class="muted">${esc(r.status)}</span>` : ""}</td><td>${r.session}</td>` +
+      `<td>${num(r.input_tokens)}</td><td>${num(r.cached_input_tokens)}</td>` +
+      `<td>${esc(pct(r.cache_hit_rate))}</td><td>${num(r.output_tokens)}</td><td>${num(r.reasoning_output_tokens)}</td></tr>`).join("");
   }
 
   async function refreshUsage() {
@@ -390,7 +614,7 @@ function initTask() {
     for (const e of entries) {
       const div = document.createElement("div");
       const kind = e.stream === "stdout" ? (e.type === "raw" ? "raw" : "") : e.stream;
-      div.className = "entry " + kind + (e.type.endsWith("/agent_message") ? " agent_message" : "") + (e.event ? " has-event" : "");
+      div.className = "entry " + kind + (/\/(agent_message|agentMessage)$/.test(e.type) ? " agent_message" : "") + (e.event ? " has-event" : "");
       div.innerHTML = `<span class="ts">${esc(hms(e.ts))}</span><span class="type" title="${esc(e.type)}">${esc(e.type)}</span><span class="msg">${esc(e.message)}</span>`;
       if (e.event) {
         div.querySelector(".type").addEventListener("click", () => {
@@ -506,15 +730,18 @@ function initTask() {
     return "branch deleted";
   }));
 
-  async function sendInstruction(path, label, confirmText) {
-    const prompt = $("#instruction").value;
+  async function sendInstruction({ path = "messages", label = "Send", confirmText = "", effort = null, fallbackToLast = false }) {
+    let prompt = $("#instruction").value;
+    if (!prompt.trim() && fallbackToLast) prompt = task.last_prompt || "";
     if (!prompt.trim()) { setMsg("Write an instruction first.", true); return; }
     if (confirmText && !confirm(confirmText)) return;
     sending = true;
     renderTask();
     try {
       await action(label, async () => {
-        await api("POST", `/api/tasks/${id}/${path}`, { prompt });
+        const body = { prompt };
+        if (effort) body.reasoning_effort = effort;
+        await api("POST", `/api/tasks/${id}/${path}`, body);
         $("#instruction").value = "";
         return label + ": started";
       });
@@ -523,9 +750,21 @@ function initTask() {
       renderTask();
     }
   }
-  $("#send-btn").addEventListener("click", () => sendInstruction("messages", "Send"));
-  $("#new-session-btn").addEventListener("click", () => sendInstruction("new-session", "Start New Session",
-    "Start a NEW Codex session in this worktree?\n\nThe conversation so far is not carried over and the previous session's cached input is not reused."));
+  $("#send-btn").addEventListener("click", () => sendInstruction({ label: ACTIVE.includes(task.status) ? "Send to running turn" : "Send" }));
+  $("#retry-medium-btn").addEventListener("click", () => sendInstruction({ label: "Retry with Medium", effort: "medium", fallbackToLast: true }));
+  $("#retry-high-btn").addEventListener("click", () => sendInstruction({ label: "Retry with High", effort: "high", fallbackToLast: true }));
+  $("#new-session-btn").addEventListener("click", () => sendInstruction({ path: "new-session", label: "Start New Session",
+    confirmText: "Start a NEW Codex thread in this worktree?\n\nThe conversation so far is not carried over and the previous thread's cached input is not reused." }));
+  $("#quota-retry-btn").addEventListener("click", () => {
+    // No thread yet (the first turn never ran): a plain first run. Otherwise the same thread continues.
+    $("#instruction").value = task.last_prompt || "";
+    sendInstruction({ path: task.codex_thread_id ? "messages" : "new-session", label: "Retry" });
+  });
+  document.querySelectorAll(".compact-btn").forEach((b) => b.addEventListener("click", () => {
+    if (!confirm("Compact this thread?\n\nCodex summarizes the older context to shrink it. The task, worktree, branch and thread stay the same.\n" +
+                 "Compaction itself uses some of your included usage.")) return;
+    action("Compact", async () => { await api("POST", `/api/tasks/${id}/compact`); return "Compact: started"; });
+  }));
 
   let lastGit = 0;
   let lastUsage = 0;
@@ -558,6 +797,145 @@ function initTask() {
   })();
 }
 
+// ---------------- AGENTS.md editor ----------------
+
+function initAgents() {
+  const scope = document.body.dataset.scope;            // "repository" | "task"
+  const repository = document.body.dataset.repository;
+  const taskId = document.body.dataset.taskId;
+  const text = $("#agents-text");
+  let current = { path: "AGENTS.md", sha256: "", exists: false, content: "" };
+
+  const base = () => (scope === "task" ? `/api/tasks/${taskId}/agents-md` : "/api/agents-md");
+  const query = (path) => (scope === "task" ? `?path=${encodeURIComponent(path)}` : `?repository=${encodeURIComponent(repository)}&path=${encodeURIComponent(path)}`);
+  const dirty = () => text.value !== current.content;
+
+  function msg(textContent, kind) {
+    const el = $("#agents-msg");
+    el.textContent = textContent || "";
+    el.className = kind || "muted";
+    el.hidden = !textContent;
+  }
+  function updateGutter() {
+    const n = text.value.split("\n").length;
+    $("#gutter").textContent = Array.from({ length: n }, (_, i) => i + 1).join("\n");
+    $("#gutter").scrollTop = text.scrollTop;
+    $("#dirty-flag").textContent = dirty() ? "● unsaved changes" : "";
+  }
+
+  function renderGit(g) {
+    $("#agents-git").hidden = false;
+    const label = { untracked: "Untracked", modified: "Modified", added: "Added", deleted: "Deleted", clean: "Clean (no changes)",
+                    missing: "Does not exist", ignored: "Ignored by git", conflict: "Conflict" }[g.state] || g.state;
+    $("#git-state").textContent = (g.short ? g.short + "\n" : "") + label;
+    $("#agents-diff").hidden = true;
+  }
+
+  async function load(path) {
+    msg("");
+    try {
+      const r = await api("GET", base() + query(path));
+      current = { path: r.path, sha256: r.sha256, exists: r.exists, content: r.content };
+      $("#agents-root").textContent = r.root;
+      const files = r.files.includes("AGENTS.md") || !r.exists ? r.files : ["AGENTS.md", ...r.files];
+      $("#file-pick-wrap").hidden = files.length < 2;
+      $("#file-pick").innerHTML = files.map((f) => `<option value="${esc(f)}" ${f === r.path ? "selected" : ""}>${esc(f)}</option>`).join("");
+      $("#agents-missing").hidden = r.exists;
+      $("#agents-editor").hidden = !r.exists;
+      if (r.exists) text.value = r.content;
+      $("#agents-missing p b").textContent = `${r.path} does not exist`;
+      $("#create-btn").textContent = `Create ${r.path}`;
+      renderGit(r.git);
+      updateGutter();
+    } catch (e) {
+      $("#agents-missing").hidden = $("#agents-editor").hidden = $("#agents-git").hidden = true;
+      msg(e.message, "error");
+    }
+  }
+
+  async function save() {
+    try {
+      const body = { content: text.value, path: current.path, expected_sha: current.sha256 };
+      if (scope === "repository") body.repository = repository;
+      const r = await api("PUT", base(), body);
+      msg(r.changed ? `Saved ${current.path}` : `No changes: ${current.path} was not written`, "ok");
+      current.sha256 = r.sha256;
+      current.exists = true;
+      current.content = text.value;
+      $("#agents-missing").hidden = true;
+      $("#agents-editor").hidden = false;
+      const g = await api("GET", base() + query(current.path));
+      renderGit(g.git);
+      updateGutter();
+    } catch (e) {
+      msg((e.code === "changed" ? "Not saved: " : "Save failed: ") + e.message, "error");
+    }
+  }
+
+  text.addEventListener("input", updateGutter);
+  text.addEventListener("scroll", () => { $("#gutter").scrollTop = text.scrollTop; });
+  text.addEventListener("keydown", (ev) => {
+    if (ev.key === "Tab" && !ev.shiftKey && !ev.ctrlKey && !ev.altKey) {
+      ev.preventDefault();
+      const { selectionStart: a, selectionEnd: b } = text;
+      text.setRangeText("\t", a, b, "end");
+      updateGutter();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+      ev.preventDefault();
+      if (!$("#agents-editor").hidden) save();
+    }
+  });
+  window.addEventListener("beforeunload", (ev) => { if (dirty()) { ev.preventDefault(); ev.returnValue = ""; } });
+
+  $("#save-btn").addEventListener("click", save);
+  $("#reload-btn").addEventListener("click", () => {
+    if (dirty() && !confirm("Discard your unsaved changes and reload the file from disk?")) return;
+    load(current.path);
+  });
+  $("#create-btn").addEventListener("click", () => {
+    current.sha256 = "";  // "I expect it to be absent": a file that appeared meanwhile is not overwritten
+    current.content = "";
+    $("#agents-missing").hidden = true;
+    $("#agents-editor").hidden = false;
+    text.value = "# Project instructions\n\n";
+    text.focus();
+    updateGutter();
+    msg("Not created yet: press Save to write the file.", "muted");
+  });
+  $("#file-pick").addEventListener("change", (ev) => {
+    if (dirty() && !confirm("Discard your unsaved changes?")) { ev.target.value = current.path; return; }
+    load(ev.target.value);
+  });
+  $("#diff-btn").addEventListener("click", async () => {
+    const pre = $("#agents-diff");
+    if (!pre.hidden) { pre.hidden = true; return; }
+    try {
+      const d = await api("GET", base() + "/diff" + query(current.path));
+      pre.innerHTML = d.diff ? colorDiffText(d.diff) : esc(d.state === "missing" ? "(file does not exist)" : "(no changes)");
+      pre.hidden = false;
+    } catch (e) {
+      msg(e.message, "error");
+    }
+  });
+
+  load("AGENTS.md");
+}
+
+function colorDiffText(text) {
+  return text.split("\n").map((l) => {
+    const e = esc(l);
+    if (l.startsWith("diff --git")) return `<span class="file">${e}</span>`;
+    if (l.startsWith("@@")) return `<span class="hunk">${e}</span>`;
+    if (l.startsWith("+") && !l.startsWith("+++")) return `<span class="add">${e}</span>`;
+    if (l.startsWith("-") && !l.startsWith("---")) return `<span class="del">${e}</span>`;
+    return e;
+  }).join("\n");
+}
+
 const page = document.body.dataset.page;
 if (page === "dashboard") initDashboard();
 else if (page === "task") initTask();
+else if (page === "agents") initAgents();

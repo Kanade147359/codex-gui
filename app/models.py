@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ACTIVE_STATUSES = frozenset({"queued", "starting", "running"})
-TERMINAL_STATUSES = frozenset({"completed", "failed", "stopped", "interrupted"})
+# "waiting-for-quota": Codex reported that the included usage is exhausted. Nothing is retried and nothing
+# falls back to another billing path; the user re-runs the instruction when the quota is available again.
+TERMINAL_STATUSES = frozenset({"completed", "failed", "stopped", "interrupted", "waiting-for-quota"})
 STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES
 
 # "interrupted" = the GUI went away while the task was active (see TaskManager.recover).
@@ -13,16 +15,24 @@ STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES
 # new session): one task keeps one worktree and, normally, one Codex thread across many turns.
 TRANSITIONS = {
     "queued": {"starting", "stopped", "failed", "interrupted"},
-    "starting": {"running", "stopped", "failed", "interrupted"},
-    "running": {"completed", "failed", "stopped", "interrupted"},
+    "starting": {"running", "stopped", "failed", "interrupted", "waiting-for-quota"},
+    "running": {"completed", "failed", "stopped", "interrupted", "waiting-for-quota"},
     "completed": {"queued"},
     "failed": {"queued"},
     "stopped": {"queued"},
     "interrupted": {"queued"},
+    "waiting-for-quota": {"queued"},
 }
 
 # The CLI decides which efforts a model supports (the UI offers those); we only keep the argv value sane.
 EFFORT_RE = re.compile(r"^[a-z]{1,16}$")
+# Codex's own ids ("default" = standard speed, "priority" = Fast): the catalog says which a model offers.
+SERVICE_TIER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+VERBOSITIES = ("low", "medium", "high")
+# danger-full-access is deliberately absent: the GUI never starts Codex without its sandbox.
+SANDBOXES = ("read-only", "workspace-write")
+# Tried in this order by "Retry with ..."; xhigh / max / ultra are only ever used when the user picks them.
+ESCALATION = ("low", "medium", "high")
 
 
 class InvalidTransition(ValueError):

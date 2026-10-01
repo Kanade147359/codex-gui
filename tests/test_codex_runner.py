@@ -6,18 +6,28 @@ from app.logstore import TaskLog, read_log
 
 def task(**over):
     t = dict(worktree="/wt/x", prompt="do it -- --dangerously-bypass-approvals-and-sandbox", model="",
-             reasoning_effort="default", auto_approval=1)
+             reasoning_effort="default", auto_approval=1, service_tier="default", model_verbosity="low",
+             web_search_enabled=0, sandbox="workspace-write", writable_dirs="", feature_flags="")
     t.update(over)
     return t
 
 
-def test_default_command():
+def configs(cmd):
+    """The `-c key=value` pairs of a command, as a dict."""
+    return {cmd[i + 1].split("=", 1)[0]: cmd[i + 1].split("=", 1)[1] for i, a in enumerate(cmd) if a == "-c"}
+
+
+def test_default_command_is_standard_low_verbosity_no_web_search():
     cmd = CodexRunner("codex").build_command(task())
-    assert cmd == ["codex", "exec", "--json", "-C", "/wt/x", "--approve-for-me", "-"]
+    assert cmd[:6] == ["codex", "exec", "--json", "-C", "/wt/x", "--approve-for-me"]
+    assert cmd[-1] == "-"
+    assert configs(cmd) == {"service_tier": '"default"', "model_verbosity": '"low"', "web_search": '"disabled"'}
+    assert "-s" not in cmd and "--model" not in cmd  # the sandbox comes with --approve-for-me; model: Codex default
 
 
 def test_prompt_never_in_argv_and_no_dangerous_flag():
-    for t in (task(), task(auto_approval=0), task(model="m", reasoning_effort="high")):
+    for t in (task(), task(auto_approval=0), task(model="m", reasoning_effort="high"),
+              task(sandbox="read-only"), task(web_search_enabled=1)):
         cmd = CodexRunner().build_command(t)
         assert not any("dangerously" in a for a in cmd)
         assert t["prompt"] not in cmd
@@ -39,16 +49,46 @@ def test_never_passes_daemon_flags():
         assert not any("daemon" in a for a in CodexRunner().build_command(task(), resume))
 
 
-def test_auto_approval_off_omits_flag():
-    assert "--approve-for-me" not in CodexRunner().build_command(task(auto_approval=0))
+def test_auto_approval_off_omits_flag_but_keeps_the_sandbox():
+    cmd = CodexRunner().build_command(task(auto_approval=0))
+    assert "--approve-for-me" not in cmd
+    assert cmd[cmd.index("-s") + 1] == "workspace-write"
+    ro = CodexRunner().build_command(task(sandbox="read-only"))  # a read-only task is not widened by auto approval
+    assert "--approve-for-me" not in ro and ro[ro.index("-s") + 1] == "read-only"
 
 
 def test_model_and_effort():
     cmd = CodexRunner().build_command(task(model="gpt-x", reasoning_effort="high"))
     assert cmd[cmd.index("--model") + 1] == "gpt-x"
-    assert cmd[cmd.index("-c") + 1] == 'model_reasoning_effort="high"'
-    plain = CodexRunner().build_command(task())
-    assert "--model" not in plain and "-c" not in plain  # "default" passes nothing
+    assert configs(cmd)["model_reasoning_effort"] == '"high"'
+    assert "model_reasoning_effort" not in configs(CodexRunner().build_command(task()))  # "default" passes nothing
+
+
+def test_fast_tier_and_web_search_only_when_asked():
+    cmd = CodexRunner().build_command(task(service_tier="priority", web_search_enabled=1, model_verbosity="high"))
+    assert configs(cmd) == {"service_tier": '"priority"', "model_verbosity": '"high"', "web_search": '"live"'}
+
+
+def test_writable_dirs_and_feature_flags():
+    cfg = configs(CodexRunner().build_command(task(writable_dirs="/a\n/b c", feature_flags="foo, bar")))
+    assert cfg["sandbox_workspace_write.writable_roots"] == '["/a", "/b c"]'
+    assert cfg["features.foo"] == "true" and cfg["features.bar"] == "true"
+
+
+def test_common_instructions_go_to_a_new_session_only():
+    runner = CodexRunner()
+    runner.instructions = "Avoid dumping entire large files."
+    assert configs(runner.build_command(task()))["developer_instructions"] == '"Avoid dumping entire large files."'
+    assert "developer_instructions" not in configs(runner.build_command(task(), "tid"))  # the thread already has them
+
+
+def test_api_keys_are_not_passed_to_codex(monkeypatch):
+    from app.appserver import subscription_env
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("CODEX_API_KEY", "sk-test2")
+    env = subscription_env(True)
+    assert "OPENAI_API_KEY" not in env and "CODEX_API_KEY" not in env
+    assert subscription_env(False)["OPENAI_API_KEY"] == "sk-test"  # only an explicit opt-out keeps them
 
 
 def test_parse_agent_message():

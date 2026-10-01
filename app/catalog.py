@@ -1,6 +1,7 @@
 """Model choices for the New Task form, taken from `codex debug models` (the CLI is the source of truth)."""
 import asyncio
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -8,6 +9,9 @@ from typing import Optional
 
 CACHE_SECONDS = 600
 CONFIG_PATH = Path("~/.codex/config.toml")
+# The GUI's recommended model. It is used only if this codex lists it (`codex debug models`); otherwise the New Task
+# form falls back to "Codex default". CODEX_GUI_PREFERRED_MODEL overrides it, an empty value turns the preference off.
+PREFERRED_MODEL = "gpt-6.1-sol"
 
 
 def parse_catalog(data: dict) -> list[dict]:
@@ -23,6 +27,12 @@ def parse_catalog(data: dict) -> list[dict]:
             "default_effort": m.get("default_reasoning_level") or "",
             "efforts": efforts,
             "priority": m.get("priority", 999),
+            # Fast / priority tiers the model offers (Standard = "default" is always possible).
+            "service_tiers": [{"id": t["id"], "name": t.get("name") or t["id"], "description": t.get("description") or ""}
+                              for t in m.get("service_tiers", []) if isinstance(t, dict) and t.get("id")],
+            "supports_verbosity": bool(m.get("support_verbosity")),
+            "default_verbosity": m.get("default_verbosity") or "",
+            "context_window": m.get("context_window") if isinstance(m.get("context_window"), int) else None,
         })
     models.sort(key=lambda m: m["priority"])
     return models
@@ -65,5 +75,8 @@ class ModelCatalog:
             models = parse_catalog(json.loads(out))
         except (OSError, ValueError, asyncio.TimeoutError) as e:
             error = f"could not read model list from codex: {e}"
+        preferred = os.environ.get("CODEX_GUI_PREFERRED_MODEL", PREFERRED_MODEL)
         return {"models": models, "default_model": config_value("model") or "",
-                "default_effort": config_value("model_reasoning_effort") or "", "error": error}
+                "default_effort": config_value("model_reasoning_effort") or "",
+                "recommended_model": preferred if any(m["slug"] == preferred for m in models) else "",
+                "error": error}

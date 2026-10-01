@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from .appserver import AppServerClient
 from .catalog import ModelCatalog
 from .codex_runner import CodexRunner
 from .config import Settings
@@ -18,7 +19,8 @@ from .task_manager import TaskManager
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
-def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner] = None) -> FastAPI:
+def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner] = None,
+               app_server: Optional[AppServerClient] = None) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.ensure_dirs()
     db = Database(settings.db_path)
@@ -40,7 +42,7 @@ def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner
 
     app = FastAPI(title="Codex GUI", lifespan=lifespan)
     app.state.settings = settings
-    app.state.manager = TaskManager(settings, db, runner)
+    app.state.manager = TaskManager(settings, db, runner, app_server)
     app.state.catalog = ModelCatalog(settings.codex_bin)
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

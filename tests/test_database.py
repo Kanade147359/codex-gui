@@ -81,6 +81,7 @@ def test_codex_thread_columns(db):
 def test_old_database_is_migrated(tmp_path):
     import sqlite3
     from app.database import Database
+    from app.database import Database
     path = tmp_path / "old.db"
     old = sqlite3.connect(str(path))
     old.executescript("""
@@ -125,3 +126,50 @@ def test_turns_roundtrip_and_latest(db):
         turn(db, "t1", 2)  # (task, turn) is unique
     with pytest.raises(ValueError):
         db.add_turn(task_id="t1", bogus=1)
+
+
+def test_old_database_gets_the_new_columns_and_keeps_its_data(tmp_path):
+    import sqlite3
+    from app.database import Database
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE tasks (id TEXT PRIMARY KEY, name TEXT NOT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL,
+            branch TEXT NOT NULL, base_ref TEXT NOT NULL, base_sha TEXT NOT NULL, prompt TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT '', reasoning_effort TEXT NOT NULL DEFAULT 'default',
+            auto_approval INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL, pid INTEGER, exit_code INTEGER,
+            git_summary TEXT NOT NULL DEFAULT '', worktree_removed INTEGER NOT NULL DEFAULT 0,
+            branch_deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+            codex_thread_id TEXT, last_turn_at TEXT);
+        CREATE TABLE turns (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, turn INTEGER NOT NULL,
+            session INTEGER NOT NULL, thread_id TEXT NOT NULL, created_at TEXT NOT NULL, input_tokens INTEGER NOT NULL,
+            cached_input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_write_input_tokens INTEGER,
+            reasoning_output_tokens INTEGER, total_json TEXT NOT NULL, UNIQUE (task_id, turn));
+        INSERT INTO tasks VALUES ('a1','old','/r','/w','b','main','sha','p','m','high',1,'completed',NULL,0,'',0,0,'t0',NULL,NULL,'thr-1',NULL);
+        INSERT INTO turns (task_id, turn, session, thread_id, created_at, input_tokens, cached_input_tokens, output_tokens, total_json)
+            VALUES ('a1', 1, 1, 'thr-1', 't1', 10, 5, 2, '{}');
+    """)
+    conn.commit()
+    conn.close()
+    d = Database(path)
+    t = d.get_task("a1")
+    assert t["name"] == "old" and t["codex_thread_id"] == "thr-1"
+    # the optimization defaults apply to old rows: Standard, low verbosity, no web search, sandboxed
+    assert (t["service_tier"], t["model_verbosity"], t["web_search_enabled"], t["sandbox"]) == ("default", "low", 0, "workspace-write")
+    assert (t["adaptive_reasoning"], t["context_guard"], t["latest_input_tokens"], t["five_hour_used_before"]) == (1, 1, None, None)
+    old_turn = d.list_turns("a1")[0]
+    assert old_turn["kind"] == "turn" and old_turn["status"] == "completed" and old_turn["cache_hit_rate"] is None
+    d.close()
+    Database(path).close()  # opening it again does not try to add the columns twice
+
+
+def test_rate_limit_history_roundtrip(db):
+    db.add_rate_limits(ts="t1", reason="turn_start", task_id="a", primary_used_percent=10, primary_window_mins=300,
+                       secondary_used_percent=3, secondary_window_mins=10080, ordinary_usage_allowed=1)
+    db.add_rate_limits(ts="t2", reason="update", primary_used_percent=11)
+    rows = db.list_rate_limits()
+    assert [r["ts"] for r in rows] == ["t2", "t1"]  # newest first
+    assert rows[1]["secondary_used_percent"] == 3 and rows[1]["task_id"] == "a"
+    assert [r["ts"] for r in db.list_rate_limits(task_id="a")] == ["t1"]
+    with pytest.raises(ValueError):
+        db.add_rate_limits(ts="t", reason="r", bogus=1)

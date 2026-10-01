@@ -8,16 +8,65 @@ import os
 import signal
 from typing import Optional
 
-from .ssh_agent import child_env
+from .appserver import subscription_env
 
 # One JSONL line from codex can contain a lot of command output.
 STREAM_LIMIT = 32 * 1024 * 1024
 MESSAGE_MAX_CHARS = 2000
 
 
+def task_config(task: dict) -> dict:
+    """The Codex config keys (dotted paths) a task pins, shared by both backends so they behave alike.
+
+    Everything here is fixed per task on purpose: changing model, effort, tier, sandbox, web search or tools inside a
+    task would change the prompt prefix and lower cache reuse. Auto-approval and the sandbox are not here: the
+    app-server takes them as parameters and `codex exec` as flags.
+    """
+    cfg = {
+        "model_verbosity": task["model_verbosity"],
+        "web_search": "live" if task["web_search_enabled"] else "disabled",
+    }
+    if task["reasoning_effort"] not in ("", "default"):
+        cfg["model_reasoning_effort"] = task["reasoning_effort"]
+    dirs = [d.strip() for d in (task.get("writable_dirs") or "").splitlines() if d.strip()]
+    if dirs:
+        cfg["sandbox_workspace_write.writable_roots"] = dirs
+    for flag in (task.get("feature_flags") or "").replace(",", " ").split():
+        cfg[f"features.{flag}"] = True
+    return cfg
+
+
+def nested(flat: dict) -> dict:
+    """{"a.b": 1} -> {"a": {"b": 1}} (the app-server takes config as an object, `codex -c` as dotted keys)."""
+    out: dict = {}
+    for key, value in flat.items():
+        node = out
+        *parents, leaf = key.split(".")
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[leaf] = value
+    return out
+
+
+def approval_params(task: dict) -> dict:
+    """approvalPolicy / approvalsReviewer / sandbox of thread/start|resume for a task.
+
+    Auto approval = `codex exec --approve-for-me`: requests go to the automatic reviewer inside the sandbox
+    ("on-request" + "auto_review"). Without it nothing may ask a human (this GUI has no prompt), so the policy is
+    "never": the sandbox still applies and commands that need an escalation simply fail.
+    The sandbox is always one of the two safe modes; danger-full-access is never requested.
+    """
+    if task["auto_approval"]:
+        return {"approvalPolicy": "on-request", "approvalsReviewer": "auto_review", "sandbox": task["sandbox"]}
+    return {"approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": task["sandbox"]}
+
+
 class CodexRunner:
-    def __init__(self, codex_bin: str = "codex"):
+    def __init__(self, codex_bin: str = "codex", subscription_only: bool = True):
         self.codex_bin = codex_bin
+        self.subscription_only = subscription_only
+        # Common working instructions, given to a NEW session only (a resumed one already has them).
+        self.instructions = ""
 
     def build_command(self, task: dict, resume_thread: Optional[str] = None) -> list[str]:
         """argv for one turn of a task. The prompt is NOT in argv: it is written to stdin ("-").
@@ -29,13 +78,18 @@ class CodexRunner:
         No daemon flag is passed: Codex decides how it reaches its shared app-server.
         """
         cmd = [self.codex_bin, "exec", "--json", "-C", task["worktree"]]
-        if task["auto_approval"]:
+        if task["auto_approval"] and task["sandbox"] == "workspace-write":
             # Automatic review inside the workspace-write sandbox. Never the dangerous bypass flag.
             cmd.append("--approve-for-me")
+        else:
+            cmd += ["-s", task["sandbox"]]
         if task["model"]:
             cmd += ["--model", task["model"]]
-        if task["reasoning_effort"] not in ("", "default"):
-            cmd += ["-c", f'model_reasoning_effort="{task["reasoning_effort"]}"']
+        config = {"service_tier": task["service_tier"], **task_config(task)}
+        if self.instructions and not resume_thread:
+            config["developer_instructions"] = self.instructions
+        for key, value in config.items():
+            cmd += ["-c", f"{key}={json.dumps(value)}"]  # a JSON scalar/list is valid TOML
         if resume_thread:
             cmd += ["resume", resume_thread]
         cmd.append("-")
@@ -46,7 +100,7 @@ class CodexRunner:
         return await asyncio.create_subprocess_exec(
             *self.build_command(task, resume_thread),
             cwd=task["worktree"],
-            env=child_env(),  # carries SSH_AUTH_SOCK; the agent is shared, never started per task
+            env=subscription_env(self.subscription_only),  # SSH_AUTH_SOCK, minus API keys; the agent is shared
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

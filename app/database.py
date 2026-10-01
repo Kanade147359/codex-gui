@@ -48,6 +48,25 @@ CREATE TABLE IF NOT EXISTS turns (
     total_json TEXT NOT NULL,
     UNIQUE (task_id, turn)
 );
+-- Rate-limit snapshots (from account/rateLimits/read and its push updates), so that usage can be analysed later.
+-- Display and analysis only: nothing reads this table to steer the number of tasks.
+CREATE TABLE IF NOT EXISTS rate_limit_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    task_id TEXT,
+    plan_type TEXT,
+    limit_id TEXT,
+    primary_used_percent REAL,
+    primary_window_mins INTEGER,
+    primary_resets_at INTEGER,
+    secondary_used_percent REAL,
+    secondary_window_mins INTEGER,
+    secondary_resets_at INTEGER,
+    ordinary_usage_allowed INTEGER,
+    reached_type TEXT,
+    available_resets INTEGER
+);
 CREATE TABLE IF NOT EXISTS recent_repos (
     path TEXT PRIMARY KEY,
     last_used TEXT NOT NULL
@@ -57,15 +76,53 @@ CREATE TABLE IF NOT EXISTS recent_repos (
 TASK_COLUMNS = (
     "id name repository worktree branch base_ref base_sha prompt model reasoning_effort "
     "auto_approval status pid exit_code git_summary worktree_removed branch_deleted "
-    "created_at started_at finished_at codex_thread_id last_turn_at"
+    "created_at started_at finished_at codex_thread_id last_turn_at "
+    "service_tier model_verbosity web_search_enabled sandbox adaptive_reasoning context_guard writable_dirs feature_flags "
+    "latest_input_tokens latest_cached_input_tokens latest_output_tokens context_tokens context_window "
+    "five_hour_used_before five_hour_used_after weekly_used_before weekly_used_after quota_overlap "
+    "last_prompt status_detail failure_source"
 ).split()
 
 # Columns added after the first release: (name, definition) applied to databases that lack them.
-TASK_MIGRATIONS = [("codex_thread_id", "TEXT"), ("last_turn_at", "TEXT")]
+# service_tier holds Codex's own id: "default" is Standard speed, "priority" is Fast.
+TASK_MIGRATIONS = [
+    ("codex_thread_id", "TEXT"), ("last_turn_at", "TEXT"),
+    ("service_tier", "TEXT NOT NULL DEFAULT 'default'"),
+    ("model_verbosity", "TEXT NOT NULL DEFAULT 'low'"),
+    ("web_search_enabled", "INTEGER NOT NULL DEFAULT 0"),
+    ("sandbox", "TEXT NOT NULL DEFAULT 'workspace-write'"),
+    ("adaptive_reasoning", "INTEGER NOT NULL DEFAULT 1"),
+    ("context_guard", "INTEGER NOT NULL DEFAULT 1"),
+    ("writable_dirs", "TEXT NOT NULL DEFAULT ''"),
+    ("feature_flags", "TEXT NOT NULL DEFAULT ''"),
+    ("latest_input_tokens", "INTEGER"), ("latest_cached_input_tokens", "INTEGER"), ("latest_output_tokens", "INTEGER"),
+    ("context_tokens", "INTEGER"), ("context_window", "INTEGER"),
+    ("five_hour_used_before", "REAL"), ("five_hour_used_after", "REAL"),
+    ("weekly_used_before", "REAL"), ("weekly_used_after", "REAL"),
+    ("quota_overlap", "INTEGER NOT NULL DEFAULT 0"),
+    ("last_prompt", "TEXT NOT NULL DEFAULT ''"),
+    ("status_detail", "TEXT NOT NULL DEFAULT ''"),
+    # "codex": the last turn ended as failed by Codex's own account (not quota); "gui": the GUI / app-server broke.
+    ("failure_source", "TEXT NOT NULL DEFAULT ''"),
+]
 
 TURN_COLUMNS = (
     "task_id turn session thread_id created_at input_tokens cached_input_tokens output_tokens "
-    "cache_write_input_tokens reasoning_output_tokens total_json"
+    "cache_write_input_tokens reasoning_output_tokens total_json "
+    "turn_id kind status model reasoning_effort started_at finished_at cache_hit_rate"
+).split()
+
+# kind: "turn" (an instruction) or "compact" (thread compaction, which also spends tokens).
+TURN_MIGRATIONS = [
+    ("turn_id", "TEXT"), ("kind", "TEXT NOT NULL DEFAULT 'turn'"), ("status", "TEXT NOT NULL DEFAULT 'completed'"),
+    ("model", "TEXT"), ("reasoning_effort", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
+    ("cache_hit_rate", "REAL"),
+]
+
+LIMIT_COLUMNS = (
+    "ts reason task_id plan_type limit_id primary_used_percent primary_window_mins primary_resets_at "
+    "secondary_used_percent secondary_window_mins secondary_resets_at ordinary_usage_allowed reached_type "
+    "available_resets"
 ).split()
 
 
@@ -79,10 +136,11 @@ class Database:
         self._migrate()
 
     def _migrate(self) -> None:
-        have = {r["name"] for r in self._conn.execute("PRAGMA table_info(tasks)")}
-        for name, definition in TASK_MIGRATIONS:
-            if name not in have:
-                self._execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+        for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS)):
+            have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+            for name, definition in migrations:
+                if name not in have:
+                    self._execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     def close(self) -> None:
         self._conn.close()
@@ -177,3 +235,23 @@ class Database:
                 "ON t.task_id = m.task_id AND t.turn = m.turn"
             ).fetchall()
         return {r["task_id"]: dict(r) for r in rows}
+
+    # ---------- rate-limit history ----------
+
+    def add_rate_limits(self, **fields) -> None:
+        unknown = set(fields) - set(LIMIT_COLUMNS)
+        if unknown or "ts" not in fields or "reason" not in fields:
+            raise ValueError(f"bad rate-limit fields: {sorted(unknown)}")
+        cols = [c for c in LIMIT_COLUMNS if c in fields]
+        self._execute(
+            f"INSERT INTO rate_limit_history ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+            [fields[c] for c in cols],
+        )
+
+    def list_rate_limits(self, limit: int = 200, task_id: Optional[str] = None) -> list[dict]:
+        """Newest first."""
+        where, params = ("WHERE task_id = ?", [task_id]) if task_id else ("", [])
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM rate_limit_history {where} ORDER BY id DESC LIMIT ?", [*params, limit]).fetchall()
+        return [dict(r) for r in rows]

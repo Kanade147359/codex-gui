@@ -9,6 +9,7 @@
     <h1 id="task-name">…</h1>
     <span id="task-status" class="status"></span>
     <span class="spacer"></span>
+    <a class="button" id="agents-btn" href="/tasks/{{ task_id }}/agents" title="AGENTS.md inside this task's worktree (not the repository's)">Edit Worktree AGENTS.md</a>
     <button id="stop-btn" class="danger" hidden>Stop</button>
     <button id="commit-btn" hidden>Commit</button>
     <button id="push-btn" hidden>Push</button>
@@ -20,25 +21,54 @@
   <details><summary>Prompt</summary><pre id="prompt" class="block"></pre></details>
 </section>
 
-<section>
-  <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
-  <textarea id="instruction" rows="4" placeholder="Next instruction for this task's Codex session"></textarea>
-  <div class="inline-actions">
-    <button id="send-btn" class="primary" title="Continue the existing Codex session (codex exec resume)">Send</button>
-    <button id="new-session-btn" title="Start a fresh Codex session in this worktree (the old session's cache is not reused)">Start New Session</button>
-    <span id="instruction-hint" class="muted"></span>
-  </div>
-  <p class="muted small">Send continues the same Codex session, so its prompt cache is reused. Model, reasoning effort and approval
-    mode are fixed for the task: changing them mid-session can lower cache reuse.</p>
+<section id="quota-banner" class="banner quota" hidden>
+  <b>Waiting for Codex quota.</b> <span id="quota-detail"></span>
+  Nothing is retried automatically and no other billing path is used. Run the instruction again when your included usage is available.
+  <div class="inline-actions"><button id="quota-retry-btn" class="primary">Retry last instruction</button></div>
+</section>
+
+<section id="context-guard" class="banner guard" hidden>
+  <b id="guard-title">Context usage</b>
+  <p>This thread has become large. Compaction may reduce repeated context processing.</p>
+  <div class="inline-actions"><button class="compact-btn">Compact</button></div>
 </section>
 
 <section>
-  <h2>Usage <span class="muted">(per turn, from <code>turn.completed</code>)</span></h2>
+  <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
+  <textarea id="instruction" rows="4" placeholder="Next instruction for this task's Codex thread"></textarea>
+  <div class="inline-actions">
+    <button id="send-btn" class="primary">Send</button>
+    <button id="retry-medium-btn" hidden>Retry with Medium</button>
+    <button id="retry-high-btn" hidden>Retry with High</button>
+    <button id="new-session-btn" title="Start a fresh Codex thread in this worktree (the old thread's cache is not reused)">Start New Session</button>
+    <button id="compact-btn" class="compact-btn" title="Compact this thread's context (thread/compact/start)" hidden>Compact Thread</button>
+    <span id="instruction-hint" class="muted"></span>
+  </div>
+  <p class="muted small" id="retry-hint" hidden></p>
+  <p class="muted small">Send continues the same Codex thread (its history stays inside Codex, so the prompt cache is reused); while a turn is running
+    it is added to that turn. Model, reasoning, speed, sandbox, approval and web search are fixed for the task: changing them mid-thread lowers cache reuse.
+    “Retry with …” changes the reasoning effort only when you click it.</p>
+</section>
+
+<section>
+  <h2>Token usage</h2>
   <div id="latest-usage" class="muted">no completed turn yet</div>
+  <div id="context-box" class="context" hidden>
+    <div class="ctx-title">Context</div>
+    <dl class="usage" id="context-dl"></dl>
+    <div class="bar" id="context-bar"><div class="fill"></div></div>
+    <p class="small muted" id="context-note"></p>
+  </div>
   <table class="usage" id="turns" hidden>
-    <thead><tr><th>TURN</th><th>SESSION</th><th>INPUT</th><th>CACHED</th><th>HIT</th><th>OUTPUT</th></tr></thead>
+    <thead><tr><th>TURN</th><th>SESSION</th><th>INPUT</th><th>CACHED</th><th>CACHE</th><th>OUTPUT</th><th>REASONING</th></tr></thead>
     <tbody id="turns-body"></tbody>
   </table>
+</section>
+
+<section id="observed-box" hidden>
+  <h2>Observed quota change <span class="muted">(latest turn)</span></h2>
+  <dl class="usage" id="observed-dl"></dl>
+  <p class="small muted" id="observed-note"></p>
 </section>
 
 <section>

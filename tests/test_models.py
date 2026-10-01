@@ -46,3 +46,18 @@ def test_allowed_transitions(old, new):
 ])
 def test_rejected_transitions(old, new):
     assert not can_transition(old, new)
+
+
+def test_waiting_for_quota_is_a_resting_status_that_can_be_run_again():
+    from app.models import ACTIVE_STATUSES, STATUSES, TERMINAL_STATUSES, can_transition
+    assert "waiting-for-quota" in STATUSES and "waiting-for-quota" in TERMINAL_STATUSES
+    assert "waiting-for-quota" not in ACTIVE_STATUSES  # not active: nothing is retried behind the user's back
+    assert can_transition("starting", "waiting-for-quota") and can_transition("running", "waiting-for-quota")
+    assert can_transition("waiting-for-quota", "queued") and not can_transition("waiting-for-quota", "running")
+    assert not can_transition("queued", "waiting-for-quota")
+
+
+def test_sandboxes_never_include_the_full_access_mode():
+    from app.models import ESCALATION, SANDBOXES
+    assert "danger-full-access" not in SANDBOXES and "workspace-write" in SANDBOXES
+    assert ESCALATION == ("low", "medium", "high")  # xhigh / max / ultra are explicit choices only

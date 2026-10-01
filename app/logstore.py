@@ -28,6 +28,10 @@ class TaskLog:
         self._write({"ts": now_iso(), "stream": "stdout", **parsed})
         return parsed
 
+    def add_event(self, etype: str, message: str, event: dict) -> None:
+        """An app-server notification: `etype` is its method (e.g. item/completed/agentMessage)."""
+        self._write({"ts": now_iso(), "stream": "stdout", "type": etype, "message": message, "event": event})
+
     def add_stderr(self, line: str) -> None:
         self._write({"ts": now_iso(), "stream": "stderr", "type": "stderr",
                      "message": line.rstrip("\n"), "event": None})
@@ -38,6 +42,15 @@ class TaskLog:
 
     def close(self) -> None:
         self._f.close()
+
+    @staticmethod
+    def note(path: Path, message: str) -> None:
+        """One system entry from outside the job that owns the log (O_APPEND writes do not interleave)."""
+        log = TaskLog(path)
+        try:
+            log.add_system(message)
+        finally:
+            log.close()
 
 
 def read_log(path: Path, offset: int = 0) -> tuple[list[dict], int]:

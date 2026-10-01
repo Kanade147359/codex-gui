@@ -7,11 +7,33 @@
 </label>
 {% endblock %}
 {% block content %}
+<section class="center">
+  <h1>Codex Control Center</h1>
+  <p class="defaults" id="defaults">Model default: <b id="default-model">…</b> &nbsp; Speed: <b>Standard</b>
+    &nbsp; <span class="muted" id="backend-note"></span></p>
+</section>
+
+<section class="usage-box" id="usage-box">
+  <h2>Codex Usage <span class="muted" id="usage-plan"></span></h2>
+  <div id="limits" class="muted">loading…</div>
+  <p class="muted small" id="limits-note"></p>
+  <p class="running-line">Running: <b id="running-count">0</b></p>
+</section>
+
+<section class="repo-bar" id="repo-bar" hidden>
+  <div><span class="muted">Repository</span> <span id="repo-path"></span></div>
+  <div class="repo-facts">Git: <b id="repo-git">…</b> &nbsp; AGENTS.md: <b id="repo-agents">…</b></div>
+  <div class="repo-actions">
+    <button id="repo-new-btn" class="primary">New Task</button>
+    <a class="button" id="repo-agents-btn" href="#">AGENTS.md</a>
+  </div>
+</section>
+
 <table class="tasks" id="tasks-table">
   <thead>
-    <tr><th>TASK</th><th>REPO</th><th>MODEL</th><th>STATUS</th><th>CACHE</th><th>GIT</th><th>BRANCH</th><th>CREATED</th></tr>
+    <tr><th>TASK</th><th>REPO</th><th>MODEL</th><th>EFFORT</th><th>CACHE</th><th>CTX</th><th>STATUS</th><th>GIT</th><th>BRANCH</th><th>CREATED</th></tr>
   </thead>
-  <tbody id="tasks-body"><tr><td colspan="8" class="muted">loading…</td></tr></tbody>
+  <tbody id="tasks-body"><tr><td colspan="10" class="muted">loading…</td></tr></tbody>
 </table>
 <footer class="summary" id="summary"></footer>
 
@@ -26,6 +48,7 @@
           <button type="button" id="browse-btn">Browse…</button>
         </div>
         <div id="recent-repos" class="chips"></div>
+        <div id="repo-agents-line" class="small muted" hidden></div>
       </div>
       <div class="row">
         <label>Base ref
@@ -42,9 +65,43 @@
           <select name="model_choice" id="model-select"></select>
           <input name="model_custom" id="model-custom" placeholder="model id" hidden>
         </label>
-        <label>Reasoning effort <select name="reasoning_effort" id="effort-select"></select></label>
-        <label class="check"><input type="checkbox" name="auto_approval" checked> Auto approval (<code>--approve-for-me</code>)</label>
+        <label>Reasoning
+          <select name="reasoning_effort" id="effort-select"></select>
+          <span class="small warn" id="ultra-note" hidden>Ultra may use substantially more compute.</span>
+        </label>
+        <label>Speed
+          <select name="service_tier" id="tier-select"></select>
+          <span class="small muted" id="fast-note" hidden>Fast mode consumes included usage more quickly.</span>
+        </label>
       </div>
+      <div class="checks">
+        <label class="check"><input type="checkbox" name="auto_approval" checked> Auto approve <span class="muted">(sandboxed review, <code>--approve-for-me</code>)</span></label>
+        <label class="check"><input type="checkbox" name="web_search"> Web search</label>
+        <label class="check"><input type="checkbox" name="adaptive_reasoning" checked> Adaptive reasoning <span class="muted">(suggests a retry with more effort; never automatic)</span></label>
+        <label class="check"><input type="checkbox" name="context_guard" checked> Context guard <span class="muted">(warn when the thread gets large)</span></label>
+      </div>
+      <details class="advanced">
+        <summary>Advanced settings</summary>
+        <div class="row">
+          <label>Output verbosity
+            <select name="model_verbosity" id="verbosity-select">
+              <option value="low" selected>Low</option><option value="medium">Medium</option><option value="high">High</option>
+            </select>
+          </label>
+          <label>Sandbox
+            <select name="sandbox"><option value="workspace-write" selected>workspace-write</option><option value="read-only">read-only</option></select>
+          </label>
+          <label class="check"><input type="checkbox" checked disabled> Use subscription authentication only</label>
+        </div>
+        <label>Additional writable dirs <span class="muted">(absolute paths, one per line)</span>
+          <textarea name="writable_dirs" rows="2" placeholder="/data/shared"></textarea>
+        </label>
+        <label>Feature flags <span class="muted">(names, space separated; passed as <code>features.NAME=true</code>)</span>
+          <input name="feature_flags" placeholder="">
+        </label>
+        <p class="small muted">Model, reasoning, speed, sandbox, approval and web search stay fixed for the task: changing them mid-thread
+          lowers prompt-cache reuse. Profile selection is not supported.</p>
+      </details>
       <p id="form-error" class="error" hidden></p>
       <p id="form-ok" class="ok" hidden></p>
       <div class="actions">

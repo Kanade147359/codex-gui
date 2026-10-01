@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}AGENTS.md - Codex GUI{% endblock %}
+{% block page %}agents{% endblock %}
+{% block bodyattrs %}data-scope="{{ scope }}" data-repository="{{ repository }}" data-task-id="{{ task_id }}"{% endblock %}
+{% block topbar %}{% if scope == "task" %}<a class="crumb" href="/tasks/{{ task_id }}">&larr; task</a>{% else %}<a class="crumb" href="/">&larr; all tasks</a>{% endif %}{% endblock %}
+{% block content %}
+<section>
+  <div class="title-row">
+    <h1>AGENTS.md</h1>
+    <span class="scope-badge {{ scope }}">{% if scope == "task" %}Task Worktree AGENTS.md{% else %}Repository AGENTS.md{% endif %}</span>
+    <span class="spacer"></span>
+    <label class="filter" id="file-pick-wrap" hidden>File <select id="file-pick"></select></label>
+  </div>
+  <p class="muted" id="agents-where">Repository: <span id="agents-root">{{ repository }}</span></p>
+  <p class="small muted" id="scope-note">{% if scope == "task" %}This is the copy inside this task's worktree. It does <b>not</b> change the repository's AGENTS.md; use it for
+    task-only rules or experiments. Edits apply to Codex's later turns of this task.{% else %}This is the AGENTS.md of the main repository checkout: project rules every <b>new</b> task starts with.
+    It does not change worktrees that already exist. Codex reads it by itself; the GUI never pastes it into a prompt.{% endif %}</p>
+</section>
+
+<section id="agents-missing" hidden>
+  <p><b>AGENTS.md does not exist</b></p>
+  <button id="create-btn" class="primary">Create AGENTS.md</button>
+</section>
+
+<section id="agents-editor" hidden>
+  <div class="editor">
+    <pre class="gutter" id="gutter" aria-hidden="true">1</pre>
+    <textarea id="agents-text" spellcheck="false" wrap="off" aria-label="AGENTS.md"></textarea>
+  </div>
+  <div class="inline-actions">
+    <button id="reload-btn">Reload</button>
+    <button id="save-btn" class="primary">Save</button>
+    <span id="dirty-flag" class="muted"></span>
+    <span class="muted small">Ctrl+S saves · Tab inserts a tab</span>
+  </div>
+</section>
+
+<p id="agents-msg" class="muted" hidden></p>
+
+<section id="agents-git" hidden>
+  <h2>Git status</h2>
+  <pre id="git-state" class="block"></pre>
+  <div class="inline-actions"><button id="diff-btn">View Diff</button></div>
+  <pre id="agents-diff" class="block diff" hidden></pre>
+</section>
+{% endblock %}
