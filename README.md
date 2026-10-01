@@ -463,3 +463,7 @@ docs/               Research notes on Codex CLI / app-server
 static/ templates/  UI (plain HTML/CSS/JS, polling)
 tests/
 ```
+
+## License
+
+[MIT](LICENSE)

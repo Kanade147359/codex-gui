@@ -464,3 +464,7 @@ docs/               Codex CLI / app-server の調査記録
 static/ templates/  UI（素の HTML/CSS/JS、ポーリング）
 tests/
 ```
+
+## ライセンス
+
+[MIT](LICENSE)
