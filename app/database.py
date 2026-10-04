@@ -169,6 +169,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY, filename TEXT NOT NULL, extension TEXT NOT NULL, media_type TEXT NOT NULL,
+    width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, prompt TEXT NOT NULL,
+    attachment_ids TEXT NOT NULL DEFAULT '[]', kind TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id, id);
 CREATE TABLE IF NOT EXISTS recent_repos (
     path TEXT PRIMARY KEY,
     last_used TEXT NOT NULL
@@ -186,12 +195,26 @@ TASK_COLUMNS = (
     "dependency_policy auto_retry_enabled max_retries retry_count next_retry_at last_failure_kind last_failure_message "
     "last_exit_code last_retry_at pending_turn claimed_by claimed_at worktree_pending proc_identity "
     "allow_subagents tool_output_preset tool_output_limit skills_preset skills_budget tool_profile tool_profile_config "
-    "tool_profile_check cwd_subdir stop_reason compactions last_cache_activity_at last_request_input long_context_ack"
+    "tool_profile_check cwd_subdir stop_reason compactions last_cache_activity_at last_request_input long_context_ack "
+    "task_outcome outcome_reason outcome_source completion_checked_at manual_override manual_override_at manual_override_by "
+    "completion_contract completion_checks semantic_result completion_pending "
+    "evidence_result evidence_reason approval_source approved_at"
 ).split()
 
 # Columns added after the first release: (name, definition) applied to databases that lack them.
 # service_tier holds Codex's own id: "default" is Standard speed, "priority" is Fast.
 TASK_MIGRATIONS = [
+    ("evidence_result", "TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(evidence_result IN ('PASS','FAIL','UNKNOWN'))"),
+    ("evidence_reason", "TEXT NOT NULL DEFAULT 'Completion has not been checked.'"),
+    ("approval_source", "TEXT NOT NULL DEFAULT ''"), ("approved_at", "TEXT"),
+    ("task_outcome", "TEXT NOT NULL DEFAULT 'needs_review' CHECK(task_outcome IN ('success','blocked','needs_input','incomplete','needs_review'))"),
+    ("outcome_reason", "TEXT NOT NULL DEFAULT 'Completion has not been checked.'"),
+    ("outcome_source", "TEXT NOT NULL DEFAULT 'unverified'"),
+    ("completion_checked_at", "TEXT"), ("manual_override", "INTEGER NOT NULL DEFAULT 0"),
+    ("manual_override_at", "TEXT"), ("manual_override_by", "TEXT NOT NULL DEFAULT ''"),
+    ("completion_contract", "TEXT NOT NULL DEFAULT '{}'"),
+    ("completion_checks", "TEXT NOT NULL DEFAULT '[]'"), ("semantic_result", "TEXT NOT NULL DEFAULT ''"),
+    ("completion_pending", "INTEGER NOT NULL DEFAULT 0"),
     ("codex_thread_id", "TEXT"), ("last_turn_at", "TEXT"),
     ("service_tier", "TEXT NOT NULL DEFAULT 'default'"),
     ("model_verbosity", "TEXT NOT NULL DEFAULT 'low'"),
@@ -252,7 +275,7 @@ ATTEMPT_COLUMNS = (
 # The two conditions of the dependency policy "all_success", evaluated inside the UPDATE that acts on them so that the
 # check and the state change are one atomic step: no parent can change in between, and two evaluators cannot both win.
 _ALL_COMPLETED = ("NOT EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id "
-                  "WHERE d.task_id = tasks.id AND p.status != 'completed')")
+                  "WHERE d.task_id = tasks.id AND (p.status != 'completed' OR p.task_outcome != 'success' OR p.completion_pending != 0))")
 _ANY_FAILED = ("EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id "
                "WHERE d.task_id = tasks.id AND p.status IN (%s))" % ", ".join(f"'{s}'" for s in sorted(DEPENDENCY_FAILED_STATUSES)))
 
@@ -264,7 +287,7 @@ _FAILED_LIST = ", ".join(f"'{s}'" for s in sorted(DEPENDENCY_FAILED_STATUSES))
 
 def _si_deps_done(a: str) -> str:
     return ("NOT EXISTS (SELECT 1 FROM scheduled_instruction_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id "
-            f"WHERE d.scheduled_instruction_id = {a}.id AND p.status != 'completed')")
+            f"WHERE d.scheduled_instruction_id = {a}.id AND (p.status != 'completed' OR p.task_outcome != 'success' OR p.completion_pending != 0))")
 
 
 def _si_deps_failed(a: str) -> str:
@@ -275,7 +298,7 @@ def _si_deps_failed(a: str) -> str:
 def _si_target_idle(a: str) -> str:
     """The target thread can take a turn now: its task is completed, has a recorded thread and a worktree."""
     return (f"EXISTS (SELECT 1 FROM tasks t WHERE t.id = {a}.task_id AND t.status = '{SCHEDULED_IDLE_TASK_STATUS}' "
-            "AND COALESCE(t.codex_thread_id, '') != '' AND t.worktree_removed = 0 AND t.worktree_pending = 0)")
+            "AND COALESCE(t.codex_thread_id, '') != '' AND t.worktree_removed = 0 AND t.worktree_pending = 0 AND t.completion_pending = 0)")
 
 
 def _si_head_of_queue(a: str) -> str:
@@ -325,16 +348,85 @@ class Database:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
         self._migrate()
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS completion_overrides (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id),
+            actor TEXT NOT NULL, created_at TEXT NOT NULL, previous_outcome TEXT NOT NULL,
+            outcome TEXT NOT NULL, reason TEXT NOT NULL)""")
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS completion_approvals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id),
+            semantic_status TEXT NOT NULL, evidence_result TEXT NOT NULL,
+            approval_source TEXT NOT NULL, approved_at TEXT NOT NULL, reason TEXT NOT NULL,
+            task_outcome TEXT NOT NULL, actor TEXT NOT NULL, completion_checks TEXT NOT NULL)""")
+        self._conn.commit()
 
     def _migrate(self) -> None:
-        for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS)):
+        for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),
+                                  ("scheduled_instructions", [("attachment_ids", "TEXT NOT NULL DEFAULT '[]'")])):
             have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
-            for name, definition in migrations:
-                if name not in have:
-                    self._execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            legacy_completion_upgrade = table == "tasks" and "task_outcome" not in have
+            with self._lock, self._conn:
+                # Adding the outcome column and preserving historical success must commit together.
+                if legacy_completion_upgrade:
+                    self._conn.execute("BEGIN")
+                for name, definition in migrations:
+                    if name not in have:
+                        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+                if legacy_completion_upgrade:
+                    self._conn.execute("""UPDATE tasks SET task_outcome = 'success', outcome_source = 'legacy',
+                        outcome_reason = 'Completed before Completion Gate was introduced.' WHERE status = 'completed'""")
 
     def close(self) -> None:
         self._conn.close()
+
+    def override_completion(self, task_id: str, outcome: str, reason: str, actor: str) -> dict:
+        """Audit and update the idle task in one transaction. History survives subsequent turns/checks."""
+        if outcome not in ("success", "blocked"):
+            raise ValueError("invalid manual outcome")
+        now = now_iso()
+        with self._lock, self._conn:
+            row = self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None or row["status"] != "completed" or row["completion_pending"]:
+                raise ValueError("manual outcome requires a normally completed execution")
+            self._conn.execute("""INSERT INTO completion_overrides
+                (task_id, actor, created_at, previous_outcome, outcome, reason) VALUES (?, ?, ?, ?, ?, ?)""",
+                (task_id, actor, now, row["task_outcome"], outcome, reason))
+            self._conn.execute("""UPDATE tasks SET task_outcome = ?, outcome_reason = ?, outcome_source = 'manual',
+                manual_override = 1, manual_override_at = ?, manual_override_by = ?, completion_checked_at = ?,
+                approval_source = 'manual', approved_at = ?
+                WHERE id = ?""", (outcome, reason, now, actor, now, now, task_id))
+            self._insert_completion_approval(self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone(), actor)
+        self._notify(task_id, "completed", "completed")
+        return self.get_task(task_id)
+
+    def completion_overrides(self, task_id: str) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT * FROM completion_overrides WHERE task_id = ? ORDER BY id", (task_id,))]
+
+    def completion_approvals(self, task_id: str) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT * FROM completion_approvals WHERE task_id = ? ORDER BY id", (task_id,))]
+
+    def _insert_completion_approval(self, row, actor="") -> None:
+        from .completion import parse_result
+        result = parse_result(row["semantic_result"])
+        self._conn.execute("""INSERT INTO completion_approvals
+            (task_id, semantic_status, evidence_result, approval_source, approved_at, reason,
+             task_outcome, actor, completion_checks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (row["id"], result["status"] if result else "UNKNOWN", row["evidence_result"], row["approval_source"],
+             row["approved_at"], row["outcome_reason"], row["task_outcome"], actor, row["completion_checks"]))
+
+    def _audit_auto_approval(self, task_id: str, fields: dict) -> None:
+        # The release of dependencies and its audit record must commit in the same transaction.
+        if fields.get("approval_source") == "auto_evidence" and fields.get("approved_at"):
+            from .completion import parse_result
+            row = self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            result = parse_result(row["semantic_result"])
+            if (row["status"] != "completed" or row["task_outcome"] != "success" or
+                    row["evidence_result"] != "PASS" or row["completion_pending"] or not result or result["status"] != "SUCCESS"):
+                raise ValueError("automatic approval requires a completed, verified success")
+            self._insert_completion_approval(row)
 
     def _execute(self, sql: str, params=()) -> sqlite3.Cursor:
         with self._lock, self._conn:
@@ -355,7 +447,7 @@ class Database:
             except Exception:  # a bad listener must not undo or hide a state change that is already committed
                 log.exception("status listener failed for %s (%s -> %s)", task_id, old, new)
 
-    def create_task(self, depends_on=(), **fields) -> dict:
+    def create_task(self, depends_on=(), message=None, **fields) -> dict:
         """Insert a task, and its dependency edges in the same transaction (a task is never visible half-wired)."""
         cols = [c for c in TASK_COLUMNS if c in fields]
         unknown = set(fields) - set(TASK_COLUMNS)
@@ -368,9 +460,34 @@ class Database:
                 f"INSERT INTO tasks ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                 [fields[c] for c in cols],
             )
+            if message is not None:
+                self._insert_message(fields["id"], message)
             if depends_on:
                 self._insert_edges(fields["id"], list(depends_on))
         return self.get_task(fields["id"])
+
+    # Images are immutable and deliberately have no delete API: previews, histories and schedules may share them.
+    def add_attachment(self, row: dict) -> None:
+        self._execute(f"INSERT INTO attachments ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
+                      list(row.values()))
+
+    def get_attachment(self, image_id: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM attachments WHERE id = ?", (image_id,)).fetchone()
+        return dict(row) if row else None
+
+    def _insert_message(self, task_id: str, message: dict) -> None:
+        self._conn.execute("INSERT INTO task_messages (task_id, prompt, attachment_ids, kind, created_at) VALUES (?, ?, ?, ?, ?)",
+                           (task_id, message["prompt"], json.dumps(message.get("attachment_ids", [])), message["kind"], now_iso()))
+
+    def add_message(self, task_id: str, prompt: str, attachment_ids=(), kind="steer") -> None:
+        with self._lock, self._conn:
+            self._insert_message(task_id, dict(prompt=prompt, attachment_ids=list(attachment_ids), kind=kind))
+
+    def list_messages(self, task_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM task_messages WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()
+        return [dict(r) | {"attachment_ids": json.loads(r["attachment_ids"])} for r in rows]
 
     # ---------- dependencies ----------
 
@@ -432,6 +549,25 @@ class Database:
             self._conn.execute("DELETE FROM task_dependencies WHERE task_id = ?", (task_id,))
             self._insert_edges(task_id, list(depends_on))
 
+    def dependency_graph_snapshot(self) -> dict:
+        """Read saved relationships without changing schedule state or synthesizing dependencies."""
+        with self._lock:
+            tasks = [dict(r) for r in self._conn.execute(
+                "SELECT id, name, repository, status, status_detail FROM tasks ORDER BY created_at, id")]
+            # Older experimental data may contain provenance. Never display AI edges as manual settings.
+            columns = {r['name'] for r in self._conn.execute('PRAGMA table_info(task_dependencies)')}
+            manual = " WHERE source = 'manual'" if 'source' in columns else ''
+            initial = [dict(r) for r in self._conn.execute(
+                'SELECT task_id, depends_on_task_id FROM task_dependencies' + manual + ' ORDER BY id')]
+            saved_schedules = [dict(r) for r in self._conn.execute(
+                'SELECT * FROM scheduled_instructions ORDER BY created_at, id')]
+            schedules = [r for r in saved_schedules if r['status'] != 'cancelled'
+                         and r['created_by'] not in ('ai', 'ai_confirmed', 'dependency_analysis')]
+            scheduled_deps = [dict(r) for r in self._conn.execute(
+                'SELECT scheduled_instruction_id, depends_on_task_id FROM scheduled_instruction_dependencies ORDER BY rowid')]
+        return dict(tasks=tasks, initial=initial, schedules=schedules, scheduled_deps=scheduled_deps,
+                    schedule_ids=[r['id'] for r in saved_schedules])
+
     def dependencies_of(self, task_id: str) -> list[str]:
         with self._lock:
             return [r["depends_on_task_id"] for r in self._conn.execute(
@@ -458,7 +594,7 @@ class Database:
 
     # ---------- atomic claims ----------
 
-    def _guarded(self, task_id: str, old: str, new: str, extra_where: str, fields: dict) -> bool:
+    def _guarded(self, task_id: str, old: str, new: str, extra_where: str, fields: dict, message=None) -> bool:
         """UPDATE ... WHERE id = ? AND status = old [AND extra]: one atomic step. True if this call made the change."""
         assignments = ", ".join(f"{k} = ?" for k in {**fields, "status": new})
         with self._lock, self._conn:
@@ -466,6 +602,10 @@ class Database:
                 f"UPDATE tasks SET {assignments} WHERE id = ? AND status = ? {extra_where}",
                 [*fields.values(), new, task_id, old])
             changed = cur.rowcount == 1
+            if changed:
+                self._audit_auto_approval(task_id, fields)
+                if message is not None:
+                    self._insert_message(task_id, message)
         if changed:
             self._notify(task_id, old, new)
         return changed
@@ -479,11 +619,16 @@ class Database:
             raise ValueError(f"unknown task fields: {sorted(unknown)}")
         return self._guarded(task_id, old, new, "", fields)
 
-    def claim_queued(self, task_id: str, owner: str) -> bool:
+    def dependencies_ready(self, task_id: str) -> bool:
+        with self._lock:
+            return self._conn.execute(f"SELECT 1 FROM tasks WHERE id = ? AND {_ALL_COMPLETED}", (task_id,)).fetchone() is not None
+
+    def claim_queued(self, task_id: str, owner: str, check_dependencies: bool = False) -> bool:
         """Claim a queued task for one runner. Of any number of concurrent callers exactly one gets True."""
         with self._lock, self._conn:
             cur = self._conn.execute(
-                "UPDATE tasks SET claimed_by = ?, claimed_at = ? WHERE id = ? AND status = 'queued' AND claimed_by IS NULL",
+                "UPDATE tasks SET claimed_by = ?, claimed_at = ? WHERE id = ? AND status = 'queued' AND claimed_by IS NULL"
+                + (f" AND {_ALL_COMPLETED}" if check_dependencies else ""),
                 (owner, now_iso(), task_id))
             return cur.rowcount == 1
 
@@ -553,7 +698,7 @@ class Database:
             raise ValueError("use set_status() to change status")
         return self._update(task_id, fields)
 
-    def set_status(self, task_id: str, new_status: str, **fields) -> dict:
+    def set_status(self, task_id: str, new_status: str, message=None, **fields) -> dict:
         """Change status, enforcing the transition table. Extra fields are written atomically."""
         task = self.get_task(task_id)
         if task is None:
@@ -565,7 +710,7 @@ class Database:
         if unknown or "id" in fields:
             raise ValueError(f"cannot update fields: {sorted(unknown | ({'id'} & set(fields)))}")
         # Compare-and-swap on the old status: a concurrent change (another evaluator, another process) cannot be overwritten.
-        if not self._guarded(task_id, old, new_status, "", fields):
+        if not self._guarded(task_id, old, new_status, "", fields, message):
             raise InvalidTransition(f"{old} -> {new_status}: the task changed concurrently")
         return self.get_task(task_id)
 
@@ -575,7 +720,10 @@ class Database:
             raise ValueError(f"cannot update fields: {sorted(unknown | ({'id'} & set(fields)))}")
         if fields:
             assignments = ", ".join(f"{k} = ?" for k in fields)
-            self._execute(f"UPDATE tasks SET {assignments} WHERE id = ?", [*fields.values(), task_id])
+            with self._lock, self._conn:
+                cur = self._conn.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", [*fields.values(), task_id])
+                if cur.rowcount:
+                    self._audit_auto_approval(task_id, fields)
         return self.get_task(task_id)
 
     def touch_repo(self, path: str, when: str) -> None:
@@ -594,10 +742,10 @@ class Database:
 
     # ---------- scheduled instructions ----------
 
-    def create_scheduled(self, task_id: str, prompt: str, service_tier: str, depends_on=(), created_by: str = "user") -> dict:
+    def create_scheduled(self, task_id: str, prompt: str, service_tier: str, depends_on=(), created_by: str = "user", attachment_ids=()) -> dict:
         """Insert an instruction and its dependency rows in one transaction. It starts as waiting_dependencies."""
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise ScheduledError("instruction is required", "empty")
         parents = [str(p) for p in depends_on]
         if len(set(parents)) != len(parents):
@@ -612,8 +760,8 @@ class Database:
                 if p not in known:
                     raise ScheduledError(f"dependency task not found: {p}", "missing")
             cur = self._conn.execute(
-                "INSERT INTO scheduled_instructions (task_id, prompt, status, service_tier, created_at, created_by) "
-                "VALUES (?, ?, 'waiting_dependencies', ?, ?, ?)", (task_id, prompt, service_tier, now_iso(), created_by))
+                "INSERT INTO scheduled_instructions (task_id, prompt, status, service_tier, created_at, created_by, attachment_ids) "
+                "VALUES (?, ?, 'waiting_dependencies', ?, ?, ?, ?)", (task_id, prompt, service_tier, now_iso(), created_by, json.dumps(list(attachment_ids))))
             sid = cur.lastrowid
             for p in parents:
                 self._conn.execute("INSERT INTO scheduled_instruction_dependencies (scheduled_instruction_id, depends_on_task_id) "
@@ -737,6 +885,8 @@ class Database:
                     [*task_fields.values(), "queued", row["task_id"], thread_id])
                 if cur.rowcount != 1:
                     raise _Rollback()
+                self._insert_message(row["task_id"], dict(prompt=row["prompt"], kind="scheduled_instruction",
+                                                         attachment_ids=json.loads(row["attachment_ids"])))
         except _Rollback:
             return False
         self._notify(row["task_id"], SCHEDULED_IDLE_TASK_STATUS, "queued")

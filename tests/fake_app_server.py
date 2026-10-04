@@ -82,7 +82,7 @@ def usage_update(tid, turn_id, add_input, add_cached):
 
 
 def run_turn(tid, turn_id, prompt, compact=False):
-    words = prompt.split()
+    words = prompt.split("\nCompletion contract:", 1)[0].split()
     mode = words[0] if words else "ok"
     st = ACTIVE[tid]
     t = load(tid)
@@ -107,6 +107,9 @@ def run_turn(tid, turn_id, prompt, compact=False):
         if status == "completed" or st["steered"]:
             notify("item/completed", threadId=tid, turnId=turn_id,
                    item={"type": "agentMessage", "id": "m1", "text": "steered: " + " ".join(st["steered"])})
+            notify("item/completed", threadId=tid, turnId=turn_id,
+                   item={"type": "agentMessage", "id": "final", "phase": "final_answer",
+                         "text": json.dumps({"status": "SUCCESS", "reason": "Steered work completed."})})
             usage_update(tid, turn_id, 1000, 0 if first else 900)
     elif mode == "die":
         os._exit(7)
@@ -121,6 +124,12 @@ def run_turn(tid, turn_id, prompt, compact=False):
         notify("item/agentMessage/delta", threadId=tid, turnId=turn_id, itemId="m1", delta="do")
         usage_update(tid, turn_id, 500, 0 if first else 450)
         notify("item/completed", threadId=tid, turnId=turn_id, item={"type": "agentMessage", "id": "m1", "text": "done"})
+        outcome = words[1] if mode == "semantic" else "SUCCESS"
+        text = json.dumps({"status": outcome, "reason": " ".join(words[2:]) if mode == "semantic" else "Requested work completed."})
+        if outcome == "MISSING":
+            text = "done"
+        notify("item/completed", threadId=tid, turnId=turn_id,
+               item={"type": "agentMessage", "id": "final", "phase": "final_answer", "text": text})
         usage_update(tid, turn_id, 500, 0 if first else 450)
     t = load(tid)
     t["turns"] += 1

@@ -19,15 +19,17 @@ import signal
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
+from . import completion
 from . import git_manager as git
 from .appserver import CLOSED, AppServerClient, AppServerError
 from .codex_login import CodexLogin
 from .codex_runner import WEB_SEARCH_MODES, CodexRunner, approval_params, nested, task_config, terminate_process
+from .attachments import AttachmentError, AttachmentStore
 from .config import Settings
 from .database import Database, DependencyError, ScheduledError
 from .instructions import load_instructions
@@ -80,12 +82,19 @@ class _Turn:
     started: bool = False
     # A retry of a thread-creating turn that never started: if Codex never saved that thread, a new one is acceptable.
     fresh_ok: bool = False
+    final_text: str = ""  # this turn's last completed assistant message; never tool output
+    ignore_dependencies: bool = False  # explicit Run Anyway only, survives queue/restart
+    attachment_ids: list[str] = field(default_factory=list)
+
+    def message(self) -> dict:
+        return dict(prompt=self.prompt, attachment_ids=self.attachment_ids, kind=self.trigger)
 
     def to_json(self) -> str:
         """Stored in tasks.pending_turn: the turn that is queued, running or to be retried survives a GUI restart."""
         return json.dumps({"prompt": self.prompt, "resume_thread": self.resume_thread, "thread_id": self.thread_id,
                            "kind": self.kind, "trigger": self.trigger, "service_tier": self.service_tier,
-                           "started": self.started, "fresh_ok": self.fresh_ok})
+                           "started": self.started, "fresh_ok": self.fresh_ok, "ignore_dependencies": self.ignore_dependencies,
+                           "attachment_ids": self.attachment_ids})
 
     @classmethod
     def from_json(cls, raw: Optional[str]) -> Optional["_Turn"]:
@@ -96,7 +105,8 @@ class _Turn:
         if not isinstance(d, dict) or not isinstance(d.get("prompt"), str):
             return None
         return cls(d["prompt"], d.get("resume_thread"), d.get("thread_id"), d.get("kind") or "turn",
-                   d.get("trigger") or "instruction", d.get("service_tier"), bool(d.get("started")), bool(d.get("fresh_ok")))
+                   d.get("trigger") or "instruction", d.get("service_tier"), bool(d.get("started")), bool(d.get("fresh_ok")),
+                   ignore_dependencies=bool(d.get("ignore_dependencies")), attachment_ids=d.get("attachment_ids") or [])
 
 
 class TaskError(Exception):
@@ -121,12 +131,14 @@ class TaskManager:
                  app_server: Optional[AppServerClient] = None):
         self.settings = settings
         self.db = db
+        self.attachments = AttachmentStore(settings.home / "attachments", db)
         self.runner = runner or CodexRunner(settings.codex_bin, settings.subscription_only)
         self.runner.instructions = load_instructions(settings.instructions_path)
         self._app_server = app_server
         self._jobs: dict[str, asyncio.Task] = {}
         self._procs: dict[str, asyncio.subprocess.Process] = {}
         self._active_turns: dict[str, dict] = {}   # task id -> {"thread", "turn"} of the turn being run (app-server)
+        self._completion_locks: dict[str, asyncio.Lock] = {}
         self._stop_requested: set[str] = set()
         self._stop_deadline: dict[str, float] = {}
         self._repo_locks: dict[str, asyncio.Lock] = {}
@@ -264,11 +276,17 @@ class TaskManager:
                           auto_retry: Optional[bool] = None, max_retries: Optional[int] = None,
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
-                          allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "") -> dict:
+                          allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
+                          completion_contract: Optional[dict] = None, attachment_ids=()) -> dict:
+        try:
+            rules = completion.contract(completion_contract)
+        except ValueError as e:
+            raise TaskError(str(e)) from e
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("prompt is required")
-        name = name.strip() or (prompt.splitlines()[0][:60])
+        await self._check_images(attachment_ids)
+        name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Image task")
         model = model.strip()
         if model.startswith("-"):
             raise TaskError("invalid model name")
@@ -329,7 +347,7 @@ class TaskManager:
 
         try:
             self.db.create_task(
-                depends_on=deps,
+                depends_on=deps, message=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).message(),
                 id=task_id, name=name, repository=repo, worktree=str(wt), branch=branch,
                 base_ref=base_ref, base_sha=base_sha, prompt=prompt, model=model,
                 reasoning_effort=reasoning_effort, auto_approval=int(auto_approval),
@@ -340,7 +358,8 @@ class TaskManager:
                 status="waiting_dependencies" if deps else "queued",
                 git_summary="not started" if deps else "clean", worktree_pending=int(bool(deps)),
                 dependency_policy=dependency_policy, auto_retry_enabled=int(auto_retry), max_retries=max_retries,
-                pending_turn=_Turn(prompt, trigger="initial").to_json(), created_at=now_iso(), **ctx_fields,
+                pending_turn=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).to_json(), created_at=now_iso(), **ctx_fields,
+                completion_contract=json.dumps(rules),
             )
         except DependencyError as e:
             raise TaskError(str(e), 400, e.code) from e
@@ -419,14 +438,28 @@ class TaskManager:
     # ---------- further turns ----------
 
     def _require_idle_with_worktree(self, task: dict) -> None:
+        self._require_completion_idle(task["id"])
         if task["status"] in BUSY_STATUSES:
             raise TaskError(f"task is {task['status']}; send the next instruction when it has finished", 409, "active")
         if task["status"] == "blocked":
             raise TaskError("task is blocked by a prerequisite; use Run Anyway or fix the dependency", 409, "blocked")
         self._require_worktree(task)
 
+    async def _check_images(self, ids, resume=False) -> None:
+        if not ids:
+            return
+        try:
+            await asyncio.to_thread(self.attachments.resolve, ids)
+            await self.runner.check_image_support(self.settings.backend, resume)
+        except AttachmentError as e:
+            raise TaskError(str(e), 400, "invalid_attachment") from e
+
+    def _image_input(self, prompt: str, ids) -> list[dict]:
+        return ([{"type": "text", "text": prompt}] if prompt else []) + [
+            {"type": "localImage", "path": path} for path in self.attachments.paths(ids)]
+
     async def send_instruction(self, task_id: str, prompt: str, reasoning_effort: Optional[str] = None,
-                               service_tier: Optional[str] = None) -> dict:
+                               service_tier: Optional[str] = None, attachment_ids=()) -> dict:
         """Another instruction for the task's existing Codex thread.
 
         Idle task: a new turn (`thread/resume` + `turn/start`, or `codex exec resume`). Running task (app-server): the
@@ -435,8 +468,9 @@ class TaskManager:
         Send Standard, "priority" = Send Fast; "standard" / "fast" are accepted too); omitted = the task's own speed.
         """
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("instruction is required")
+        await self._check_images(attachment_ids, resume=True)
         tier = self._turn_tier(service_tier)
         task = self.get(task_id)
         if reasoning_effort is not None and reasoning_effort != task["reasoning_effort"]:
@@ -445,7 +479,7 @@ class TaskManager:
         else:
             reasoning_effort = None
         if task["status"] in ACTIVE_STATUSES:
-            return await self._steer(task, prompt)
+            return await self._steer(task, prompt, attachment_ids)
         self._require_idle_with_worktree(task)
         thread = task["codex_thread_id"]
         if not thread:
@@ -458,7 +492,7 @@ class TaskManager:
             TaskLog.note(self.log_path(task_id),
                          f"reasoning effort changed {task['reasoning_effort']} -> {reasoning_effort} (requested by the user)")
             fields["reasoning_effort"] = reasoning_effort
-        return self._begin_turn(task, _Turn(prompt, resume_thread=thread, service_tier=tier), **fields)
+        return self._begin_turn(task, _Turn(prompt, resume_thread=thread, service_tier=tier, attachment_ids=list(attachment_ids)), **fields)
 
     @staticmethod
     def _turn_tier(value: Optional[str]) -> Optional[str]:
@@ -469,7 +503,7 @@ class TaskManager:
             raise TaskError(f"invalid service tier: {value}")
         return tier
 
-    async def _steer(self, task: dict, prompt: str) -> dict:
+    async def _steer(self, task: dict, prompt: str, attachment_ids=()) -> dict:
         """Add an instruction to the turn that is running now (turn/steer). The exec backend has no such thing."""
         if not self.uses_app_server:
             raise TaskError(f"task is {task['status']}; send the next instruction when it has finished", 409, "active")
@@ -479,11 +513,14 @@ class TaskManager:
         try:
             await (await self.client()).request(
                 "turn/steer", {"threadId": info["thread"], "expectedTurnId": info["turn"],
-                               "input": [{"type": "text", "text": prompt}]}, timeout=30)
+                               "input": self._image_input(prompt, attachment_ids)}, timeout=30)
+        except AttachmentError as e:
+            raise TaskError(str(e), 400, "invalid_attachment") from e
         except AppServerError as e:
             raise TaskError(f"could not add the instruction to the running turn: {e}", 409, "steer_failed") from e
         TaskLog.note(self.log_path(task["id"]), "additional instruction sent to the running turn (turn/steer):\n" +
                      prompt[:INSTRUCTION_LOG_CHARS])
+        self.db.add_message(task["id"], prompt, attachment_ids)
         return self.db.update_task(task["id"], last_prompt=prompt)
 
     async def resume_interrupted(self, task_ids: Optional[list[str]] = None) -> dict:
@@ -494,21 +531,26 @@ class TaskManager:
             if task["status"] != "interrupted" or (task_ids is not None and task["id"] not in task_ids):
                 continue
             try:
-                await self.send_instruction(task["id"], RESUME_PROMPT)
+                pending = self._in_flight_turn(task)
+                if pending.attachment_ids and not pending.started:
+                    await self.send_instruction(task["id"], pending.prompt, attachment_ids=pending.attachment_ids)
+                else:
+                    await self.send_instruction(task["id"], RESUME_PROMPT)
                 resumed.append(task["id"])
             except TaskError as e:
                 skipped.append({"id": task["id"], "reason": str(e)})
         return {"resumed": resumed, "skipped": skipped}
 
-    async def start_new_session(self, task_id: str, prompt: str) -> dict:
+    async def start_new_session(self, task_id: str, prompt: str, attachment_ids=()) -> dict:
         """A fresh Codex session in the same worktree. Deliberately separate from send_instruction: it
         gives up the old session's conversation and the cached input that goes with it."""
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("prompt is required")
+        await self._check_images(attachment_ids)
         task = self.get(task_id)
         self._require_idle_with_worktree(task)
-        return self._begin_turn(task, _Turn(prompt, trigger="new_session"), stop_reason="", long_context_ack="")
+        return self._begin_turn(task, _Turn(prompt, trigger="new_session", attachment_ids=list(attachment_ids)), stop_reason="", long_context_ack="")
 
     async def compact(self, task_id: str) -> dict:
         """Compact the task's Codex thread (thread/compact/start). Task, worktree, branch and thread id stay as they are."""
@@ -525,7 +567,8 @@ class TaskManager:
         """A new unit of work for an idle task: queued with its turn recorded, then claimed and started at once."""
         # No await between the status checks of the caller and this transition, so two requests cannot both pass.
         try:
-            updated = self.db.set_status(task["id"], "queued", **self._queue_fields(turn, **fields))
+            updated = self.db.set_status(task["id"], "queued", message=turn.message() if turn.kind == "turn" else None,
+                                         **self._queue_fields(turn, **fields))
         except InvalidTransition as e:
             raise TaskError(f"task changed while the instruction was being sent: {e}", 409, "active") from e
         self._dispatch(task["id"])
@@ -536,6 +579,12 @@ class TaskManager:
         """The task columns that make an idle task `queued` with `turn` as the work to run (also used by a scheduled instruction)."""
         if turn.kind == "turn":
             fields["last_prompt"] = turn.prompt
+            fields.update(task_outcome="needs_review", outcome_reason="Completion has not been checked.",
+                          outcome_source="unverified", completion_checked_at=None, completion_checks="[]",
+                          semantic_result="", manual_override=0, manual_override_at=None, manual_override_by="")
+            fields.update(evidence_result="UNKNOWN", evidence_reason="Completion has not been checked.",
+                          approval_source="", approved_at=None)
+            fields["completion_pending"] = 0
         return dict(pid=None, proc_identity=None, exit_code=None, finished_at=None, status_detail="", failure_source="",
                     pending_turn=turn.to_json(), claimed_by=None, claimed_at=None, retry_count=0, next_retry_at=None,
                     last_failure_kind="", last_failure_message="", last_exit_code=None, last_retry_at=None, **fields)
@@ -556,9 +605,14 @@ class TaskManager:
         task = self.db.get_task(task_id)
         if task is None or task["status"] != "queued" or task["claimed_by"]:
             return False
-        if not self.db.claim_queued(task_id, self.instance_id):
+        turn = self._pending_turn(task)
+        check_deps = turn.trigger == "initial" and not turn.ignore_dependencies
+        if not self.db.claim_queued(task_id, self.instance_id, check_dependencies=check_deps):
+            if check_deps and not self.db.dependencies_ready(task_id):
+                self.db.transition(task_id, "queued", "waiting_dependencies", claimed_by=None, claimed_at=None,
+                                   status_detail="Waiting for dependencies to succeed.")
             return False
-        self._launch(task_id, self._pending_turn(task))
+        self._launch(task_id, turn)
         return True
 
     def _launch(self, task_id: str, turn: _Turn) -> None:
@@ -580,8 +634,12 @@ class TaskManager:
             if self._slots:
                 await self._slots.acquire()
             try:
+                if self._pause_for_dependencies(task_id, turn, log):
+                    return
                 self.db.set_status(task_id, "starting")
                 if await self._prepare(task_id, log, turn):
+                    if self._pause_for_dependencies(task_id, turn, log):
+                        return
                     if self.uses_app_server:
                         await self._run_app_server_turn(task_id, log, turn)
                     else:
@@ -592,12 +650,21 @@ class TaskManager:
         except asyncio.CancelledError:
             self._end_attempt(task_id, "stopped", turn)  # stop() of a queued task; it already wrote the final status
             raise
+        except AttachmentError as e:
+            current = self.db.get_task(task_id)
+            if current and current["status"] in ACTIVE_STATUSES:
+                self._settle(task_id, log, turn, "failed", failure=Failure("invalid_attachment", recovery.NON_RETRYABLE, str(e)))
         except Exception as e:  # never leave a task stuck in an active status
             log.add_system(f"internal error: {e!r}")
             current = self.db.get_task(task_id)
             if current and current["status"] in ACTIVE_STATUSES:
-                self._settle(task_id, log, turn, "failed",
-                             failure=Failure("internal_error", recovery.UNKNOWN, f"internal error: {e!r}"[:500]))
+                if current["completion_pending"]:
+                    self._settle(task_id, log, turn, "completed", exit_code=current["exit_code"],
+                                 task_outcome="needs_review", outcome_source="gate",
+                                 outcome_reason=f"Completion interrupted: {e!r}"[:1000])
+                else:
+                    self._settle(task_id, log, turn, "failed",
+                                 failure=Failure("internal_error", recovery.UNKNOWN, f"internal error: {e!r}"[:500]))
             else:
                 self._end_attempt(task_id, "failed", turn)
         finally:
@@ -612,9 +679,24 @@ class TaskManager:
                 self._stop_deadline.pop(task_id, None)
                 self._attempts.pop(task_id, None)
 
+    def _pause_for_dependencies(self, task_id: str, turn: _Turn, log: TaskLog) -> bool:
+        if turn.trigger != "initial" or turn.ignore_dependencies or self.db.dependencies_ready(task_id):
+            return False
+        task = self.get(task_id)
+        if self.db.transition(task_id, task["status"], "waiting_dependencies", claimed_by=None, claimed_at=None,
+                              status_detail="Waiting for dependencies to succeed."):
+            log.add_system("dependency success was revoked before execution; waiting again")
+            self._end_attempt(task_id, "dependency_wait", turn)
+        return True
+
     async def _prepare(self, task_id: str, log: TaskLog, turn: _Turn) -> bool:
         """Before Codex is started: the worktree must exist (a waiting task gets it now), and before a retry its state is
         recorded. Nothing is reset, cleaned or checked out. False if the run cannot go on (the task is settled already)."""
+        try:
+            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread))
+        except TaskError as e:
+            self._settle(task_id, log, turn, "failed", failure=Failure("invalid_attachment", recovery.NON_RETRYABLE, str(e)))
+            return False
         task = self.get(task_id)
         failure = await self._ensure_worktree(task, log)
         if failure:
@@ -705,10 +787,17 @@ class TaskManager:
             status, failure = ("interrupted" if self._shutting_down else "stopped"), None
         fields.setdefault("finished_at", now_iso())
         fields.setdefault("exit_code", exit_code)
+        fields.setdefault("completion_pending", 0)
         result = {"completed": "completed", "stopped": "stopped", "interrupted": "shutdown",
                   "waiting-for-quota": "quota", "failed": "failed"}[status]
         if status == "completed":
             fields.update(next_retry_at=None, pending_turn=None, status_detail=fields.get("status_detail", ""))
+        else:
+            fields.update(task_outcome="incomplete", outcome_source="execution",
+                          outcome_reason=(failure.message if failure else f"Execution {status}.")[:1000],
+                          manual_override=0, manual_override_at=None, manual_override_by="")
+            fields.update(evidence_result="UNKNOWN", evidence_reason="Execution did not complete normally.",
+                          approval_source="", approved_at=None)
         if failure:
             fields.update(last_failure_kind=failure.kind, last_failure_message=failure.message[:500], last_exit_code=exit_code)
             log.add_system(failure.message if failure.category == recovery.QUOTA else
@@ -759,8 +848,8 @@ class TaskManager:
             return _Turn(RECOVERY_PROMPT, resume_thread=thread, trigger=trigger, service_tier=turn.service_tier)
         if thread:
             return _Turn(turn.prompt, resume_thread=thread, trigger=trigger, service_tier=turn.service_tier,
-                         fresh_ok=turn.fresh_ok or turn.resume_thread is None)
-        return _Turn(turn.prompt, trigger=trigger, service_tier=turn.service_tier)
+                         fresh_ok=turn.fresh_ok or turn.resume_thread is None, attachment_ids=list(turn.attachment_ids))
+        return _Turn(turn.prompt, trigger=trigger, service_tier=turn.service_tier, attachment_ids=list(turn.attachment_ids))
 
     def _mark_started(self, task_id: str, turn: _Turn) -> None:
         """Codex confirmed the turn started: remember it, so that a retry knows its instruction is in the thread."""
@@ -889,7 +978,10 @@ class TaskManager:
             if compact:
                 await client.request("thread/compact/start", {"threadId": thread_id}, timeout=60)
             else:
-                params = {"threadId": thread_id, "input": [{"type": "text", "text": turn.prompt}]}
+                rules = json.loads(task["completion_contract"] or "{}")
+                prompt = turn.prompt + ("\nCompletion contract: " + json.dumps(rules) if rules else "")
+                params = {"threadId": thread_id, "input": self._image_input(prompt, turn.attachment_ids),
+                          "outputSchema": completion.SCHEMA}
                 if task["reasoning_effort"] not in ("", "default"):
                     params["effort"] = task["reasoning_effort"]
                 # The speed is chosen for THIS turn only (Send Standard / Send Fast): serviceTierForTurn does not change the
@@ -949,8 +1041,17 @@ class TaskManager:
                 entry = log_entry(method, params)
                 if entry:
                     log.add_event(entry[0], entry[1], params)
+                if method == "item/completed" and params.get("turnId") == info.get("turn"):
+                    item = params.get("item") or {}
+                    if item.get("type") == "agentMessage" and item.get("phase") in (None, "final_answer"):
+                        turn.final_text = item.get("text") if isinstance(item.get("text"), str) else ""
                 if method == "turn/completed":
                     final = params.get("turn") or {}
+                    for item in final.get("items") or []:
+                        if item.get("type") == "agentMessage" and item.get("phase") in (None, "final_answer"):
+                            turn.final_text = item.get("text") if isinstance(item.get("text"), str) else ""
+                    if final.get("status") == "completed" and not compact:
+                        self._record_completion_pending(task_id, turn.final_text)
                     break
         except AppServerError as e:
             log.add_system(f"codex app-server failed during the turn: {e}")
@@ -988,7 +1089,9 @@ class TaskManager:
         if compact:  # the size after compaction is only known from the next turn's first request
             self.db.update_task(task_id, context_tokens=None)
 
-        after = await self.read_limits("turn_end", task_id, force_history=True)
+        # A lost server has no attributable end-of-turn quota snapshot. Querying it here can restart the
+        # server or wait on a dying transport before recording the process failure.
+        after = None if lost is not None else await self.read_limits("turn_end", task_id, force_history=True)
         fields = {"finished_at": now_iso(), "exit_code": None}
         if after:
             fields.update(five_hour_used_after=after["five_hour_used"], weekly_used_after=after["weekly_used"])
@@ -1028,6 +1131,11 @@ class TaskManager:
         if stop_reason:
             self.db.add_context_event(task_id, "retry_guard", "critical", ctx_guard.STOP_MESSAGES.get(stop_reason, stop_reason), now_iso(),
                                       None, {"reason": stop_reason})
+        if status == "completed" and not compact:
+            fields.update(await self._completion_fields(task_id, turn.final_text))
+        if task_id in self._stop_requested:
+            status = "interrupted" if self._shutting_down else "stopped"
+            fields.update(task_outcome="incomplete", outcome_reason="Stopped before completion was accepted.", outcome_source="gate")
         # Last, and with nothing awaited afterwards: once the status is terminal a new turn may be started.
         self._settle(task_id, log, turn, status, failure=failure, **fields)
 
@@ -1037,8 +1145,10 @@ class TaskManager:
         if turn.kind == "compact":
             raise TaskError("compaction needs the app-server backend", 409, "unsupported")
         task = self.get(task_id)
+        task = {**task, "image_paths": self.attachments.paths(turn.attachment_ids),
+                "service_tier": turn.service_tier or task["service_tier"]}
         try:
-            proc = await self.runner.spawn({**task, "service_tier": turn.service_tier or task["service_tier"]}, turn.resume_thread)
+            proc = await self.runner.spawn(task, turn.resume_thread)
         except OSError as e:
             log.add_system(f"failed to start codex: {e}")
             permanent = isinstance(e, (FileNotFoundError, PermissionError, NotADirectoryError))
@@ -1070,7 +1180,11 @@ class TaskManager:
 
         async def feed_prompt():
             try:
-                proc.stdin.write(turn.prompt.encode())
+                prompt = turn.prompt + "\n\n" + completion.RESULT_INSTRUCTION
+                rules = json.loads(task["completion_contract"] or "{}")
+                if rules:
+                    prompt += "\nCompletion contract: " + json.dumps(rules)
+                proc.stdin.write(prompt.encode())
                 await proc.stdin.drain()
                 proc.stdin.close()
             except (BrokenPipeError, ConnectionResetError):
@@ -1108,6 +1222,7 @@ class TaskManager:
             status = "interrupted" if self._shutting_down else "stopped"
         elif code == 0:
             status = "completed"
+            self._record_completion_pending(task_id, turn.final_text, exit_code=0)
         else:
             status = "failed"
             failure = recovery.classify_exit(code, last_error[0] if last_error else "\n".join(stderr_tail))
@@ -1118,7 +1233,119 @@ class TaskManager:
                             "cannot be resumed (only Start New Session is possible)"))
         # Last, and with nothing awaited afterwards: once the status is terminal a new turn may be started.
         await self.refresh_git_summary(task_id)
-        self._settle(task_id, log, turn, status, failure=failure, exit_code=code)
+        fields = await self._completion_fields(task_id, turn.final_text) if status == "completed" else {}
+        if task_id in self._stop_requested:
+            status = "interrupted" if self._shutting_down else "stopped"
+            fields.update(task_outcome="incomplete", outcome_reason="Stopped before completion was accepted.", outcome_source="gate")
+        self._settle(task_id, log, turn, status, failure=failure, exit_code=code, **fields)
+
+    # ---------- completion gate ----------
+
+    def completion_approval_settings(self) -> dict:
+        return {"auto_approve_verified_success": self.db.get_settings("completion.").get(
+            "completion.auto_approve_verified_success", "1") == "1"}
+
+    def set_completion_approval(self, enabled: bool) -> dict:
+        # Takes effect for future checks; changing the setting never re-runs historical tasks.
+        self.db.set_setting("completion.auto_approve_verified_success", "1" if enabled else "0")
+        return self.completion_approval_settings()
+
+    def _require_completion_idle(self, task_id: str) -> None:
+        lock = self._completion_locks.get(task_id)
+        task = self.db.get_task(task_id)
+        if (lock and lock.locked()) or (task and task["completion_pending"]):
+            raise TaskError("completion checks are running; try again after they finish", 409, "completion_busy")
+
+    def _record_completion_pending(self, task_id: str, text: str, **fields) -> None:
+        result = completion.parse_result(text)
+        self.db.update_task(task_id, completion_pending=1,
+                            semantic_result=json.dumps(result) if result else "", **fields)
+
+    async def _completion_fields(self, task_id: str, text: str) -> dict:
+        try:
+            fields = await completion.check(self.get(task_id), text, self.settings.home)
+            return completion.approve_verified(fields, self.completion_approval_settings()["auto_approve_verified_success"])
+        except Exception as e:
+            # Check infrastructure errors are semantic uncertainty, never automatic process retries.
+            return dict(task_outcome="needs_review", outcome_reason=f"Completion checks unavailable: {e}"[:1000],
+                        outcome_source="gate", completion_checked_at=now_iso(),
+                        completion_checks=json.dumps([{"name": "completion checks", "status": "fail", "reason": str(e)[:500]}]),
+                        semantic_result=json.dumps(completion.parse_result(text)) if completion.parse_result(text) else "",
+                        manual_override=0, manual_override_at=None, manual_override_by="", completion_pending=0,
+                        evidence_result="UNKNOWN", evidence_reason=str(e)[:1000], approval_source="", approved_at=None)
+
+    async def rerun_completion(self, task_id: str) -> dict:
+        self._require_completion_idle(task_id)
+        task = self.get(task_id)
+        if task["status"] != "completed":
+            raise TaskError("completion checks require a normally completed execution", 409)
+        self._require_worktree(task)
+        async with self._completion_locks.setdefault(task_id, asyncio.Lock()):
+            # Revoke any old success before waiting on commands, so the scheduler cannot release more work.
+            self.db.update_task(task_id, task_outcome="needs_review", outcome_source="gate",
+                                outcome_reason="Completion checks are running.", manual_override=0,
+                                manual_override_at=None, manual_override_by="", completion_pending=1,
+                                evidence_result="UNKNOWN", evidence_reason="Completion checks are running.",
+                                approval_source="", approved_at=None)
+            try:
+                fields = await self._completion_fields(task_id, task["semantic_result"])
+                self.db.update_task(task_id, **fields)
+            finally:
+                self.db.update_task(task_id, completion_pending=0)
+                self.scheduler.wake()
+        self._evaluate_dependents(task_id)
+        return self.present_task(self.get(task_id))
+
+    def override_completion(self, task_id: str, outcome: str, reason: str, confirm: bool) -> dict:
+        import getpass
+        self._require_completion_idle(task_id)
+        task = self.get(task_id)
+        if task["status"] != "completed":
+            raise TaskError("manual outcome requires a normally completed execution", 409)
+        if outcome == "success" and not confirm:
+            raise TaskError("confirm the manual success override; this releases dependent tasks", 409, "confirmation_required")
+        reason = reason.strip()
+        if not reason:
+            raise TaskError("a reason is required for a manual outcome")
+        try:
+            # This local, single-user service records its OS account; clients cannot impersonate another actor.
+            self.db.override_completion(task_id, outcome, reason[:1000], getpass.getuser())
+        except ValueError as e:
+            raise TaskError(str(e), 409) from e
+        self.scheduler.wake()
+        return self.present_task(self.get(task_id))
+
+    def set_completion_contract(self, task_id: str, value: dict) -> dict:
+        self._require_completion_idle(task_id)
+        task = self.get(task_id)
+        if task["status"] in ACTIVE_STATUSES or task["status"] == "retry_wait":
+            raise TaskError("completion contract cannot change during execution", 409)
+        try:
+            rules = completion.contract(value)
+        except ValueError as e:
+            raise TaskError(str(e)) from e
+        self.db.update_task(task_id, completion_contract=json.dumps(rules), task_outcome="needs_review",
+                            outcome_source="gate", outcome_reason="Completion contract changed; re-run completion checks.",
+                            completion_checked_at=None, completion_checks="[]", manual_override=0,
+                            manual_override_at=None, manual_override_by="", approval_source="", approved_at=None,
+                            evidence_result="UNKNOWN", evidence_reason="Completion contract changed; re-run completion checks.")
+        self.scheduler.wake()
+        return self.present_task(self.get(task_id))
+
+    async def cancel_dependents(self, task_id: str) -> dict:
+        self.get(task_id)
+        cancelled, seen, pending = [], {task_id}, list(self.db.dependents_of(task_id))
+        while pending:
+            child = pending.pop()
+            if child in seen:
+                continue
+            seen.add(child)
+            pending.extend(self.db.dependents_of(child))
+            task = self.get(child)
+            if task["status"] in ("waiting_dependencies", "blocked"):
+                await self.stop(child)
+                cancelled.append(child)
+        return {"cancelled": cancelled}
 
     # ---------- codex exec events: session id and token usage ----------
 
@@ -1132,6 +1359,10 @@ class TaskManager:
                 self._on_thread_started(task_id, log, turn, event)
             elif etype == "turn.completed":
                 self._on_turn_completed(task_id, log, turn, event)
+            elif etype == "item.completed":
+                item = event.get("item") or {}
+                if item.get("type") == "agent_message" and item.get("phase") in (None, "final_answer"):
+                    turn.final_text = item.get("text") if isinstance(item.get("text"), str) else ""
         except Exception as e:
             log.add_system(f"could not process a codex event: {e!r}")
 
@@ -1313,6 +1544,10 @@ class TaskManager:
             if self.db.block_if_failed(task_id, detail):
                 TaskLog.note(self.log_path(task_id), f"blocked: {detail}")
                 return "blocked"
+        issues = [self.db.get_task(d) for d in self.db.dependencies_of(task_id)]
+        detail = "; ".join(f"{d['name']} {d['task_outcome'].replace('_', ' ')}: {d['outcome_reason']}"
+                           for d in issues if d and d["status"] == "completed" and d["task_outcome"] != "success")
+        self.db.update_task(task_id, status_detail=detail[:1000])
         return "waiting"
 
     def _evaluate_dependents(self, task_id: str) -> None:
@@ -1340,12 +1575,17 @@ class TaskManager:
         if task["status"] not in ("waiting_dependencies", "blocked"):
             raise TaskError(f"task is {task['status']}, not waiting for dependencies", 409)
         ok = self.db.transition(task_id, task["status"], "queued", claimed_by=None, claimed_at=None, status_detail="",
-                                finished_at=None)
+                                finished_at=None, pending_turn=self._run_anyway_turn(task).to_json())
         if not ok:
             raise TaskError("task changed meanwhile; try again", 409)
         TaskLog.note(self.log_path(task_id), "Run Anyway: started without waiting for all dependencies")
         self._dispatch(task_id)
         return self.get(task_id)
+
+    def _run_anyway_turn(self, task: dict) -> _Turn:
+        turn = self._pending_turn(task)
+        turn.ignore_dependencies = True
+        return turn
 
     async def retry_failed_dependencies(self, task_id: str, confirm_over_limit: bool = False) -> dict:
         """For a blocked task: retry the prerequisites that failed or were stopped (each in its own thread and worktree) and
@@ -1454,14 +1694,15 @@ class TaskManager:
     # ---------- scheduled instructions (a follow-up turn for an existing thread, after other tasks) ----------
 
     async def schedule_instruction(self, task_id: str, prompt: str, depends_on=(), service_tier: Optional[str] = None,
-                                   created_by: str = "user") -> dict:
+                                   created_by: str = "user", attachment_ids=()) -> dict:
         """Reserve an instruction for the Codex thread of `task_id`. It is sent when every task in `depends_on` has
         completed AND the thread is idle (no `depends_on` = as soon as the thread is idle), on the SAME thread, worktree and
         branch. Its speed is its own: `service_tier` None means Standard, never "whatever the last turn used".
         Reasoning effort and approval come from the task."""
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("instruction is required", 400, "empty")
+        await self._check_images(attachment_ids, resume=True)
         task = self.get(task_id)
         tier = self._turn_tier(service_tier) or "default"
         deps = self._check_dependency_ids(depends_on)
@@ -1470,7 +1711,7 @@ class TaskManager:
         if task["worktree_removed"]:
             raise TaskError("worktree no longer exists", 409, "no_worktree")
         try:
-            row = self.db.create_scheduled(task_id, prompt, tier, deps, created_by)
+            row = self.db.create_scheduled(task_id, prompt, tier, deps, created_by, attachment_ids)
         except ScheduledError as e:
             raise TaskError(str(e), 400, e.code) from e
         TaskLog.note(self.log_path(task_id), f"scheduled instruction #{row['id']} created ({'Fast' if tier == 'priority' else tier if tier != 'default' else 'Standard'}"
@@ -1503,11 +1744,13 @@ class TaskManager:
         for dep_id in self.db.scheduled_dependencies(row["id"]):
             dep = self.db.get_task(dep_id)
             if dep:
-                deps.append({"id": dep_id, "name": dep["name"], "status": dep["status"]})
+                deps.append({"id": dep_id, "name": dep["name"], "status": dep["status"],
+                             "task_outcome": dep["task_outcome"], "outcome_reason": dep["outcome_reason"]})
         out = {k: row[k] for k in ("id", "task_id", "prompt", "status", "service_tier", "created_at", "ready_at", "started_at",
                                    "finished_at", "blocked_reason", "created_by")}
+        out["attachments"] = self.attachments.views(json.loads(row["attachment_ids"]))
         out.update(speed="Fast" if row["service_tier"] == "priority" else "Standard" if row["service_tier"] == "default" else row["service_tier"],
-                   dependencies=deps, deps_done=sum(d["status"] == "completed" for d in deps), deps_total=len(deps))
+                   dependencies=deps, deps_done=sum(d["status"] == "completed" and d["task_outcome"] == "success" for d in deps), deps_total=len(deps))
         if row["status"] == "waiting_thread":
             target = self.db.get_task(row["task_id"]) or {}
             out["wait_note"] = f"the thread's task is {target.get('status', '?')}"
@@ -1559,11 +1802,15 @@ class TaskManager:
     def _claim_scheduled(self, row: dict) -> bool:
         """Send one ready instruction: its turn becomes the task's pending turn on the task's own Codex thread. The claim is
         a single transaction (Database.claim_scheduled); only the caller that wins it logs and starts anything."""
+        lock = self._completion_locks.get(row["task_id"])
+        if lock and lock.locked():
+            return False
         task = self.db.get_task(row["task_id"])
         thread = task and task["codex_thread_id"]
         if not task or not thread or task["status"] != "completed":
             return False
-        turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"])
+        turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"],
+                     attachment_ids=json.loads(row["attachment_ids"]))
         if not self.db.claim_scheduled(row["id"], self._queue_fields(turn), thread):
             return False
         TaskLog.note(self.log_path(task["id"]), f"scheduled instruction #{row['id']} sent to Codex thread {thread} "
@@ -1578,7 +1825,8 @@ class TaskManager:
         if task is None:
             self.db.finish_scheduled(row["id"], "failed", "the target task no longer exists")
         elif task["status"] == "completed":
-            self.db.finish_scheduled(row["id"], "completed")
+            self.db.finish_scheduled(row["id"], "completed" if task["task_outcome"] == "success" else "failed",
+                                    "" if task["task_outcome"] == "success" else task["outcome_reason"])
         elif task["status"] in ("failed", "stopped"):
             detail = task["status_detail"] or ("stopped by the user" if task["status"] == "stopped" else "")
             self.db.finish_scheduled(row["id"], "failed", f"the task {task['status']}" + (f": {detail}" if detail else ""))
@@ -1623,7 +1871,7 @@ class TaskManager:
         Assumes one GUI process per database (it takes over claims of a previous process).
         """
         fixed = []
-        for task in self.db.list_tasks_by_status(["queued", "starting", "running", "retry_wait"]):
+        for task in self.db.list_tasks_by_status(["queued", "starting", "running", "retry_wait", "completed"]):
             if self._reconcile(task, startup=True):
                 fixed.append(task["id"])
         return fixed
@@ -1631,6 +1879,23 @@ class TaskManager:
     def _reconcile(self, task: dict, startup: bool = False) -> bool:
         task_id, status = task["id"], task["status"]
         if task_id in self._jobs:
+            return False
+        if task["completion_pending"] and status in ("running", "completed"):
+            # Codex finished normally; the GUI disappeared while checking. A process retry would duplicate work.
+            fields = dict(completion_pending=0, task_outcome="needs_review", outcome_source="gate",
+                          outcome_reason="GUI restarted during completion checks; re-run completion checks.",
+                          completion_checked_at=None, next_retry_at=None, pending_turn=None, finished_at=now_iso(),
+                          evidence_result="UNKNOWN", evidence_reason="Completion checks were interrupted.",
+                          approval_source="", approved_at=None)
+            if status == "completed":
+                self.db.update_task(task_id, **fields)
+            else:
+                self.db.set_status(task_id, "completed", **fields)
+            attempt = self.db.open_attempt(task_id)
+            if attempt:
+                self.db.update_attempt(attempt["id"], result="completed", finished_at=now_iso(), exit_code=task["exit_code"])
+            return True
+        if status == "completed":
             return False
         if status == "queued":
             if not task["pending_turn"]:  # a row from before pending_turn existed: what it was to run is unknown, so the user decides
@@ -1681,6 +1946,7 @@ class TaskManager:
         return task["worktree"]
 
     def _require_inactive(self, task: dict) -> None:
+        self._require_completion_idle(task["id"])
         if task["status"] in BUSY_STATUSES:
             raise TaskError("task is still active or waiting; stop it first", 409)
 
@@ -1773,6 +2039,7 @@ class TaskManager:
         """The task plus the derived figures the UI shows (cache, context, quota, model, retry suggestion, dependencies)."""
         for internal in ("pending_turn", "claimed_by", "claimed_at", "proc_identity"):
             task.pop(internal, None)
+        task["execution_status"] = task["status"]
         task.update(self._dependency_view(task, by_id, edges))
         task["retry_in_seconds"] = self._seconds_until(task["next_retry_at"]) if task["status"] == "retry_wait" else None
         task["cache_hit_rate"] = self.present_turn(latest)["cache_hit_rate"] if latest and latest["kind"] == "turn" else None
@@ -1800,18 +2067,28 @@ class TaskManager:
         for dep_id in ids:
             dep = by_id.get(dep_id) if by_id is not None else self.db.get_task(dep_id)
             if dep:
-                deps.append({"id": dep_id, "name": dep["name"], "status": dep["status"]})
-        return {"dependencies": deps, "deps_total": len(deps), "deps_done": sum(d["status"] == "completed" for d in deps)}
+                deps.append({"id": dep_id, "name": dep["name"], "status": dep["status"],
+                             "task_outcome": dep["task_outcome"], "outcome_reason": dep["outcome_reason"]})
+        return {"dependencies": deps, "deps_total": len(deps),
+                "deps_done": sum(d["status"] == "completed" and d["task_outcome"] == "success" for d in deps)}
 
     def present_task(self, task: dict) -> dict:
         turns = self.db.list_turns(task["id"])
         latest = next((t for t in reversed(turns) if t["kind"] == "turn"), turns[-1] if turns else None)
         task = self._present(dict(task), latest, scheduled=self.db.scheduled_counts())
+        task["messages"] = [row | {"attachments": self.attachments.views(row["attachment_ids"])}
+                            for row in self.db.list_messages(task["id"])]
         task["scheduled_instructions"] = [self._scheduled_view(r) for r in self.db.list_scheduled(task["id"])]
         task["dependents"] = [{"id": d["id"], "name": d["name"], "status": d["status"]}
                               for d in map(self.db.get_task, self.db.dependents_of(task["id"])) if d]
         task["observed_quota"] = self._observed_quota(task)
         task["retry_suggestion"] = self._retry_suggestion(task)
+        task["completion_contract"] = json.loads(task["completion_contract"] or "{}")
+        task["completion_checks"] = json.loads(task["completion_checks"] or "[]")
+        task["completion_overrides"] = self.db.completion_overrides(task["id"])
+        task["completion_approvals"] = self.db.completion_approvals(task["id"])
+        result = completion.parse_result(task["semantic_result"])
+        task["semantic_status"] = result["status"] if result else "UNKNOWN"
         task["ctx"] = self.ctx.task_view(task, turns, task["effective_model"] or task["model"],
                                          self.ctx.peek_model(task["effective_model"] or task["model"]).get("tool_output_cap"))
         return task

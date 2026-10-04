@@ -41,8 +41,8 @@ SCHEDULED_IDLE_TASK_STATUS = "completed"
 TRANSITIONS = {
     "waiting_dependencies": {"queued", "blocked", "stopped", "failed"},
     "blocked": {"queued", "waiting_dependencies", "stopped"},
-    "queued": {"starting", "stopped", "failed", "interrupted"},
-    "starting": {"running", "stopped", "failed", "interrupted", "waiting-for-quota", "retry_wait"},
+    "queued": {"starting", "stopped", "failed", "interrupted", "waiting_dependencies"},
+    "starting": {"running", "stopped", "failed", "interrupted", "waiting-for-quota", "retry_wait", "waiting_dependencies"},
     "running": {"completed", "failed", "stopped", "interrupted", "waiting-for-quota", "retry_wait"},
     "retry_wait": {"queued", "stopped", "failed"},
     "completed": {"queued"},

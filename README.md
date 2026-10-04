@@ -26,6 +26,7 @@ A local web GUI for running several Codex CLI instances at once and managing the
 
 5. [Signing in to Codex](#signing-in-to-codex)
 6. [Follow-up Instructions](#follow-up-instructions)
+    - [Image Attachments](#image-attachments)
 7. [Usage Optimization](#usage-optimization)
 8. [Context Efficiency](#context-efficiency)
 9. [AGENTS.md Editor](#agentsmd-editor)
@@ -123,6 +124,46 @@ A task keeps using a single Codex thread.
   With the `exec` backend, follow-ups to a running turn are not possible (Send is disabled; the API returns 409).
 - If Codex does not report a thread id, this is logged and Send is unavailable for that task (Start New Session still works). If a different thread id comes back on resume, a `WARNING` is logged.
 - The thread stays on the Codex side even if you restart the GUI, so it can be resumed from `codex_thread_id` in the DB (verified on a real Codex).
+
+## Image Attachments
+
+New Task and Additional instruction accept screenshots/reference images together with text (or images alone).
+Use **Attach images**, paste a clipboard image with **Ctrl+V** (Cmd+V also works), or drop files onto the input/attachment area.
+Each image shows its filename and thumbnail; **Remove** removes it from the current draft, and clicking the thumbnail opens an enlarged view.
+Normal text paste and Japanese IME input keep their usual behaviour. Sent messages and their images appear under **Message history & images**;
+reserved messages also show images in **Scheduled instructions**.
+
+PNG, JPEG and WebP are supported: **8 images per message**, **10 MiB per image**, **40 MiB total**, **8192 pixels per side**,
+and **32 million pixels** per image. Animated, corrupt and oversized files are rejected by the backend based on the actual bytes,
+not the filename/MIME header. These limits live in `app/attachments.py`.
+
+Uploads are copied into `$CODEX_GUI_HOME/attachments` under generated IDs; ordered references are stored in SQLite per message and scheduled instruction.
+The original file can be removed. Restart, delayed execution and recovery keep the saved attachments. Back up the database and attachment directory together.
+Removing a preview, cancelling a reservation or deleting a worktree does **not** delete stored images that a history or another task may reference.
+Automatic cleanup of unused uploads is not implemented, so removed/abandoned uploads also remain on disk.
+Uploaded drafts and their text are restored on page reload using browser local storage when available; a file whose upload has not succeeded must be selected again after reload.
+
+The exec backend passes separate `--image` argv entries to `codex exec` or `codex exec resume <thread_id>`; the shared app-server uses `localImage` inputs.
+A follow-up includes only its own images. A retry resends its images only if Codex never confirmed that the instruction started;
+otherwise recovery continues the existing thread without reattaching past images. Running-turn input follows the existing rules
+(app-server: steer; exec: wait, or reserve a Scheduled Instruction).
+The configured CLI is checked for image support. Unreadable images/unsupported CLI versions produce an error and preserve input rather than sending only the text.
+HTTP submission/upload failures leave the draft available for retry.
+
+On WSL, images selected or pasted in a **Windows browser** are uploaded as bytes and saved to paths readable by the **WSL Codex CLI**;
+Windows client paths are never passed to it. Use a WSL-native `CODEX_BIN`. Launching a Windows `codex.exe` from WSL with image attachments is rejected with an explanation.
+
+Optional checks, always using temporary GUI/repository data:
+
+```sh
+CODEX_GUI_REAL_IMAGES=1 .venv/bin/python -m pytest tests/test_real_images.py -s
+# Chromium UI checks (Playwright is an optional test dependency):
+.venv/bin/pip install playwright
+.venv/bin/playwright install chromium
+CODEX_GUI_BROWSER=1 .venv/bin/python -m pytest tests/test_ui_attachments_browser.py
+```
+
+The real-image check uses subscription auth in an isolated `CODEX_HOME` and verifies both new and continued image recognition on exec and app-server.
 
 ## Usage Optimization
 
@@ -239,7 +280,7 @@ A task's worktree receives the base ref's `AGENTS.md` at creation. Editing main 
 
 ## Task Dependencies
 
-Choose **After other tasks complete** under **Run** in New Task and pick the tasks to wait for in **Depends on**; the task starts automatically once all of them are `completed`
+Choose **After other tasks complete** under **Run** in New Task and pick the tasks to wait for in **Depends on**; the task starts automatically once all of them have execution status `completed` and semantic outcome `success`
 (A, B, C → D. The policy is `all_success`; the design allows adding things like `all_terminal` later).
 
 - **The worktree is created just before running.** A waiting task holds only a branch name and a worktree path, with no worktree (no useless worktrees are created).
@@ -251,8 +292,17 @@ Choose **After other tasks complete** under **Run** in New Task and pick the tas
   Dependencies in `waiting-for-quota` / `interrupted` are also resumable pauses, so the task keeps waiting.
 - Stopping a dependency makes it `stopped`, so tasks depending on it become `blocked`.
 - Dependencies form a DAG. **Self-dependencies, duplicates and cycles are rejected** (the same check applies when replacing the dependencies of a not-yet-started task with `PUT /api/tasks/{id}/dependencies`).
-- How double starts are prevented: `waiting_dependencies → queued` is **a single conditional UPDATE** that includes the "all dependencies completed" check, and `queued → run` is
+- How double starts are prevented: `waiting_dependencies → queued` is **a single conditional UPDATE** that includes the "all dependencies completed with success" check, and `queued → run` is
   **a single UPDATE conditioned on `claimed_by IS NULL` (the claim)**. Even if parents finish at the same moment and the listener, scheduler and API evaluate repeatedly, the task can start only once.
+
+### Task dependency graph
+
+Open **依存グラフ** from the task list (`/dependencies`). The graph reads existing SQLite task dependencies and scheduled-instruction **Depends on** settings, with arrows from prerequisites to successors. Tasks without settings remain independent. It makes no AI calls and infers no relationships from instructions or names. Scheduled arrows describe follow-up turns, separately from initial-task prerequisites. Multiple settings between the same tasks share an arrow whose detail lists every setting. Cancelled schedules are excluded; completed/failed schedules carry their saved status.
+
+Select cards or arrows to see full titles, repositories and links to the existing schedule screen. Change dependencies there by cancelling and replacing reservations. Pan, zoom, fit, horizontal/vertical layout, search and repository filters are available; prerequisites outside the filter remain visible as contextual cards. Existing two-second polling refreshes settings and state while preserving positions and selection on status updates. Missing references and projected task-level cycles are reported without repairing settings. Scheduling and completion acceptance behavior are unchanged.
+
+Browser fixtures use temporary data and a separate localhost port, never registered tasks or Codex. Set `GRAPH_FIXTURE_HOME` to a fresh temporary directory and run `uvicorn graph_browser_app:create_fixture --factory --host 127.0.0.1 --port 8766` with the repository and `tests` on `PYTHONPATH`. Run `node tests/graph_browser_smoke.cjs` with `GRAPH_BROWSER_BASE=http://127.0.0.1:8766`, `GRAPH_PLAYWRIGHT_MODULE` pointing to an installed Playwright module, `GRAPH_BROWSER_EXECUTABLE` pointing to a Chromium executable, and `GRAPH_SCREENSHOT_DIR` pointing to an existing temporary directory.
+
 
 ## Scheduled Instructions
 
@@ -267,15 +317,15 @@ In **Additional instruction** on the detail page, write the instruction and use 
 - **Schedule Instruction** reserves it. Task Detail then lists **Scheduled instructions** (`#1 WAITING · After: ✓ P14 … P15 running`, `WAITING FOR THREAD`, `READY`, `RUNNING`, `COMPLETED`, `BLOCKED`, `CANCELLED`, `FAILED`) with **Cancel**.
   The dashboard only adds a small `Scheduled: 3 · Ready: 1` under the task name.
 
-It is sent only when **both** hold: every selected task is `completed`, and the target thread is idle (its task is `completed`: not running, queued, retrying, failed, stopped, interrupted or waiting for quota).
+It is sent only when **both** hold: every selected task is `completed` with outcome `success`, and the target thread is idle (its task is `completed`: not running, queued, retrying, failed, stopped, interrupted or waiting for quota).
 It always continues the same `codex_thread_id`, worktree and branch (`codex exec resume <thread>` / a new turn on the same app-server thread); no session is created, so the prompt cache is kept.
 
 | Status | Meaning |
 | --- | --- |
-| `waiting_dependencies` | at least one selected task is not `completed` yet (a task in `retry_wait` / `interrupted` / `waiting-for-quota` is **not** a failure: it waits for the outcome) |
+| `waiting_dependencies` | at least one selected task has not completed with `success` (includes semantic issues and resumable execution pauses) |
 | `waiting_thread` | all dependencies are done, but the thread is busy |
 | `ready` | everything is satisfied; waiting for its turn in the queue of the thread |
-| `running` | claimed and sent; it ends with the turn (`completed`, or `failed` when the task ends `failed` / `stopped`) |
+| `running` | claimed and sent; it ends with the turn (`completed` on semantic success, otherwise `failed` for an execution or semantic issue) |
 | `blocked` | a dependency ended `failed` / `stopped` / `blocked`, or the target worktree was deleted / has no thread (stays blocked; Cancel or create a new one) |
 | `cancelled` | cancelled before it was sent: it is never sent |
 

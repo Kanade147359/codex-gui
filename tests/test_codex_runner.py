@@ -52,7 +52,9 @@ def test_resume_command_keeps_options_and_continues_the_thread():
     fresh = CodexRunner("codex").build_command(t)
     resumed = CodexRunner("codex").build_command(t, "01a0f766-f849-7ef2-92a5-a6d01e361b64")
     # same options in front, then `resume <thread> -` (the order verified against codex-cli 0.159.2)
-    assert resumed == fresh[:-1] + ["resume", "01a0f766-f849-7ef2-92a5-a6d01e361b64", "-"]
+    schema_pos = fresh.index("--output-schema")
+    without_schema = fresh[:schema_pos] + fresh[schema_pos + 2:]
+    assert resumed == without_schema[:-1] + ["resume", "01a0f766-f849-7ef2-92a5-a6d01e361b64", "-"]
     assert resumed[:5] == ["codex", "exec", "--json", "-C", "/wt/x"]
     assert t["prompt"] not in resumed
 

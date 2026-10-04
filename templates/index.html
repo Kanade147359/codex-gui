@@ -7,6 +7,7 @@
 </label>
 {% endblock %}
 {% block content %}
+<a class="button" href="/dependencies">依存グラフ</a>
 <section class="center">
   <h1>Codex Control Center</h1>
   <p class="defaults" id="defaults">Model default: <b id="default-model">…</b> &nbsp; Speed: <b>Standard</b>
@@ -25,6 +26,15 @@
   <p class="muted small" id="limits-note"></p>
   <p class="running-line">Running: <b id="running-count">0</b>
     <button id="resume-all-btn" hidden title="Continue every interrupted task in its existing Codex thread">Resume interrupted</button></p>
+</section>
+
+<section class="usage-box">
+  <h2>Completion validation</h2>
+  <p id="completion-validation-capability" class="muted">bwrap: Checking…</p>
+  <p id="completion-validation-note" class="muted small"></p>
+  <h3>Automatic completion approval</h3>
+  <label class="check"><input id="completion-auto-approve" type="checkbox" checked> Auto-approve verified SUCCESS results</label>
+  <p id="completion-approval-note" class="muted small">Custom contracts requiring manual approval take priority.</p>
 </section>
 
 <details class="usage-box" id="efficiency-box" open>
@@ -87,6 +97,7 @@
       <label>Prompt
         <textarea name="prompt" rows="8" required placeholder="What should Codex do?"></textarea>
       </label>
+      <div id="new-task-attachments" class="image-composer"></div>
       <fieldset class="run-group">
         <legend>Run</legend>
         <label class="check"><input type="radio" name="run_mode" value="now" checked> Immediately</label>
@@ -122,6 +133,16 @@
         <label class="check"><input type="checkbox" name="adaptive_reasoning" checked> Adaptive reasoning <span class="muted">(suggests a retry with more effort; never automatic)</span></label>
         <label class="check"><input type="checkbox" name="context_guard" checked> Context guard <span class="muted">(warn when the thread gets large)</span></label>
       </div>
+      <details class="advanced">
+        <summary>Completion Contract (optional)</summary>
+        <label>Required paths (one relative path per line)<textarea name="required_paths" rows="2"></textarea></label>
+        <label>Required changed paths (one relative path per line)<textarea name="required_changed_paths" rows="2"></textarea></label>
+        <label class="check"><input type="checkbox" name="require_any_change"> Require any change</label>
+        <label class="check"><input type="checkbox" name="require_commit"> Require a commit</label>
+        <label class="check"><input type="checkbox" name="manual_approval"> Require manual approval</label>
+        <label>Validation commands (one command per line)<textarea name="validation_commands" rows="2" placeholder="python -m pytest -p no:cacheprovider"></textarea></label>
+        <p class="small muted">Checks run with a read-only worktree, temporary scratch space and no network. Only a SUCCESS outcome releases dependencies.</p>
+      </details>
       <details class="advanced" id="recovery-group">
         <summary>Auto recovery <span class="muted small" id="recovery-summary"></span></summary>
         <div class="row">
