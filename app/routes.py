@@ -71,6 +71,12 @@ class Instruction(BaseModel):
     service_tier: Optional[str] = None      # speed of THIS turn: "standard" (Send Standard) / "fast" (Send Fast); omitted = the task's
 
 
+class ScheduledInstruction(BaseModel):
+    prompt: str
+    depends_on: list[str] = []              # tasks that must be completed first; empty = send when the thread is idle
+    service_tier: Optional[str] = "standard"  # THIS instruction's speed: "standard" / "fast" (never inherited from the last turn)
+
+
 class ToolProfileChange(BaseModel):
     profile: str
     confirm: bool = False  # the user accepted "Changing tool configuration may reduce prompt cache reuse"
@@ -309,6 +315,32 @@ async def send_instruction(request: Request, task_id: str, body: Instruction):
     """Additional instruction: continues the task's existing Codex session (codex exec resume)."""
     try:
         return await manager(request).send_instruction(task_id, body.prompt, body.reasoning_effort, body.service_tier)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.get("/api/tasks/{task_id}/scheduled")
+async def list_scheduled(request: Request, task_id: str):
+    try:
+        return {"scheduled": manager(request).scheduled_instructions(task_id)}
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/scheduled")
+async def schedule_instruction(request: Request, task_id: str, body: ScheduledInstruction):
+    """Reserve an instruction for the task's existing Codex thread: sent once the dependencies are completed and the thread is idle."""
+    try:
+        return await manager(request).schedule_instruction(task_id, body.prompt, body.depends_on, body.service_tier)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.delete("/api/tasks/{task_id}/scheduled/{scheduled_id}")
+async def cancel_scheduled(request: Request, task_id: str, scheduled_id: int):
+    """Cancel a scheduled instruction that has not been sent yet."""
+    try:
+        return manager(request).cancel_scheduled(task_id, scheduled_id)
     except TaskError as e:
         raise api_error(e)
 

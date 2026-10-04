@@ -17,7 +17,7 @@ function makeEl(name) {
     get innerHTML() { return html; },
     set innerHTML(v) { html = String(v); this.options = [...html.matchAll(/<option value="([^"]*)"/g)].map((m) => ({ value: m[1] })); },
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {}, removeEventListener() {}, appendChild(c) { this.children.push(c); this.childElementCount = this.children.length; return c; },
+    addEventListener(type, fn) { (this.__h = this.__h || {})[type] = (this.__h[type] || []).concat(fn); }, removeEventListener() {}, appendChild(c) { this.children.push(c); this.childElementCount = this.children.length; return c; },
     remove() {}, focus() {}, click() {}, showModal() {}, close() {}, setRangeText() {}, reportValidity: () => true,
     querySelector: (sel) => getEl(sel), querySelectorAll: () => [], closest: () => null,
     get firstElementChild() { return this._fec || (this._fec = makeEl(name + " > child")); }, lastElementChild: null,
@@ -35,7 +35,9 @@ const document = {
   addEventListener() {},
 };
 const timers = [];
+const calls = [];
 const fetchStub = async (url, opts) => {
+  calls.push({ method: (opts && opts.method) || "GET", url: String(url), body: opts && opts.body ? JSON.parse(opts.body) : null });
   const path = String(url).split("?")[0];
   const key = (opts && opts.method && opts.method !== "GET" ? opts.method + " " : "") + String(url);
   const hit = responses[key] !== undefined ? responses[key] : responses[path];
@@ -60,11 +62,21 @@ run("app.js");
     await new Promise((r) => setTimeout(r, 20));
     for (const fn of timers.splice(0)) { try { const r = fn(); if (r && r.catch) r.catch((e) => errors.push("timer: " + (e.stack || e))); } catch (e) { errors.push("timer: " + (e.stack || e)); } }
   }
+  // UI_ACTIONS (JSON): [{sel, set: {prop: value}, fire: "click"|"change", target: {...}}], run after the page has initialised
+  for (const a of JSON.parse(process.env.UI_ACTIONS || "[]")) {
+    const el = getEl(a.sel);
+    Object.assign(el, a.set || {});
+    const target = a.target && a.target.cancelSid ? { closest: () => ({ dataset: { sid: a.target.cancelSid } }) } : a.target || el;  // a click on a Cancel button
+    for (const fn of (el.__h || {})[a.fire] || []) { try { await fn({ target, preventDefault() {} }); } catch (e) { errors.push("handler: " + (e.stack || e)); } }
+    for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r));
+  }
   const pick = (names) => Object.fromEntries(names.map((n) => [n, (registry[n] || {}).innerHTML || (registry[n] || {}).textContent || ""]));
-  console.log(JSON.stringify({ errors, published: !!(sandbox.window && sandbox.window.CtxUI),
+  console.log(JSON.stringify({ errors, calls, instructionValue: getEl("#instruction").value, instructionDisabled: getEl("#instruction").disabled, published: !!(sandbox.window && sandbox.window.CtxUI),
     html: pick(["#ctx-banners", "#ctx-summary", "#ctx-settings", "#ctx-cache", "#ctx-tooloutputs", "#ctx-agents", "#tasks-body", "#send-btn", "#task-name", "#action-msg",
-      "#task-status", "#deps-items", "#deps-summary", "#blocks-line", "#recovery-dl", "#recovery-hint", "#attempts-body", "#deps-list", "#instruction-hint"]),
+      "#task-status", "#deps-items", "#deps-summary", "#blocks-line", "#recovery-dl", "#recovery-hint", "#attempts-body", "#deps-list", "#instruction-hint",
+      "#scheduled-items", "#scheduled-done-items", "#scheduled-summary", "#scheduled-done-summary", "#sched-deps", "#schedule-hint"]),
     sendFastHidden: (registry["#send-fast-btn"] || {}).hidden,
-    hidden: Object.fromEntries(["#deps-section", "#run-anyway-btn", "#retry-deps-btn", "#retry-now-btn", "#retry-btn", "#attempts", "#stop-btn"]
+    hidden: Object.fromEntries(["#deps-section", "#run-anyway-btn", "#retry-deps-btn", "#retry-now-btn", "#retry-btn", "#attempts", "#stop-btn", "#scheduled-section", "#scheduled-done",
+      "#schedule-box", "#sched-deps-box"]
       .map((n) => [n, (registry[n] || {}).hidden])) }));
 })();

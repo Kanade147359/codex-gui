@@ -29,7 +29,7 @@ from .appserver import CLOSED, AppServerClient, AppServerError
 from .codex_login import CodexLogin
 from .codex_runner import WEB_SEARCH_MODES, CodexRunner, approval_params, nested, task_config, terminate_process
 from .config import Settings
-from .database import Database, DependencyError
+from .database import Database, DependencyError, ScheduledError
 from .instructions import load_instructions
 from .logstore import TaskLog, read_log
 from .notifications import log_entry
@@ -44,7 +44,7 @@ from .usage import (
 )
 from .models import (
     ACTIVE_STATUSES, BUSY_STATUSES, InvalidTransition, DEPENDENCY_FAILED_STATUSES, DEPENDENCY_POLICIES, EFFORT_RE, ESCALATION, SANDBOXES,
-    SERVICE_TIER_RE, TERMINAL_STATUSES, VERBOSITIES, branch_name, make_task_id, now_iso, timestamp, worktree_path,
+    SCHEDULED_WAITING, SERVICE_TIER_RE, TERMINAL_STATUSES, VERBOSITIES, branch_name, make_task_id, now_iso, timestamp, worktree_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,8 @@ class _Turn:
     resume_thread: Optional[str] = None  # None: this turn starts a new Codex thread
     thread_id: Optional[str] = None      # from thread.started / thread/start
     kind: str = "turn"                   # "turn" | "compact"
-    # What started this run: initial | instruction | new_session | compact | auto_retry | manual_retry | restart_recovery
+    # What started this run: initial | instruction | scheduled_instruction | new_session | compact | auto_retry | manual_retry |
+    # restart_recovery
     trigger: str = "instruction"
     # The speed REQUESTED for this turn only ("default" = Standard, "priority" = Fast); None = the task's own tier.
     service_tier: Optional[str] = None
@@ -523,18 +524,21 @@ class TaskManager:
     def _begin_turn(self, task: dict, turn: _Turn, **fields) -> dict:
         """A new unit of work for an idle task: queued with its turn recorded, then claimed and started at once."""
         # No await between the status checks of the caller and this transition, so two requests cannot both pass.
-        if turn.kind == "turn":
-            fields["last_prompt"] = turn.prompt
         try:
-            updated = self.db.set_status(
-                task["id"], "queued", pid=None, proc_identity=None, exit_code=None, finished_at=None,
-                status_detail="", failure_source="", pending_turn=turn.to_json(), claimed_by=None, claimed_at=None,
-                retry_count=0, next_retry_at=None, last_failure_kind="", last_failure_message="", last_exit_code=None,
-                last_retry_at=None, **fields)
+            updated = self.db.set_status(task["id"], "queued", **self._queue_fields(turn, **fields))
         except InvalidTransition as e:
             raise TaskError(f"task changed while the instruction was being sent: {e}", 409, "active") from e
         self._dispatch(task["id"])
         return updated
+
+    @staticmethod
+    def _queue_fields(turn: _Turn, **fields) -> dict:
+        """The task columns that make an idle task `queued` with `turn` as the work to run (also used by a scheduled instruction)."""
+        if turn.kind == "turn":
+            fields["last_prompt"] = turn.prompt
+        return dict(pid=None, proc_identity=None, exit_code=None, finished_at=None, status_detail="", failure_source="",
+                    pending_turn=turn.to_json(), claimed_by=None, claimed_at=None, retry_count=0, next_retry_at=None,
+                    last_failure_kind="", last_failure_message="", last_exit_code=None, last_retry_at=None, **fields)
 
     def _pending_turn(self, task: dict) -> _Turn:
         """The turn a queued task is to run (rows from before pending_turn existed fall back to the last prompt)."""
@@ -670,7 +674,7 @@ class TaskManager:
         task = self.get(task_id)
         self._attempts[task_id] = self.db.start_attempt(
             task_id=task_id, trigger_kind=turn.trigger, started_at=now_iso(), was_resume=int(bool(turn.resume_thread)),
-            service_tier=task["service_tier"], reasoning_effort=task["reasoning_effort"],
+            service_tier=turn.service_tier or task["service_tier"], reasoning_effort=task["reasoning_effort"],
             codex_thread_id=turn.resume_thread)
 
     def _end_attempt(self, task_id: str, result: str, turn: Optional[_Turn] = None, *, exit_code: Optional[int] = None,
@@ -1441,11 +1445,143 @@ class TaskManager:
         if self._shutting_down:
             return
         for name, step in (("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
-                           ("orphans", self._tick_orphans), ("queue", self._tick_queue)):
+                           ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue)):
             try:
                 step()
             except Exception:
                 logger.exception("scheduler step %s failed", name)
+
+    # ---------- scheduled instructions (a follow-up turn for an existing thread, after other tasks) ----------
+
+    async def schedule_instruction(self, task_id: str, prompt: str, depends_on=(), service_tier: Optional[str] = None,
+                                   created_by: str = "user") -> dict:
+        """Reserve an instruction for the Codex thread of `task_id`. It is sent when every task in `depends_on` has
+        completed AND the thread is idle (no `depends_on` = as soon as the thread is idle), on the SAME thread, worktree and
+        branch. Its speed is its own: `service_tier` None means Standard, never "whatever the last turn used".
+        Reasoning effort and approval come from the task."""
+        prompt = prompt.strip()
+        if not prompt:
+            raise TaskError("instruction is required", 400, "empty")
+        task = self.get(task_id)
+        tier = self._turn_tier(service_tier) or "default"
+        deps = self._check_dependency_ids(depends_on)
+        if task_id in deps:
+            raise TaskError("an instruction cannot depend on its own target task: it waits for the thread to be idle anyway", 400, "self")
+        if task["worktree_removed"]:
+            raise TaskError("worktree no longer exists", 409, "no_worktree")
+        try:
+            row = self.db.create_scheduled(task_id, prompt, tier, deps, created_by)
+        except ScheduledError as e:
+            raise TaskError(str(e), 400, e.code) from e
+        TaskLog.note(self.log_path(task_id), f"scheduled instruction #{row['id']} created ({'Fast' if tier == 'priority' else tier if tier != 'default' else 'Standard'}"
+                     + (f"; after {len(deps)} task(s)" if deps else "; when the thread is idle") + ")")
+        self._tick_scheduled()  # it may be sendable right now
+        self.scheduler.wake()
+        return self._scheduled_view(self.db.get_scheduled(row["id"]))
+
+    def cancel_scheduled(self, task_id: str, sid: int) -> dict:
+        """Cancel an instruction that has not been sent. A cancelled instruction is never sent; one that is running is stopped
+        with the task's own Stop."""
+        self.get(task_id)
+        row = self.db.get_scheduled(sid)
+        if row is None or row["task_id"] != task_id:
+            raise TaskError("scheduled instruction not found", 404)
+        if not self.db.cancel_scheduled(sid):
+            now = self.db.get_scheduled(sid)["status"]
+            raise TaskError(f"the instruction is {now}; " + ("stop the task to stop it" if now == "running" else "it can no longer be cancelled"),
+                            409, "not_cancellable")
+        TaskLog.note(self.log_path(task_id), f"scheduled instruction #{sid} cancelled")
+        self.scheduler.wake()  # the next instruction of the thread may be at the head of the queue now
+        return self._scheduled_view(self.db.get_scheduled(sid))
+
+    def scheduled_instructions(self, task_id: str) -> list[dict]:
+        self.get(task_id)
+        return [self._scheduled_view(r) for r in self.db.list_scheduled(task_id)]
+
+    def _scheduled_view(self, row: dict) -> dict:
+        deps = []
+        for dep_id in self.db.scheduled_dependencies(row["id"]):
+            dep = self.db.get_task(dep_id)
+            if dep:
+                deps.append({"id": dep_id, "name": dep["name"], "status": dep["status"]})
+        out = {k: row[k] for k in ("id", "task_id", "prompt", "status", "service_tier", "created_at", "ready_at", "started_at",
+                                   "finished_at", "blocked_reason", "created_by")}
+        out.update(speed="Fast" if row["service_tier"] == "priority" else "Standard" if row["service_tier"] == "default" else row["service_tier"],
+                   dependencies=deps, deps_done=sum(d["status"] == "completed" for d in deps), deps_total=len(deps))
+        if row["status"] == "waiting_thread":
+            target = self.db.get_task(row["task_id"]) or {}
+            out["wait_note"] = f"the thread's task is {target.get('status', '?')}"
+        return out
+
+    def _scheduled_dead_end(self, row: dict) -> str:
+        """Why this instruction can never be sent however long it waits ("" = it can). Only facts that do not heal by themselves."""
+        task = self.db.get_task(row["task_id"])
+        if task is None:
+            return "the target task no longer exists"
+        if task["worktree_removed"]:
+            return "the target task's worktree was deleted"
+        if task["status"] == "completed" and not task["codex_thread_id"]:
+            return "the target task has no recorded Codex thread to continue"
+        return ""
+
+    def _tick_scheduled(self) -> None:
+        """One pass over the scheduled instructions. Idempotent and safe to run concurrently with itself: every step is a
+        conditional UPDATE (see Database.advance_scheduled / claim_scheduled), so the worst a duplicate pass can do is nothing.
+
+        1. running instructions whose turn has ended are finished (completed, or failed when the task ended failed / stopped);
+        2. waiting ones are moved to the state their dependencies and their thread justify (blocked / waiting_dependencies /
+           waiting_thread / ready);
+        3. the oldest ready instruction of every thread that has nothing running is claimed and its turn queued.
+        """
+        if self._shutting_down:
+            return
+        for row in self.db.list_scheduled(statuses=["running"]):
+            self._reconcile_scheduled(row)
+        self._advance_all_scheduled()
+        claimed = False
+        for row in self.db.ready_scheduled():
+            claimed = self._claim_scheduled(row) or claimed
+        if claimed:
+            self._advance_all_scheduled()  # the others of that thread wait for it now (ready -> waiting_thread)
+
+    def _advance_all_scheduled(self) -> None:
+        for row in self.db.list_scheduled(statuses=SCHEDULED_WAITING):
+            sid = row["id"]
+            dead = self._scheduled_dead_end(row)
+            if dead:
+                self.db.block_scheduled(sid, dead)
+                continue
+            failed = self.db.scheduled_dependency_failures(sid)
+            reason = "; ".join(f"Dependency {d['name']} {DEPENDENCY_PHRASES[d['status']]}" for d in failed)
+            if self.db.advance_scheduled(sid, reason) == "blocked":
+                TaskLog.note(self.log_path(row["task_id"]), f"scheduled instruction #{sid} blocked: {reason}")
+
+    def _claim_scheduled(self, row: dict) -> bool:
+        """Send one ready instruction: its turn becomes the task's pending turn on the task's own Codex thread. The claim is
+        a single transaction (Database.claim_scheduled); only the caller that wins it logs and starts anything."""
+        task = self.db.get_task(row["task_id"])
+        thread = task and task["codex_thread_id"]
+        if not task or not thread or task["status"] != "completed":
+            return False
+        turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"])
+        if not self.db.claim_scheduled(row["id"], self._queue_fields(turn), thread):
+            return False
+        TaskLog.note(self.log_path(task["id"]), f"scheduled instruction #{row['id']} sent to Codex thread {thread} "
+                     f"({'Fast' if row['service_tier'] == 'priority' else 'Standard' if row['service_tier'] == 'default' else row['service_tier']})")
+        return True
+
+    def _reconcile_scheduled(self, row: dict) -> None:
+        """A running instruction ends with the turn it started. An unexpected stop of that turn is the task's own recovery
+        (retry_wait -> the same thread and worktree): the instruction stays running and is never sent again. A paused task
+        (interrupted, waiting-for-quota) keeps it running too: resuming it continues this same turn."""
+        task = self.db.get_task(row["task_id"])
+        if task is None:
+            self.db.finish_scheduled(row["id"], "failed", "the target task no longer exists")
+        elif task["status"] == "completed":
+            self.db.finish_scheduled(row["id"], "completed")
+        elif task["status"] in ("failed", "stopped"):
+            detail = task["status_detail"] or ("stopped by the user" if task["status"] == "stopped" else "")
+            self.db.finish_scheduled(row["id"], "failed", f"the task {task['status']}" + (f": {detail}" if detail else ""))
 
     def _tick_dependencies(self) -> None:
         for task in self.db.list_tasks_by_status(["waiting_dependencies"]):
@@ -1633,7 +1769,7 @@ class TaskManager:
         return out
 
     def _present(self, task: dict, latest: Optional[dict], by_id: Optional[dict] = None,
-                 edges: Optional[dict] = None) -> dict:
+                 edges: Optional[dict] = None, scheduled: Optional[dict] = None) -> dict:
         """The task plus the derived figures the UI shows (cache, context, quota, model, retry suggestion, dependencies)."""
         for internal in ("pending_turn", "claimed_by", "claimed_at", "proc_identity"):
             task.pop(internal, None)
@@ -1644,6 +1780,8 @@ class TaskManager:
         task["context"] = context_status(task["context_tokens"], task["context_window"],
                                          self.settings.context_warn_percent, bool(task["context_guard"]))
         task["backend"] = self.settings.backend
+        sched = (scheduled or {}).get(task["id"], {})
+        task["scheduled_pending"], task["scheduled_ready"] = sched.get("pending", 0), sched.get("ready", 0)
         zone = ctx_guard.context_zone(task["context_tokens"], task["effective_model"] or task["model"], task["context_window"])
         task["ctx_zone"] = zone["zone"]
         return task
@@ -1668,7 +1806,8 @@ class TaskManager:
     def present_task(self, task: dict) -> dict:
         turns = self.db.list_turns(task["id"])
         latest = next((t for t in reversed(turns) if t["kind"] == "turn"), turns[-1] if turns else None)
-        task = self._present(dict(task), latest)
+        task = self._present(dict(task), latest, scheduled=self.db.scheduled_counts())
+        task["scheduled_instructions"] = [self._scheduled_view(r) for r in self.db.list_scheduled(task["id"])]
         task["dependents"] = [{"id": d["id"], "name": d["name"], "status": d["status"]}
                               for d in map(self.db.get_task, self.db.dependents_of(task["id"])) if d]
         task["observed_quota"] = self._observed_quota(task)
@@ -1702,8 +1841,8 @@ class TaskManager:
         """Tasks for the dashboard, each with the cache hit rate (%) of its latest turn (None: nothing to show)."""
         latest = self.db.latest_turns()
         tasks = self.db.list_tasks()
-        by_id, edges = {t["id"]: t for t in tasks}, self.db.dependency_map()
-        return [self._present(t, latest.get(t["id"]), by_id, edges) for t in tasks]
+        by_id, edges, scheduled = {t["id"]: t for t in tasks}, self.db.dependency_map(), self.db.scheduled_counts()
+        return [self._present(t, latest.get(t["id"]), by_id, edges, scheduled) for t in tasks]
 
     def attempts(self, task_id: str) -> list[dict]:
         self.get(task_id)

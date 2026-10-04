@@ -121,11 +121,41 @@
     <span id="instruction-hint" class="muted"></span>
   </div>
   <p class="muted small" id="retry-hint" hidden></p>
+  <fieldset class="run-group" id="schedule-box">
+    <legend>Schedule instead of sending now</legend>
+    <div class="sched-row">
+      <span class="sched-label">Delivery</span>
+      <label class="check inline"><input type="radio" name="delivery" id="delivery-idle" value="idle" checked> Send when thread is idle</label>
+      <label class="check inline"><input type="radio" name="delivery" id="delivery-after" value="after"> Send after tasks complete</label>
+    </div>
+    <div id="sched-deps-box" hidden>
+      <div class="sched-label">Depends on</div>
+      <div class="deps-list" id="sched-deps"></div>
+    </div>
+    <div class="sched-row">
+      <span class="sched-label">Speed</span>
+      <label class="check inline"><input type="radio" name="sched-speed" id="sched-speed-standard" value="standard" checked> Standard</label>
+      <label class="check inline"><input type="radio" name="sched-speed" id="sched-speed-fast" value="fast"> Fast</label>
+    </div>
+    <div class="inline-actions">
+      <button id="schedule-btn" title="Reserve this instruction for this task's existing Codex thread (same thread, worktree and branch)">Schedule Instruction</button>
+      <span class="muted small" id="schedule-hint"></span>
+    </div>
+  </fieldset>
   <details class="small"><summary>How sending works</summary>
     <p class="muted small">Send continues the same Codex thread (its history stays inside Codex, so the prompt cache is reused); while a turn is running
     it is added to that turn. Model, reasoning, speed, sandbox, approval and web search are fixed for the task: changing them mid-thread lowers cache reuse.
     “Retry with …” changes the reasoning effort only when you click it.</p>
+    <p class="muted small">Schedule Instruction sends the text to this same Codex thread later: once every selected task has completed and this thread is idle
+    (one instruction at a time per thread, oldest first). Its speed is the one you pick here, whatever the last turn used. Reasoning effort and approval come from the task.
+    If Codex stops unexpectedly during that turn, the task's automatic recovery continues the thread; the instruction is never sent twice.</p>
   </details>
+</section>
+
+<section id="scheduled-section" hidden>
+  <h2>Scheduled instructions <span class="muted" id="scheduled-summary"></span></h2>
+  <ul id="scheduled-items" class="sched-list"></ul>
+  <details class="fold small" id="scheduled-done" hidden><summary id="scheduled-done-summary"></summary><ul id="scheduled-done-items" class="sched-list"></ul></details>
 </section>
 
 <section>

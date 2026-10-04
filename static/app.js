@@ -169,7 +169,7 @@ function initDashboard() {
     $("#tasks-body").innerHTML = tasks.length
       ? tasks.map((t) => `
         <tr data-id="${esc(t.id)}">
-          <td class="wrap"><a href="/tasks/${esc(t.id)}">${esc(t.name)}</a></td>
+          <td class="wrap"><a href="/tasks/${esc(t.id)}">${esc(t.name)}</a>${scheduledBadge(t)}</td>
           <td title="${esc(t.repository)}">${esc(repoName(t.repository))}</td>
           <td title="${esc(t.effective_model || "")}">${esc(modelName(t.effective_model || t.model))}</td>
           <td>${esc(effortLabel(t.reasoning_effort))}${t.service_tier !== "default" ? ` <span class="warn" title="Fast mode consumes included usage more quickly.">fast</span>` : ""}</td>
@@ -192,6 +192,13 @@ function initDashboard() {
       ` &nbsp; Waiting for quota: <b>${n("waiting-for-quota")}</b>` +
       ` &nbsp; Waiting: <b>${n("waiting_dependencies") + n("retry_wait")}</b> &nbsp; Blocked: <b>${n("blocked")}</b>` +
       ` &nbsp; Stopped: <b>${n("stopped") + n("interrupted")}</b> &nbsp; Total: <b>${tasks.length}</b>`;
+  }
+
+  // "Scheduled: 3 · Ready: 1" under the name: only a hint, the details are in Task Detail.
+  function scheduledBadge(t) {
+    if (!t.scheduled_pending) return "";
+    return `<div class="sched-badge" title="Scheduled instructions for this task's thread (see Task Detail)">Scheduled: ${t.scheduled_pending}` +
+      `${t.scheduled_ready ? ` · Ready: ${t.scheduled_ready}` : ""}</div>`;
   }
 
   // "GPT-6.1-Sol" for gpt-6.1-sol when the catalog knows it; otherwise the id; "default" when nothing is pinned.
@@ -751,7 +758,8 @@ function initTask() {
     $("#new-session-btn").disabled = !idle || sending;
     $("#resume-btn").hidden = t.status !== "interrupted";
     $("#resume-btn").disabled = sending || !t.codex_thread_id;
-    $("#instruction").disabled = !(idle || steerable);
+    const canSchedule = !t.worktree_removed;  // a reservation can be made while the thread is busy: that is its point
+    $("#instruction").disabled = !(idle || steerable || canSchedule);
     $("#session-id").textContent = t.codex_thread_id ? `thread ${t.codex_thread_id}` : "";
     $("#instruction-hint").textContent =
       waiting ? "The task is waiting for the scheduler; it takes instructions once it has run." :
@@ -791,6 +799,7 @@ function initTask() {
     renderContext(t);
     renderObserved(t);
     renderDeps(t);
+    renderSchedule(t, canSchedule);
     renderRecovery(t);
     if (window.CtxUI) CtxUI.renderTask(t, ctxHandlers);
   }
@@ -813,6 +822,113 @@ function initTask() {
     $("#run-anyway-btn").hidden = !["waiting_dependencies", "blocked"].includes(t.status);
     $("#retry-deps-btn").hidden = t.status !== "blocked";
   }
+
+  // ----- scheduled instructions: a follow-up turn for this task's existing thread, after other tasks complete -----
+
+  const SCHED_LABEL = { waiting_dependencies: "WAITING", waiting_thread: "WAITING FOR THREAD", ready: "READY", running: "RUNNING",
+                        completed: "COMPLETED", blocked: "BLOCKED", cancelled: "CANCELLED", failed: "FAILED" };
+  const SCHED_FINISHED = ["completed", "cancelled", "failed"];
+  const SCHED_CANCELLABLE = ["waiting_dependencies", "waiting_thread", "ready", "blocked"];
+  const schedDeps = new Set();   // the tasks ticked in "Depends on" (kept across the re-renders of the list)
+  let schedTasks = [];
+  let schedTasksAt = 0;
+  let schedDepsKey = "";
+
+  function schedItem(r) {
+    const deps = (r.dependencies || []).map((d) => {
+      const [mark, cls] = DEP_MARK[d.status] || (ACTIVE.includes(d.status) || WAITING.includes(d.status) ? ["…", "wait"] : ["⏸", "wait"]);
+      return `<span class="dep"><span class="mark ${cls}">${mark}</span><a href="/tasks/${esc(d.id)}">${esc(d.name)}</a>` +
+        `${d.status === "completed" ? "" : ` <span class="muted">${esc(statusText(d.status))}</span>`}</span>`;
+    }).join("");
+    const note = r.status === "waiting_thread" ? `This thread is busy (${esc(r.wait_note || "")}): it is sent when the thread is idle.`
+      : r.status === "running" ? "Sent. Use Stop to stop it; if Codex stops unexpectedly the task's automatic recovery continues the same thread."
+      : ["blocked", "failed", "cancelled"].includes(r.status) && r.blocked_reason ? esc(r.blocked_reason) : "";
+    const cancel = SCHED_CANCELLABLE.includes(r.status) ? `<button class="sched-cancel" data-sid="${r.id}">Cancel</button>` : "";
+    const when = r.finished_at ? ` · ${esc(dt(r.finished_at))}` : r.started_at ? ` · sent ${esc(dt(r.started_at))}` : "";
+    return `<li class="${SCHED_FINISHED.includes(r.status) ? "done" : ""}"><div class="sched-head"><b>#${r.id}</b>` +
+      `<span class="status ${esc(r.status)}">${esc(SCHED_LABEL[r.status] || r.status)}</span>` +
+      `<span class="muted">Speed: ${esc(r.speed)}${when}</span><span class="spacer"></span>${cancel}</div>` +
+      (r.dependencies && r.dependencies.length ? `<div class="sched-deps"><span class="muted">After:</span> ${deps}</div>` : "") +
+      `<div class="sched-prompt">“${esc(r.prompt.length > 400 ? r.prompt.slice(0, 400) + "…" : r.prompt)}”</div>` +
+      (note ? `<div class="small muted">${note}</div>` : "") + `</li>`;
+  }
+
+  function renderSchedule(t, canSchedule) {
+    const list = t.scheduled_instructions || [];
+    const open = list.filter((r) => !SCHED_FINISHED.includes(r.status));
+    const done = list.filter((r) => SCHED_FINISHED.includes(r.status));
+    $("#scheduled-section").hidden = !list.length;
+    $("#scheduled-summary").textContent = open.length ? `(${open.length} pending${open.some((r) => r.status === "ready") ? ", ready to send" : ""})` : "";
+    $("#scheduled-items").innerHTML = open.map(schedItem).join("");
+    $("#scheduled-done").hidden = !done.length;
+    $("#scheduled-done-summary").textContent = `Finished (${done.length})`;
+    $("#scheduled-done-items").innerHTML = done.slice().reverse().map(schedItem).join("");
+    $("#schedule-box").hidden = !canSchedule;
+    $("#schedule-btn").disabled = sending || !canSchedule;
+    $("#schedule-hint").textContent = t.status === "completed" ? "" :
+      t.status === "failed" || t.status === "stopped" || t.status === "interrupted" || t.status === "waiting-for-quota" || t.status === "blocked"
+        ? `This task is ${statusText(t.status)}: a scheduled instruction waits until it has completed.`
+        : "This thread is busy: a scheduled instruction waits for the current turn to finish.";
+    renderSchedChoices();
+  }
+
+  // The "Depends on" list: every other task. Rebuilt only when it changed, so a tick does not undo what the user is doing.
+  function renderSchedChoices() {
+    const after = $("#delivery-after").checked;
+    $("#sched-deps-box").hidden = !after;
+    if (!after) return;
+    const tasks = schedTasks.filter((x) => x.id !== id);
+    const key = tasks.map((x) => `${x.id}:${x.status}:${x.name}`).join("|");
+    if (key === schedDepsKey) return;
+    schedDepsKey = key;
+    $("#sched-deps").innerHTML = tasks.map((x) =>
+      `<label class="check"><input type="checkbox" class="sched-dep" value="${esc(x.id)}" ${schedDeps.has(x.id) ? "checked" : ""}> ${esc(x.name)} ` +
+      `<span class="muted">${esc(repoName(x.repository))} · ${esc(taskStatusText(x))}</span></label>`).join("") ||
+      `<span class="muted">No other tasks.</span>`;
+  }
+  async function loadSchedTasks() {
+    if (!$("#delivery-after").checked || Date.now() - schedTasksAt < 5000) { renderSchedChoices(); return; }
+    schedTasksAt = Date.now();
+    try { schedTasks = (await api("GET", "/api/tasks")).tasks || []; } catch (_) { /* the list stays as it was */ }
+    renderSchedChoices();
+  }
+  $("#delivery-idle").addEventListener("change", renderSchedChoices);
+  $("#delivery-after").addEventListener("change", () => { schedTasksAt = 0; loadSchedTasks(); });
+  $("#sched-deps").addEventListener("change", (ev) => {
+    const el = ev.target;
+    if (!el || el.type !== "checkbox" || !el.value) return;
+    if (el.checked) schedDeps.add(el.value); else schedDeps.delete(el.value);
+  });
+  $("#scheduled-section").addEventListener("click", (ev) => {
+    const b = ev.target && ev.target.closest ? ev.target.closest("button.sched-cancel") : null;
+    if (!b) return;
+    const sid = b.dataset.sid;
+    if (!confirm(`Cancel scheduled instruction #${sid}? It will not be sent.`)) return;
+    action("Cancel", async () => { await api("DELETE", `/api/tasks/${id}/scheduled/${sid}`); return `Scheduled instruction #${sid} cancelled`; });
+  });
+  $("#schedule-btn").addEventListener("click", async () => {
+    const prompt = $("#instruction").value;
+    if (!prompt.trim()) { setMsg("Write an instruction first.", true); return; }
+    const after = $("#delivery-after").checked;
+    const deps = after ? [...schedDeps] : [];
+    if (after && !deps.length) { setMsg("Select at least one task to wait for, or choose “Send when thread is idle”.", true); return; }
+    const fast = $("#sched-speed-fast").checked;
+    if (fast && !confirm("Schedule this instruction at Fast speed?\n\nFast costs 2x at API-equivalent prices and consumes your included usage faster. Only this turn is Fast.")) return;
+    sending = true;
+    renderTask();
+    try {
+      await action("Schedule Instruction", async () => {
+        await api("POST", `/api/tasks/${id}/scheduled`, { prompt, depends_on: deps, service_tier: fast ? "fast" : "standard" });
+        $("#instruction").value = "";
+        schedDeps.clear();
+        schedDepsKey = "";
+        return after ? `Scheduled: sent when ${deps.length} task(s) have completed and this thread is idle` : "Scheduled: sent when this thread is idle";
+      });
+    } finally {
+      sending = false;
+      renderTask();
+    }
+  });
 
   function renderRecovery(t) {
     const rows = [["Auto retry", t.auto_retry_enabled ? "ON" : "OFF"], ["Retries", `${t.retry_count} / ${t.max_retries}`]];
@@ -1125,6 +1241,7 @@ function initTask() {
     try {
       task = await api("GET", `/api/tasks/${id}`);
       renderTask();
+      await loadSchedTasks();
       await pullLog();
       const active = ACTIVE.includes(task.status);
       const now = Date.now();

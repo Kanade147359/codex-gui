@@ -30,6 +30,7 @@ Codex CLI を複数同時に動かして一画面で管理する、ローカル 
 8. [Context Efficiency](#context-efficiency)
 9. [AGENTS.md エディタ](#agentsmd-エディタ)
 10. [Task の依存関係](#task-の依存関係)
+    - [予約指示](#予約指示scheduled-instructions)
 11. [自動復旧](#自動復旧)
 12. [Git worktree の扱い](#git-worktree-の扱い)
 13. [GUI の再起動](#gui-の再起動)
@@ -252,6 +253,41 @@ New Task の **Run** で **After other tasks complete** を選び、**Depends on
 - 依存は DAG です。**自己依存・重複・循環は拒否**します（`PUT /api/tasks/{id}/dependencies` で未開始の Task の依存先を差し替えるときも同じ検査）。
 - 二重起動しない仕組み: `waiting_dependencies → queued` は「全依存先が completed」の判定を含む **1 本の条件付き UPDATE**、`queued → 実行` は `claimed_by IS NULL` を条件にした
   **1 本の UPDATE（claim）** です。親が同時に終わっても、リスナー・スケジューラ・API が何度評価しても、起動できるのは 1 回だけです。
+
+## 予約指示（Scheduled Instructions）
+
+**予約指示**は、Task の**既存の Codex thread** に対する追加ターンを、他の Task が終わるまで保留しておく機能です。Task の依存関係とは別物で、対象 Task を待たせることも、Task を起動することもありません。
+「A と B が終わったら、その成果を X に統合して全テストを実行する」といった使い方を想定しています。
+
+詳細画面の **Additional instruction** に指示を書き、下の **Schedule** ブロックで予約します（即時送信の **Send Standard / Send Fast** はそのままです）。
+
+- **Delivery**: *Send when thread is idle*（依存なし。実行中のターンの後ろに並ぶ）／ *Send after tasks complete*（**Depends on** で Task を選ぶ）。
+- **Speed**: *Standard*（`default`）／ *Fast*（`priority`）を**予約ごと**に保存します。Task の tier や直前のターンには依存しません（直前が Fast でも Standard の予約は Standard で実行）。
+  reasoning effort と auto approval は Task の設定を継承し、実際に使った値はターンと attempt に記録されます。
+- **Schedule Instruction** で予約すると、詳細画面に **Scheduled instructions**（`#1 WAITING · After: ✓ P14 … P15 running`、`WAITING FOR THREAD`、`READY`、`RUNNING`、`COMPLETED`、`BLOCKED`、`CANCELLED`、`FAILED`）と **Cancel** が出ます。
+  Dashboard は Task 名の下に `Scheduled: 3 · Ready: 1` を小さく出すだけです。
+
+送信条件は**両方**を満たすこと: 選んだ Task がすべて `completed`、かつ対象 thread が idle（Task が `completed`。running / queued / retry 待ち / failed / stopped / interrupted / quota 待ちは idle ではない）。
+送信は常に同じ `codex_thread_id`・worktree・branch で行い（`codex exec resume <thread>`、または app-server の同一 thread への新しい turn）、新しい session は作らないので prompt cache も維持されます。
+
+| 状態 | 意味 |
+| --- | --- |
+| `waiting_dependencies` | 選んだ Task のどれかがまだ `completed` ではない（`retry_wait` / `interrupted` / `waiting-for-quota` は失敗扱いにせず結果を待つ） |
+| `waiting_thread` | 依存は完了したが、対象 thread が使用中 |
+| `ready` | 条件はそろっている。thread の順番待ち |
+| `running` | claim して送信済み。ターンの終了とともに終わる（`completed`。Task が `failed` / `stopped` で終われば `failed`） |
+| `blocked` | 依存先が最終的に `failed` / `stopped` / `blocked`、または対象の worktree が削除済み・thread なし（blocked のまま。Cancel して作り直す） |
+| `cancelled` | 送信前にキャンセル。以後絶対に送信しない |
+
+- **同じ thread に複数予約**できます。送信は**1 件ずつ、古い順**（`created_at`、同時刻は `id`）。依存先がまだ終わっていない古い予約を、依存が終わった新しい予約が追い越すことはあります。
+- **二重送信しない仕組み**: 状態遷移はすべて、遷移元の status と根拠となる事実を `WHERE` に含む**条件付き UPDATE 1 本**です。`ready → running` の claim は**1 トランザクション**で、対象 Task を
+  `completed → queued`（そのターンを pending turn にする）に変える UPDATE も同時に行い、同じ Task の `running` や自分より古い `ready` がないときだけ成立します。
+  評価の多重実行、依存先の同時完了、手動 Send、Cancel のどれが重なっても、同じ予約も同じ thread も 2 回は取れません（どちらかの UPDATE が不一致なら両方ロールバック）。
+- **想定外の停止は Task の自動復旧に任せる**: running になった予約は二度と再送しません。そのターン中に Codex が落ちたら、Task の自動復旧が同じ thread・worktree を現在の状態から再開し
+  （指示の再送ではなく「現状を確認して続ける」短い指示）、予約は Task が終わるまで `running` のままです。GUI 再起動後も同じで、待機中の予約は DB から再評価し、`running` は復旧に委ねます。
+- 自己依存（対象 Task を依存先にする）・重複・存在しない Task は拒否します。API: `GET/POST /api/tasks/{id}/scheduled`、`DELETE /api/tasks/{id}/scheduled/{sid}`。
+- テーブル: `scheduled_instructions`（`id, task_id, prompt, status, service_tier, created_at, ready_at, started_at, finished_at, blocked_reason, created_by`）と
+  `scheduled_instruction_dependencies`（`scheduled_instruction_id, depends_on_task_id`、組で `UNIQUE`）。
 
 ## 自動復旧
 

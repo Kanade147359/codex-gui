@@ -6,7 +6,10 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from .models import DEPENDENCY_FAILED_STATUSES, InvalidTransition, STATUSES, can_transition, now_iso
+from .models import (
+    DEPENDENCY_FAILED_STATUSES, InvalidTransition, SCHEDULED_CANCELLABLE, SCHEDULED_IDLE_TASK_STATUS, SCHEDULED_WAITING,
+    STATUSES, can_transition, now_iso,
+)
 
 log = logging.getLogger(__name__)
 
@@ -17,6 +20,18 @@ class DependencyError(ValueError):
     def __init__(self, message: str, code: str):
         super().__init__(message)
         self.code = code
+
+class ScheduledError(ValueError):
+    """A scheduled instruction that must not exist. `code`: "empty" | "self" | "duplicate" | "missing" | "no_task"."""
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
+
+
+class _Rollback(Exception):
+    """Raised inside a transaction to undo it (the conditional UPDATE that had to go with another one did not match)."""
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -90,6 +105,30 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     CHECK (task_id != depends_on_task_id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies (depends_on_task_id);
+-- A follow-up turn for the EXISTING Codex thread of `task_id`, sent when every depends_on task has completed AND the
+-- thread is idle (see models.SCHEDULED_*). Not a task dependency: the task itself is never made to wait for these.
+-- Zero dependency rows = "send when the thread is idle". service_tier is explicit ("default" = Standard, "priority" = Fast).
+-- blocked_reason explains blocked / failed / cancelled rows. Order of sending per task: created_at, then id (FIFO).
+CREATE TABLE IF NOT EXISTS scheduled_instructions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL,
+    service_tier TEXT NOT NULL DEFAULT 'default',
+    created_at TEXT NOT NULL,
+    ready_at TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    blocked_reason TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL DEFAULT 'user'
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_instructions_task ON scheduled_instructions (task_id, status);
+CREATE TABLE IF NOT EXISTS scheduled_instruction_dependencies (
+    scheduled_instruction_id INTEGER NOT NULL,
+    depends_on_task_id TEXT NOT NULL,
+    UNIQUE (scheduled_instruction_id, depends_on_task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_deps_task ON scheduled_instruction_dependencies (depends_on_task_id);
 -- One row per run of a Codex turn (the first run, an instruction, an automatic or manual retry, a restart recovery).
 -- Kept apart from `turns`, which is token usage: an interrupted attempt may have no usage at all.
 CREATE TABLE IF NOT EXISTS task_attempts (
@@ -216,6 +255,39 @@ _ALL_COMPLETED = ("NOT EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks p ON
                   "WHERE d.task_id = tasks.id AND p.status != 'completed')")
 _ANY_FAILED = ("EXISTS (SELECT 1 FROM task_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id "
                "WHERE d.task_id = tasks.id AND p.status IN (%s))" % ", ".join(f"'{s}'" for s in sorted(DEPENDENCY_FAILED_STATUSES)))
+
+# The same idea for scheduled instructions. `a` is the alias (or table name) of the scheduled_instructions row in the
+# statement that uses them. The conditions are part of the UPDATE that acts on them, so a state change and the check
+# that justified it are one atomic step (two evaluators, or the scheduler and a request, cannot both win).
+_FAILED_LIST = ", ".join(f"'{s}'" for s in sorted(DEPENDENCY_FAILED_STATUSES))
+
+
+def _si_deps_done(a: str) -> str:
+    return ("NOT EXISTS (SELECT 1 FROM scheduled_instruction_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id "
+            f"WHERE d.scheduled_instruction_id = {a}.id AND p.status != 'completed')")
+
+
+def _si_deps_failed(a: str) -> str:
+    return ("EXISTS (SELECT 1 FROM scheduled_instruction_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id "
+            f"WHERE d.scheduled_instruction_id = {a}.id AND p.status IN ({_FAILED_LIST}))")
+
+
+def _si_target_idle(a: str) -> str:
+    """The target thread can take a turn now: its task is completed, has a recorded thread and a worktree."""
+    return (f"EXISTS (SELECT 1 FROM tasks t WHERE t.id = {a}.task_id AND t.status = '{SCHEDULED_IDLE_TASK_STATUS}' "
+            "AND COALESCE(t.codex_thread_id, '') != '' AND t.worktree_removed = 0 AND t.worktree_pending = 0)")
+
+
+def _si_head_of_queue(a: str) -> str:
+    """Nothing of the same task is running, and no older instruction of it is ready: the FIFO rule, per thread."""
+    return (f"NOT EXISTS (SELECT 1 FROM scheduled_instructions o WHERE o.task_id = {a}.task_id AND "
+            f"(o.status = 'running' OR (o.status = 'ready' AND (o.created_at < {a}.created_at OR "
+            f"(o.created_at = {a}.created_at AND o.id < {a}.id)))))")
+
+
+def _in(values) -> str:
+    return ", ".join(f"'{v}'" for v in values)
+
 
 TURN_COLUMNS = (
     "task_id turn session thread_id created_at input_tokens cached_input_tokens output_tokens "
@@ -519,6 +591,171 @@ class Database:
                 "SELECT path FROM recent_repos ORDER BY last_used DESC, rowid DESC LIMIT ?", (limit,)
             ).fetchall()
         return [r["path"] for r in rows]
+
+    # ---------- scheduled instructions ----------
+
+    def create_scheduled(self, task_id: str, prompt: str, service_tier: str, depends_on=(), created_by: str = "user") -> dict:
+        """Insert an instruction and its dependency rows in one transaction. It starts as waiting_dependencies."""
+        prompt = prompt.strip()
+        if not prompt:
+            raise ScheduledError("instruction is required", "empty")
+        parents = [str(p) for p in depends_on]
+        if len(set(parents)) != len(parents):
+            raise ScheduledError(f"duplicate dependency: {next(p for p in parents if parents.count(p) > 1)}", "duplicate")
+        if task_id in parents:  # it would wait for the very task it is meant to be sent to
+            raise ScheduledError("an instruction cannot depend on its own target task (it waits for the thread to be idle anyway)", "self")
+        with self._lock, self._conn:
+            known = {r["id"] for r in self._conn.execute("SELECT id FROM tasks")}
+            if task_id not in known:
+                raise ScheduledError(f"task not found: {task_id}", "no_task")
+            for p in parents:
+                if p not in known:
+                    raise ScheduledError(f"dependency task not found: {p}", "missing")
+            cur = self._conn.execute(
+                "INSERT INTO scheduled_instructions (task_id, prompt, status, service_tier, created_at, created_by) "
+                "VALUES (?, ?, 'waiting_dependencies', ?, ?, ?)", (task_id, prompt, service_tier, now_iso(), created_by))
+            sid = cur.lastrowid
+            for p in parents:
+                self._conn.execute("INSERT INTO scheduled_instruction_dependencies (scheduled_instruction_id, depends_on_task_id) "
+                                   "VALUES (?, ?)", (sid, p))
+        return self.get_scheduled(sid)
+
+    def get_scheduled(self, sid: int) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM scheduled_instructions WHERE id = ?", (sid,)).fetchone()
+        return dict(row) if row else None
+
+    def list_scheduled(self, task_id: Optional[str] = None, statuses=None) -> list[dict]:
+        """Oldest first (the order in which they are sent)."""
+        where, params = [], []
+        if task_id is not None:
+            where.append("task_id = ?")
+            params.append(task_id)
+        if statuses is not None:
+            statuses = list(statuses)
+            where.append(f"status IN ({', '.join('?' * len(statuses))})")
+            params += statuses
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM scheduled_instructions {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY created_at, id",
+                params).fetchall()
+        return [dict(r) for r in rows]
+
+    def scheduled_dependencies(self, sid: int) -> list[str]:
+        with self._lock:
+            return [r["depends_on_task_id"] for r in self._conn.execute(
+                "SELECT depends_on_task_id FROM scheduled_instruction_dependencies WHERE scheduled_instruction_id = ? "
+                "ORDER BY rowid", (sid,))]
+
+    def scheduled_dependency_failures(self, sid: int) -> list[dict]:
+        """The dependencies of an instruction that will never complete by themselves (failed / stopped / blocked)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT p.id, p.name, p.status FROM scheduled_instruction_dependencies d JOIN tasks p ON p.id = d.depends_on_task_id "
+                f"WHERE d.scheduled_instruction_id = ? AND p.status IN ({_FAILED_LIST}) ORDER BY d.rowid", (sid,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def scheduled_counts(self) -> dict[str, dict]:
+        """task id -> {"pending": instructions not sent yet, "ready": those that are ready}, for the dashboard."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT task_id, COUNT(*) AS pending, SUM(status = 'ready') AS ready FROM scheduled_instructions "
+                f"WHERE status IN ({_in(SCHEDULED_WAITING)}) GROUP BY task_id").fetchall()
+        return {r["task_id"]: {"pending": r["pending"], "ready": r["ready"] or 0} for r in rows}
+
+    def advance_scheduled(self, sid: int, blocked_reason: str = "") -> str:
+        """Move a not-yet-sent instruction to the state the database says it belongs in; returns its status.
+
+        Each move is one conditional UPDATE (the status it leaves, and what justifies the move, are in the WHERE), so any
+        number of callers can run this at once and an instruction only ever takes a step that is true when it is taken:
+          dependency failed for good           -> blocked
+          all completed, target thread idle    -> ready
+          all completed, target thread busy    -> waiting_thread
+          some dependency not completed (yet)  -> waiting_dependencies   (also back from ready: a completed task was run again)
+        A dependency in retry_wait (or interrupted / waiting-for-quota) is not a failure: the instruction keeps waiting.
+        """
+        a = "scheduled_instructions"
+        now = now_iso()
+        waiting = _in(SCHEDULED_WAITING)
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"UPDATE {a} SET status = 'blocked', finished_at = ?, blocked_reason = ? WHERE id = ? AND status IN ({waiting}) "
+                f"AND {_si_deps_failed(a)}", (now, blocked_reason, sid))
+            self._conn.execute(
+                f"UPDATE {a} SET status = 'ready', ready_at = ? WHERE id = ? AND status IN ('waiting_dependencies', 'waiting_thread') "
+                f"AND {_si_deps_done(a)} AND {_si_target_idle(a)}", (now, sid))
+            self._conn.execute(
+                f"UPDATE {a} SET status = 'waiting_thread', ready_at = NULL WHERE id = ? AND status IN ('waiting_dependencies', 'ready') "
+                f"AND {_si_deps_done(a)} AND NOT {_si_target_idle(a)}", (sid,))
+            self._conn.execute(
+                f"UPDATE {a} SET status = 'waiting_dependencies', ready_at = NULL WHERE id = ? AND status IN ('waiting_thread', 'ready') "
+                f"AND NOT {_si_deps_done(a)}", (sid,))
+        row = self.get_scheduled(sid)
+        return row["status"] if row else ""
+
+    def block_scheduled(self, sid: int, reason: str) -> bool:
+        """Not-yet-sent -> blocked for a reason that will not heal by itself (e.g. the worktree was deleted)."""
+        cur = self._execute(f"UPDATE scheduled_instructions SET status = 'blocked', finished_at = ?, blocked_reason = ? "
+                            f"WHERE id = ? AND status IN ({_in(SCHEDULED_WAITING)})", (now_iso(), reason, sid))
+        return cur.rowcount == 1
+
+    def ready_scheduled(self) -> list[dict]:
+        """The instruction each thread may send next: the oldest ready one of every task that has nothing running."""
+        a = "s"
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT s.* FROM scheduled_instructions s WHERE s.status = 'ready' AND {_si_head_of_queue(a)} ORDER BY s.created_at, s.id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def claim_scheduled(self, sid: int, task_fields: dict, thread_id: str) -> bool:
+        """ready -> running AND the target task completed -> queued, as ONE transaction. True for exactly one caller.
+
+        The instruction row is only taken if it is still ready, nothing of the same task is running or ahead of it, every
+        dependency is still completed and the thread is idle; the task row only if it is still `completed` on `thread_id`.
+        If either UPDATE does not match, both are undone: the instruction stays as it was and nothing was sent. Because the
+        same transaction makes the task `queued` (with the turn in pending_turn), no state exists in which the instruction
+        is running while its thread still looks idle, so a second evaluator can never claim a second instruction for it.
+        """
+        a = "scheduled_instructions"
+        unknown = set(task_fields) - set(TASK_COLUMNS)
+        if unknown or "status" in task_fields:
+            raise ValueError(f"cannot update fields: {sorted(unknown | ({'status'} & set(task_fields)))}")
+        row = self.get_scheduled(sid)
+        if row is None:
+            return False
+        assignments = ", ".join(f"{k} = ?" for k in {**task_fields, "status": "queued"})
+        try:
+            with self._lock, self._conn:
+                cur = self._conn.execute(
+                    f"UPDATE {a} SET status = 'running', started_at = ? WHERE id = ? AND status = 'ready' "
+                    f"AND {_si_head_of_queue(a)} AND {_si_deps_done(a)} AND {_si_target_idle(a)}", (now_iso(), sid))
+                if cur.rowcount != 1:
+                    raise _Rollback()
+                cur = self._conn.execute(
+                    f"UPDATE tasks SET {assignments} WHERE id = ? AND status = '{SCHEDULED_IDLE_TASK_STATUS}' AND codex_thread_id = ?",
+                    [*task_fields.values(), "queued", row["task_id"], thread_id])
+                if cur.rowcount != 1:
+                    raise _Rollback()
+        except _Rollback:
+            return False
+        self._notify(row["task_id"], SCHEDULED_IDLE_TASK_STATUS, "queued")
+        return True
+
+    def finish_scheduled(self, sid: int, status: str, reason: str = "") -> bool:
+        """running -> completed | failed (the outcome of the turn the instruction started). True if this call did it."""
+        if status not in ("completed", "failed"):
+            raise ValueError(f"bad final status: {status}")
+        cur = self._execute("UPDATE scheduled_instructions SET status = ?, finished_at = ?, blocked_reason = ? "
+                            "WHERE id = ? AND status = 'running'", (status, now_iso(), reason, sid))
+        return cur.rowcount == 1
+
+    def cancel_scheduled(self, sid: int) -> bool:
+        """Cancel an instruction that has not been sent. The status condition is in the UPDATE: it cannot beat a claim."""
+        cur = self._execute(
+            f"UPDATE scheduled_instructions SET status = 'cancelled', finished_at = ?, blocked_reason = 'cancelled by the user' "
+            f"WHERE id = ? AND status IN ({_in(SCHEDULED_CANCELLABLE)})", (now_iso(), sid))
+        return cur.rowcount == 1
 
     # ---------- turns (token usage) ----------
 

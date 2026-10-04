@@ -22,6 +22,19 @@ BUSY_STATUSES = ACTIVE_STATUSES | WAITING_STATUSES
 DEPENDENCY_FAILED_STATUSES = frozenset({"failed", "stopped", "blocked"})
 DEPENDENCY_POLICIES = ("all_success",)  # all_terminal etc. can be added later
 
+# Scheduled instructions: a follow-up turn for the EXISTING Codex thread of one task, held back until the tasks it
+# depends on are completed AND that task's thread is idle. Not a task dependency: nothing here ever starts a task.
+#   waiting_dependencies -> waiting_thread -> ready -> running -> completed
+# A dependency that failed for good (failed / stopped / blocked) makes it `blocked`; Cancel is possible until it runs.
+SCHEDULED_WAITING = ("waiting_dependencies", "waiting_thread", "ready")   # not sent yet; the scheduler re-evaluates these
+SCHEDULED_CANCELLABLE = SCHEDULED_WAITING + ("blocked",)
+SCHEDULED_OPEN = SCHEDULED_WAITING + ("running",)                         # still occupy the task's FIFO queue
+SCHEDULED_STATUSES = frozenset(SCHEDULED_CANCELLABLE + ("running", "completed", "cancelled", "failed"))
+# The only task status in which the thread counts as idle. `failed`, `stopped`, `interrupted` and `waiting-for-quota`
+# are deliberately not: they need a decision by the user (retry, resume, new session), and sending a follow-up into
+# them on our own would defeat a Stop and make one failed instruction cascade into the next.
+SCHEDULED_IDLE_TASK_STATUS = "completed"
+
 # "interrupted" = the GUI shut down while the task was active (see TaskManager.shutdown).
 # A finished task goes back to "queued" when it is given another turn (codex exec resume, or a
 # new session): one task keeps one worktree and, normally, one Codex thread across many turns.

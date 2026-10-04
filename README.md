@@ -30,6 +30,7 @@ A local web GUI for running several Codex CLI instances at once and managing the
 8. [Context Efficiency](#context-efficiency)
 9. [AGENTS.md Editor](#agentsmd-editor)
 10. [Task Dependencies](#task-dependencies)
+    - [Scheduled Instructions](#scheduled-instructions)
 11. [Automatic Recovery](#automatic-recovery)
 12. [Git Worktree Handling](#git-worktree-handling)
 13. [Restarting the GUI](#restarting-the-gui)
@@ -252,6 +253,41 @@ Choose **After other tasks complete** under **Run** in New Task and pick the tas
 - Dependencies form a DAG. **Self-dependencies, duplicates and cycles are rejected** (the same check applies when replacing the dependencies of a not-yet-started task with `PUT /api/tasks/{id}/dependencies`).
 - How double starts are prevented: `waiting_dependencies → queued` is **a single conditional UPDATE** that includes the "all dependencies completed" check, and `queued → run` is
   **a single UPDATE conditioned on `claimed_by IS NULL` (the claim)**. Even if parents finish at the same moment and the listener, scheduler and API evaluate repeatedly, the task can start only once.
+
+## Scheduled Instructions
+
+A **scheduled instruction** is a follow-up turn for a task's **existing Codex thread** that is held back until other tasks have finished. It is not a task dependency: the target task is never made to wait,
+and nothing here starts a task. Use it for "when A and B are done, merge their results into X and run all the tests".
+
+In **Additional instruction** on the detail page, write the instruction and use the **Schedule** block under it (the immediate **Send Standard / Send Fast** buttons stay as they are):
+
+- **Delivery**: *Send when thread is idle* (no dependencies; it queues behind the current turn) or *Send after tasks complete* (tick the tasks under **Depends on**).
+- **Speed**: *Standard* (`default`) or *Fast* (`priority`), stored **per instruction**. It never follows the task's tier or the previous turn: a Standard reservation after a Fast turn is Standard.
+  Reasoning effort and auto approval come from the task; what a turn actually used is recorded on the turn and the attempt.
+- **Schedule Instruction** reserves it. Task Detail then lists **Scheduled instructions** (`#1 WAITING · After: ✓ P14 … P15 running`, `WAITING FOR THREAD`, `READY`, `RUNNING`, `COMPLETED`, `BLOCKED`, `CANCELLED`, `FAILED`) with **Cancel**.
+  The dashboard only adds a small `Scheduled: 3 · Ready: 1` under the task name.
+
+It is sent only when **both** hold: every selected task is `completed`, and the target thread is idle (its task is `completed`: not running, queued, retrying, failed, stopped, interrupted or waiting for quota).
+It always continues the same `codex_thread_id`, worktree and branch (`codex exec resume <thread>` / a new turn on the same app-server thread); no session is created, so the prompt cache is kept.
+
+| Status | Meaning |
+| --- | --- |
+| `waiting_dependencies` | at least one selected task is not `completed` yet (a task in `retry_wait` / `interrupted` / `waiting-for-quota` is **not** a failure: it waits for the outcome) |
+| `waiting_thread` | all dependencies are done, but the thread is busy |
+| `ready` | everything is satisfied; waiting for its turn in the queue of the thread |
+| `running` | claimed and sent; it ends with the turn (`completed`, or `failed` when the task ends `failed` / `stopped`) |
+| `blocked` | a dependency ended `failed` / `stopped` / `blocked`, or the target worktree was deleted / has no thread (stays blocked; Cancel or create a new one) |
+| `cancelled` | cancelled before it was sent: it is never sent |
+
+- **Several instructions per thread** are sent **one at a time, oldest first** (`created_at`, then `id`); a younger one whose dependencies are done may go ahead of an older one that still waits for its dependencies.
+- **No double send.** Every transition is one conditional `UPDATE` (the status it leaves and the facts that justify it are in the `WHERE`). The claim `ready → running` is **one transaction** that also turns the target task
+  `completed → queued` with the turn as its pending turn, and is only taken if nothing of that task is `running` or ahead of it. A second evaluator, a second dependency finishing at the same moment, a manual Send, or a Cancel
+  can therefore never win the same instruction (or the same thread) twice; if either UPDATE does not match, both are rolled back.
+- **Unexpected stops are the task's business.** Once running, an instruction is never re-sent. If Codex dies during that turn, the task's automatic recovery resumes the same thread and worktree from their current state
+  (a short "check the current state" prompt, not the instruction again) and the instruction stays `running` until the task ends. The same after a GUI restart: waiting instructions are re-evaluated from the database, a `running` one is left to recovery.
+- Self-dependency (the target task as its own dependency), duplicates and unknown tasks are rejected. API: `GET/POST /api/tasks/{id}/scheduled`, `DELETE /api/tasks/{id}/scheduled/{sid}`.
+- Tables: `scheduled_instructions` (`id, task_id, prompt, status, service_tier, created_at, ready_at, started_at, finished_at, blocked_reason, created_by`) and `scheduled_instruction_dependencies`
+  (`scheduled_instruction_id, depends_on_task_id`, `UNIQUE` together).
 
 ## Automatic Recovery
 
