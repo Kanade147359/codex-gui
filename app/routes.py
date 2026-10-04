@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from . import agents_audit, agents_md, completion, ctx_config
 from . import git_manager as git
 from .codex_login import LoginError
+from .dependency_graph import graph_view
 from .fs_browser import BrowseError, list_dir
 from .task_manager import TaskError, TaskManager
 
@@ -207,6 +208,16 @@ async def create_task(request: Request, body: NewTask):
         return await manager(request).create_task(**body.model_dump())
     except TaskError as e:
         raise api_error(e)
+
+
+@router.get('/dependencies', response_class=HTMLResponse)
+async def graph_page(request: Request):
+    return TEMPLATES.TemplateResponse(request, 'graph.html', {})
+
+
+@router.get('/api/dependency-graph')
+async def graph_data(request: Request):
+    return graph_view(manager(request).db)
 
 
 @router.get("/api/options")

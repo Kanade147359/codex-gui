@@ -514,6 +514,25 @@ class Database:
             self._conn.execute("DELETE FROM task_dependencies WHERE task_id = ?", (task_id,))
             self._insert_edges(task_id, list(depends_on))
 
+    def dependency_graph_snapshot(self) -> dict:
+        """Read saved relationships without changing schedule state or synthesizing dependencies."""
+        with self._lock:
+            tasks = [dict(r) for r in self._conn.execute(
+                "SELECT id, name, repository, status, status_detail FROM tasks ORDER BY created_at, id")]
+            # Older experimental data may contain provenance. Never display AI edges as manual settings.
+            columns = {r['name'] for r in self._conn.execute('PRAGMA table_info(task_dependencies)')}
+            manual = " WHERE source = 'manual'" if 'source' in columns else ''
+            initial = [dict(r) for r in self._conn.execute(
+                'SELECT task_id, depends_on_task_id FROM task_dependencies' + manual + ' ORDER BY id')]
+            saved_schedules = [dict(r) for r in self._conn.execute(
+                'SELECT * FROM scheduled_instructions ORDER BY created_at, id')]
+            schedules = [r for r in saved_schedules if r['status'] != 'cancelled'
+                         and r['created_by'] not in ('ai', 'ai_confirmed', 'dependency_analysis')]
+            scheduled_deps = [dict(r) for r in self._conn.execute(
+                'SELECT scheduled_instruction_id, depends_on_task_id FROM scheduled_instruction_dependencies ORDER BY rowid')]
+        return dict(tasks=tasks, initial=initial, schedules=schedules, scheduled_deps=scheduled_deps,
+                    schedule_ids=[r['id'] for r in saved_schedules])
+
     def dependencies_of(self, task_id: str) -> list[str]:
         with self._lock:
             return [r["depends_on_task_id"] for r in self._conn.execute(

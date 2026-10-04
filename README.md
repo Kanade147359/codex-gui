@@ -254,6 +254,7 @@ Choose **After other tasks complete** under **Run** in New Task and pick the tas
 - How double starts are prevented: `waiting_dependencies → queued` is **a single conditional UPDATE** that includes the "all dependencies completed with success" check, and `queued → run` is
   **a single UPDATE conditioned on `claimed_by IS NULL` (the claim)**. Even if parents finish at the same moment and the listener, scheduler and API evaluate repeatedly, the task can start only once.
 
+<<<<<<< HEAD
 ## Semantic Completion Gate
 
 Execution status records whether Codex exited normally; `task_outcome` records whether the request was fulfilled.
@@ -293,6 +294,16 @@ API: `PUT /api/tasks/{id}/completion/contract`, `POST /api/tasks/{id}/completion
 `POST /api/tasks/{id}/completion/override` (`outcome`, `reason`, `confirm`), and `POST /api/tasks/{id}/dependents/cancel`.
 
 Protocol references: [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive/) and the installed CLI's generated app-server JSON Schema (`codex app-server generate-json-schema`).
+=======
+### Task dependency graph
+
+Open **依存グラフ** from the task list (`/dependencies`). The graph reads existing SQLite task dependencies and scheduled-instruction **Depends on** settings, with arrows from prerequisites to successors. Tasks without settings remain independent. It makes no AI calls and infers no relationships from instructions or names. Scheduled arrows describe follow-up turns, separately from initial-task prerequisites. Multiple settings between the same tasks share an arrow whose detail lists every setting. Cancelled schedules are excluded; completed/failed schedules carry their saved status.
+
+Select cards or arrows to see full titles, repositories and links to the existing schedule screen. Change dependencies there by cancelling and replacing reservations. Pan, zoom, fit, horizontal/vertical layout, search and repository filters are available; prerequisites outside the filter remain visible as contextual cards. Existing two-second polling refreshes settings and state while preserving positions and selection on status updates. Missing references and projected task-level cycles are reported without repairing settings. Scheduling and completion acceptance behavior are unchanged.
+
+Browser fixtures use temporary data and a separate localhost port, never registered tasks or Codex. Set `GRAPH_FIXTURE_HOME` to a fresh temporary directory and run `uvicorn graph_browser_app:create_fixture --factory --host 127.0.0.1 --port 8766` with the repository and `tests` on `PYTHONPATH`. Run `node tests/graph_browser_smoke.cjs` with `GRAPH_BROWSER_BASE=http://127.0.0.1:8766`, `GRAPH_PLAYWRIGHT_MODULE` pointing to an installed Playwright module, `GRAPH_BROWSER_EXECUTABLE` pointing to a Chromium executable, and `GRAPH_SCREENSHOT_DIR` pointing to an existing temporary directory.
+
+>>>>>>> codex-gui/4a339833-codex-gui
 
 ## Scheduled Instructions
 

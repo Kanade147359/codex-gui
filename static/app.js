@@ -945,7 +945,7 @@ function initTask() {
       : ["blocked", "failed", "cancelled"].includes(r.status) && r.blocked_reason ? esc(r.blocked_reason) : "";
     const cancel = SCHED_CANCELLABLE.includes(r.status) ? `<button class="sched-cancel" data-sid="${r.id}">Cancel</button>` : "";
     const when = r.finished_at ? ` · ${esc(dt(r.finished_at))}` : r.started_at ? ` · sent ${esc(dt(r.started_at))}` : "";
-    return `<li class="${SCHED_FINISHED.includes(r.status) ? "done" : ""}"><div class="sched-head"><b>#${r.id}</b>` +
+    return `<li id="scheduled-${r.id}" class="${SCHED_FINISHED.includes(r.status) ? "done" : ""}"><div class="sched-head"><b>#${r.id}</b>` +
       `<span class="status ${esc(r.status)}">${esc(SCHED_LABEL[r.status] || r.status)}</span>` +
       `<span class="muted">Speed: ${esc(r.speed)}${when}</span><span class="spacer"></span>${cancel}</div>` +
       (r.dependencies && r.dependencies.length ? `<div class="sched-deps"><span class="muted">After:</span> ${deps}</div>` : "") +
@@ -969,6 +969,12 @@ function initTask() {
       t.status === "failed" || t.status === "stopped" || t.status === "interrupted" || t.status === "waiting-for-quota" || t.status === "blocked"
         ? `This task is ${statusText(t.status)}: a scheduled instruction waits until it has completed.`
         : "This thread is busy: a scheduled instruction waits for the current turn to finish.";
+    const target = (window.location?.hash || '').match(/^#scheduled-(\d+)$/);
+    if (target && done.some(r=>String(r.id)===target[1])) $("#scheduled-done").open = true;
+    if (target && !document.body.dataset.scheduleLocated) {
+      const row = document.getElementById('scheduled-'+target[1]);
+      if (row) { row.scrollIntoView({block:'center'}); document.body.dataset.scheduleLocated='1'; }
+    }
     renderSchedChoices();
   }
 
