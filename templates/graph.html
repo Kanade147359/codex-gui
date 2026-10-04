@@ -8,6 +8,8 @@
   <select id="graph-project" aria-label="プロジェクト絞込み"><option value="">全プロジェクト / リポジトリ</option></select>
   <button id="graph-fit">全体表示</button><button id="graph-zoom-in" aria-label="拡大">＋</button><button id="graph-zoom-out" aria-label="縮小">−</button>
   <button id="graph-direction">縦配置</button><button id="graph-layout">再配置</button>
+  <select id="graph-focus-depth" aria-label="1タスク表示の範囲"><option value="all">1タスク表示: 前提・後続すべて</option><option value="1">1タスク表示: 直接の前提・後続のみ</option></select>
+  <span id="graph-focus" hidden><span id="graph-focus-label"></span><button id="graph-focus-clear">全体に戻す</button></span>
 </div>
 <div class="graph-info"><span>前提 → 後続 · 手動設定のみ表示（AI呼び出しなし）</span><span id="graph-count" role="status" aria-live="polite"></span></div>
 <p id="graph-message" role="alert"></p>
@@ -19,7 +21,9 @@
     </svg>
     <div id="graph-empty" hidden>表示対象のタスクがありません。</div>
   </div>
+  <div id="graph-split-x" role="separator" aria-orientation="vertical" tabindex="0" title="ドラッグで詳細パネルの幅を調整" aria-label="グラフと詳細パネルの境界。左右キーで幅を調整"></div>
   <aside id="graph-detail" aria-label="選択したタスク・依存線の詳細"><p>カードや矢印を選択して詳細を表示します。</p><p class="muted">依存の変更はタスク詳細の既存スケジュール画面で行います。</p></aside>
 </div>
+<div id="graph-split-y" role="separator" aria-orientation="horizontal" tabindex="0" title="ドラッグでグラフの高さを調整（ダブルクリックで初期値）" aria-label="グラフの高さ。上下キーで調整"></div>
 <script src="/static/graph.js" defer></script>
 {% endblock %}

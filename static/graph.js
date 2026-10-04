@@ -31,7 +31,20 @@ function dependencyLayout(tasks, edges, vertical = false) {
     vertical ? { x: 60 + row * 340, y: 60 + stage * 240, stage } : { x: 60 + stage * 470, y: 60 + row * 160, stage })));
   return positions;
 }
-if (typeof module !== 'undefined') module.exports = { dependencyLayout };
+// Task ids reachable from `id` through prerequisites and successors; depth 0 means unlimited.
+function focusSubgraph(edges, id, depth = 0) {
+  const shown = new Set([id]);
+  for (const [from, to] of [['child', 'parent'], ['parent', 'child']]) {
+    let frontier = [id];
+    for (let hop = 1; frontier.length && (!depth || hop <= depth); hop++) {
+      const next = [];
+      for (const e of edges) if (frontier.includes(e[from]) && !shown.has(e[to])) { shown.add(e[to]); next.push(e[to]); }
+      frontier = next;
+    }
+  }
+  return shown;
+}
+if (typeof module !== 'undefined') module.exports = { dependencyLayout, focusSubgraph };
 if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
   const q = s => document.querySelector(s);
   const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
@@ -45,7 +58,7 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
   const scheduleStates = {waiting_dependencies:'依存待ち',waiting_thread:'thread待ち',ready:'送信待ち',running:'実行中',completed:'完了',blocked:'保留',failed:'失敗'};
   const relation = e => e.settings.map(s=>s.kind==='task'?'タスク開始':`${s.label} · ${scheduleStates[s.status] || s.status}`).join(' / ');
   let data = {tasks:[],edges:[],errors:[]}, edges = [], positions = new Map(), signature = '', vertical = false;
-  let selected = null, scale = 1, panX = 20, panY = 20, first = true, polling = false;
+  let focusId = null, selected = null, scale = 1, panX = 20, panY = 20, first = true, polling = false;
   const world = q('#graph-world'), viewport = q('#graph-viewport');
   const message = text => { q('#graph-message').textContent = text; };
   const transform = () => world.setAttribute('transform', `translate(${panX} ${panY}) scale(${scale})`);
@@ -58,6 +71,11 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
     transform();
   }
   function visible() {
+    if (focusId && !data.tasks.some(t => t.id === focusId)) focusId = null;
+    if (focusId) {
+      const shown = focusSubgraph(edges, focusId, Number(q('#graph-focus-depth').value) || 0);
+      return {direct: shown, tasks: data.tasks.filter(t=>shown.has(t.id)), edges: edges.filter(e=>shown.has(e.parent) && shown.has(e.child))};
+    }
     const search = q('#graph-search').value.toLowerCase(), project = q('#graph-project').value;
     const direct = new Set(data.tasks.filter(t => (!project || t.repository === project) && `${t.id} ${t.name}`.toLowerCase().includes(search)).map(t=>t.id));
     const shown = new Set(direct);
@@ -101,6 +119,8 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
       const p=positions.get(t.id), state=states[t.status] || ['?',t.status], ghost=!v.direct.has(t.id);
       return `<g class="graph-node ${related.has(t.id)?'selected':''} ${ghost?'contextual':''}" transform="translate(${p.x},${p.y})" data-node="${escape(t.id)}" tabindex="0" role="button" aria-label="${escape(t.id+' '+t.name+' '+state[1])}"><title>${escape(t.name+'\n'+t.repository)}</title><foreignObject width="280" height="104"><div xmlns="http://www.w3.org/1999/xhtml" class="graph-card"><span class="graph-icon">${state[0]}</span><div class="graph-card-title"><small>${escape(t.id)}</small><strong title="${escape(t.name)}">${escape(t.name)}</strong><small title="${escape(t.repository)}">${ghost?'絞込み外の前提 · ':''}${escape(t.repository.split('/').pop())}</small></div><span class="graph-badge">${escape(state[1])}</span></div></foreignObject></g>`;
     }).join('');
+    const focused = focusId && data.tasks.find(t => t.id === focusId);
+    q('#graph-focus').hidden = !focused; q('#graph-focus-label').textContent = focused ? `1タスク表示: ${focused.id} ${focused.name}` : '';
     world.innerHTML = paths + cards; transform(); q('#graph-empty').hidden = Boolean(v.tasks.length);
     q('#graph-count').textContent = `${v.tasks.length}/${data.tasks.length} タスク · ${v.edges.length} 本の依存線`;
     message(data.errors.map(e=>e.message).join(' / '));
@@ -117,6 +137,7 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
       const prerequisites=edges.filter(e=>e.child===t.id), successors=edges.filter(e=>e.parent===t.id);
       const list=es=>es.map(e=>`<li><button data-select-edge="${escape(e.key)}">${escape(taskName(e.parent===t.id?e.child:e.parent))} · ${escape(relation(e))}</button></li>`).join('') || '<li>なし</li>';
       panel.innerHTML=`<h2>${escape(t.id)} · ${escape(states[t.status]?.[1] || t.status)}</h2><h3>${escape(t.name)}</h3><p class="graph-repo">${escape(t.repository)}</p>
+        <p><button class="graph-focus-btn" data-focus="${focusId===t.id?'':escape(t.id)}">${focusId===t.id?'全体に戻す':'このタスクだけ表示'}</button></p>
         <p><a href="/tasks/${encodeURIComponent(t.id)}">タスク詳細へ →</a></p><p><a href="${scheduleLink(t.id)}">既存スケジュールを開く →</a></p>
         ${t.status_detail?`<p>${escape(t.status_detail)}</p>`:''}
         <h2>設定された前提</h2><ul>${list(prerequisites)}</ul><h2>後続</h2><ul>${list(successors)}</ul>
@@ -146,14 +167,18 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
   }
   world.addEventListener('click', e=> {
     const node=e.target.closest('[data-node]'), edge=e.target.closest('[data-edge]');
+    if(node && e.detail >= 2) { setFocus(node.dataset.node); return; } // double click: show only this task's lineage
     if(node) selected={type:'node',id:node.dataset.node}; else if(edge) selected={type:'edge',id:edge.dataset.edge};
     render();
   });
   world.addEventListener('keydown', e=>{if(e.key==='Enter'||e.key===' ') {e.preventDefault();e.target.dispatchEvent(new MouseEvent('click',{bubbles:true}));}});
   q('#graph-detail').addEventListener('click', e=> {
     const link=e.target.closest('[data-select-edge]'); if(link) {selected={type:'edge',id:link.dataset.selectEdge};render();return;}
+    const focus=e.target.closest('[data-focus]'); if(focus) setFocus(focus.dataset.focus||null);
   });
-  q('#graph-search').oninput=q('#graph-project').onchange=()=>{render();fit();refresh();};
+  function setFocus(id) { focusId=id; if(id) selected={type:'node',id}; render(true); fit(); }
+  q('#graph-focus-clear').onclick=()=>setFocus(null); q('#graph-focus-depth').onchange=()=>{if(focusId){render(true);fit();}};
+  q('#graph-search').oninput=q('#graph-project').onchange=()=>{focusId=null;render();fit();refresh();};
   q('#graph-direction').onclick=()=>{vertical=!vertical;q('#graph-direction').textContent=vertical?'横配置':'縦配置';render(true);fit();};
   q('#graph-layout').onclick=()=>{render(true);fit();}; q('#graph-fit').onclick=fit;
   function zoom(factor,x=viewport.clientWidth/2,y=viewport.clientHeight/2) {const next=Math.max(.02,Math.min(3,scale*factor)),f=next/scale;panX=x-(x-panX)*f;panY=y-(y-panY)*f;scale=next;transform();}
@@ -164,5 +189,25 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
   viewport.addEventListener('pointermove',e=>{if(drag){panX=drag.px+e.clientX-drag.x;panY=drag.py+e.clientY-drag.y;transform();}});
   viewport.addEventListener('pointerup',()=>drag=null);viewport.addEventListener('pointercancel',()=>drag=null);
   viewport.addEventListener('keydown',e=>{const moves={ArrowLeft:[40,0],ArrowRight:[-40,0],ArrowUp:[0,40],ArrowDown:[0,-40]};if(e.target!==viewport)return;if(moves[e.key]){e.preventDefault();panX+=moves[e.key][0];panY+=moves[e.key][1];transform();}if(e.key==='+'||e.key==='=')zoom(1.2);if(e.key==='-')zoom(1/1.2);if(e.key==='0')fit();});
+  // Resizable graph zone: height (bottom grip) and detail-panel width (side grip), remembered per browser.
+  const root=document.documentElement, store={
+    get(k){try{return Number(localStorage.getItem('graph-'+k))||null;}catch(e){return null;}},
+    set(k,v){try{v===null?localStorage.removeItem('graph-'+k):localStorage.setItem('graph-'+k,v);}catch(e){}}};
+  const sizes={
+    h:{min:240,max:()=>Math.max(400,innerHeight*3),prop:'--graph-h',get:()=>viewport.getBoundingClientRect().height},
+    w:{min:220,max:()=>Math.max(300,innerWidth-360),prop:'--graph-detail-w',get:()=>q('#graph-detail').getBoundingClientRect().width}};
+  const setSize=(k,px,save=true)=>{const s=sizes[k],v=px===null?null:Math.round(Math.max(s.min,Math.min(s.max(),px)));
+    v===null?root.style.removeProperty(s.prop):root.style.setProperty(s.prop,v+'px'); if(save)store.set(k,v);};
+  for(const k of ['h','w']) if(store.get(k)) setSize(k,store.get(k),false);
+  function grip(el,k,sign,axis,keys){
+    let start=null;
+    el.addEventListener('pointerdown',e=>{if(e.button!==0)return;start={p:e[axis],v:sizes[k].get()};el.setPointerCapture(e.pointerId);el.classList.add('dragging');e.preventDefault();});
+    el.addEventListener('pointermove',e=>{if(start)setSize(k,start.v+sign*(e[axis]-start.p));});
+    const end=()=>{start=null;el.classList.remove('dragging');}; el.addEventListener('pointerup',end); el.addEventListener('pointercancel',end);
+    el.addEventListener('dblclick',()=>setSize(k,null));
+    el.addEventListener('keydown',e=>{const d=keys[e.key];if(d){e.preventDefault();setSize(k,sizes[k].get()+sign*d*(e.shiftKey?200:40));}});
+  }
+  grip(q('#graph-split-y'),'h',1,'clientY',{ArrowUp:-1,ArrowDown:1});
+  grip(q('#graph-split-x'),'w',-1,'clientX',{ArrowLeft:-1,ArrowRight:1});
   refresh(); const timer=setInterval(refresh,2000);window.addEventListener('pagehide',()=>clearInterval(timer));
 }

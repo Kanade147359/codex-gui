@@ -44,6 +44,24 @@ const base=process.env.GRAPH_BROWSER_BASE;
   await page.request.post(base+'/fixture/status');await page.waitForFunction(()=>document.querySelector('[data-node="a0000001"]').textContent.includes('実行中'));
   assert.deepEqual(await positions(),stable);assert.equal(await page.locator('#graph-world').getAttribute('transform'),transform);
   assert((await page.locator('#graph-detail').textContent()).includes('B 並列作業'));
+  // One-task focus: lineage only, depth switch, back to the full graph. Survives polling without moving the view.
+  await page.locator('[data-node="a0000001"]').click();await page.getByRole('button',{name:'このタスクだけ表示'}).click();
+  assert.equal(await page.locator('.graph-node').count(),4);assert.equal(await page.locator('[data-node="e0000005"]').count(),0);
+  assert((await page.locator('#graph-focus').textContent()).includes('a0000001'));
+  await page.locator('#graph-focus-depth').selectOption('1');assert.equal(await page.locator('.graph-node').count(),3);
+  await page.locator('#graph-focus-depth').selectOption('all');
+  await page.locator('[data-node="d0000004"]').dblclick();assert.equal(await page.locator('.graph-node').count(),3);
+  assert(await page.evaluate(()=>{const a=document.querySelector('#graph-world').getBoundingClientRect(),b=document.querySelector('#graph-viewport').getBoundingClientRect();return a.top>=b.top&&a.bottom<=b.bottom&&a.left>=b.left&&a.right<=b.right;}));
+  await page.getByRole('button',{name:'全体に戻す',exact:true}).first().click();assert.equal(await page.locator('.graph-node').count(),5);assert(await page.locator('#graph-focus').isHidden());
+  // Resizable graph zone (height and detail width), remembered in localStorage.
+  const size=async()=>({h:(await page.locator('#graph-viewport').boundingBox()).height,w:(await page.locator('#graph-detail').boundingBox()).width});
+  const before=await size(),gy=await page.locator('#graph-split-y').boundingBox(),gx=await page.locator('#graph-split-x').boundingBox();
+  await page.mouse.move(gy.x+gy.width/2,gy.y+gy.height/2);await page.mouse.down();await page.mouse.move(gy.x+gy.width/2,gy.y+gy.height/2+150,{steps:5});await page.mouse.up();
+  await page.mouse.move(gx.x+gx.width/2,gx.y+gx.height/2);await page.mouse.down();await page.mouse.move(gx.x+gx.width/2-100,gx.y+gx.height/2,{steps:5});await page.mouse.up();
+  const after=await size();assert(Math.abs(after.h-before.h-150)<3,JSON.stringify([before,after]));assert(Math.abs(after.w-before.w-100)<3,JSON.stringify([before,after]));
+  await page.reload();await page.waitForFunction(()=>document.querySelectorAll('.graph-node').length===5);
+  const kept=await size();assert(Math.abs(kept.h-after.h)<2&&Math.abs(kept.w-after.w)<2,JSON.stringify([after,kept]));
+  await page.locator('#graph-split-y').dblclick();await page.locator('#graph-split-x').dblclick();assert(Math.abs((await size()).h-before.h)<2);
   await page.locator('#graph-project').selectOption('/fixture/repo-two');assert.equal(await page.locator('.graph-node.contextual').count(),2);
   assert((await page.locator('.graph-node.contextual').first().textContent()).includes('絞込み外の前提'));
   await page.locator('#graph-project').selectOption('');
