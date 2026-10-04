@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block page %}graph{% endblock %}
+{% block title %}タスク依存グラフ — Codex GUI{% endblock %}
+{% block topbar %}<a href="/">タスク一覧</a><strong>依存グラフ</strong>{% endblock %}
+{% block content %}
+<div class="graph-toolbar">
+  <input id="graph-search" type="search" placeholder="タスクID・タイトルを検索" aria-label="タスク検索">
+  <select id="graph-project" aria-label="プロジェクト絞込み"><option value="">全プロジェクト / リポジトリ</option></select>
+  <button id="graph-fit">全体表示</button><button id="graph-zoom-in" aria-label="拡大">＋</button><button id="graph-zoom-out" aria-label="縮小">−</button>
+  <button id="graph-direction">縦配置</button><button id="graph-layout">再配置</button>
+</div>
+<div class="graph-info"><span>前提 → 後続 · 手動設定のみ表示（AI呼び出しなし）</span><span id="graph-count" role="status" aria-live="polite"></span></div>
+<p id="graph-message" role="alert"></p>
+<div class="graph-shell">
+  <div id="graph-viewport" tabindex="0" aria-label="依存グラフ。背景ドラッグで移動、ホイールでズーム">
+    <svg id="graph-svg" width="100%" height="100%" role="img" aria-label="タスクの前提から後続への依存関係">
+      <defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+      <g id="graph-world"></g>
+    </svg>
+    <div id="graph-empty" hidden>表示対象のタスクがありません。</div>
+  </div>
+  <aside id="graph-detail" aria-label="選択したタスク・依存線の詳細"><p>カードや矢印を選択して詳細を表示します。</p><p class="muted">依存の変更はタスク詳細の既存スケジュール画面で行います。</p></aside>
+</div>
+<script src="/static/graph.js" defer></script>
+{% endblock %}

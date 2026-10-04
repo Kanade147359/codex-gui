@@ -216,3 +216,31 @@ ul.sched-list li.done { opacity: .75; }
 .sched-deps .dep { margin-right: 14px; white-space: nowrap; }
 td .sched-badge { margin-top: 2px; font-size: 12px; color: var(--purple); }
 .deps-list label.check { display: block; }
+
+/* Dependency graph shares the existing theme and polling lifecycle. */
+body[data-page="graph"] main { max-width: none; padding: 14px 20px; }
+.graph-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.graph-toolbar input { width: 220px; } .graph-toolbar select { width: 260px; }
+.graph-info { display:flex; gap:18px; align-items:center; flex-wrap:wrap; color:var(--muted); }
+.graph-info input { width:auto; } #graph-message { color:var(--red); min-height:18px; margin:6px 0; }
+.graph-shell { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:12px; height:72vh; min-height:500px; }
+#graph-viewport { position:relative; overflow:hidden; border:1px solid var(--border); border-radius:12px; touch-action:none; background-color:var(--bg); background-image:radial-gradient(circle, #343c4b 1px, transparent 1px); background-size:20px 20px; }
+#graph-svg { display:block; cursor:grab; user-select:none; } #graph-svg:active { cursor:grabbing; }
+#graph-empty { position:absolute; top:40%; width:100%; text-align:center; color:var(--muted); pointer-events:none; }
+#graph-detail { overflow:auto; background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; }
+#graph-detail h2 { margin-top:16px; } #graph-detail h3 { overflow-wrap:anywhere; } #graph-detail li { margin:5px 0; }
+#graph-detail ul { padding-left:18px; } #graph-detail button { margin:3px 0; white-space:normal; }
+.graph-repo { overflow-wrap:anywhere; color:var(--muted); } .graph-prompt { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+#graph-detail blockquote { margin:10px 0; padding:8px 12px; border-left:3px solid var(--accent); white-space:pre-wrap; overflow-wrap:anywhere; }
+.graph-card { height:104px; width:280px; border:1px solid #424d61; border-radius:15px; background:var(--panel); display:flex; gap:10px; padding:15px 12px; align-items:center; cursor:pointer; color:var(--text); }
+.graph-icon { font-size:22px; min-width:22px; text-align:center; } .graph-card-title { min-width:0; flex:1; }
+.graph-card-title strong,.graph-card-title small { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.graph-card-title small { color:var(--muted); font-size:11px; } .graph-card-title strong { margin:3px 0; font-size:13px; }
+.graph-badge { font-size:11px; border:1px solid var(--border); border-radius:5px; padding:3px 5px; white-space:nowrap; }
+.graph-node.selected .graph-card { border:2px solid var(--accent); } .graph-node.contextual .graph-card { border-style:dashed; background:#12151b; }
+.graph-node:focus .graph-card { outline:2px solid var(--accent); outline-offset:-4px; }
+.graph-edge { cursor:pointer; color:var(--muted); } .graph-edge .edge-line { fill:none; stroke:#758399; stroke-width:2; }
+.graph-edge .edge-hit { fill:none; stroke:transparent; stroke-width:16; pointer-events:stroke; }
+.graph-edge text { font:11px var(--mono); fill:var(--text); paint-order:stroke; stroke:var(--bg); stroke-width:6px; stroke-linejoin:round; }
+.graph-edge.selected .edge-line,.graph-edge:focus .edge-line { stroke:var(--accent); stroke-width:3; } .graph-edge.selected text { fill:var(--accent); }
+@media (max-width:900px) { .graph-shell { grid-template-columns:minmax(0,1fr); height:auto; } #graph-viewport { height:65vh; min-height:400px; } #graph-detail { max-height:500px; } }

@@ -2,7 +2,7 @@
 {% block title %}Task {{ task_id }} - Codex GUI{% endblock %}
 {% block page %}task{% endblock %}
 {% block bodyattrs %}data-task-id="{{ task_id }}"{% endblock %}
-{% block topbar %}<a class="crumb" href="/">&larr; all tasks</a>{% endblock %}
+{% block topbar %}<a class="button" href="/dependencies">依存グラフ</a><a class="crumb" href="/">&larr; all tasks</a>{% endblock %}
 {% block content %}
 <section>
   <div class="title-row">
