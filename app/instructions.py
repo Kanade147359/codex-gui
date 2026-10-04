@@ -21,6 +21,9 @@ Prefer:
 - concise command output
 
 Read only the portions necessary for the current task.
+
+At completion, return a JSON object with status (SUCCESS, BLOCKED, NEEDS_INPUT, or PARTIAL) and a short reason.
+SUCCESS means the entire request is fulfilled. Missing required information is NEEDS_INPUT; unfinished work is PARTIAL.
 """
 
 

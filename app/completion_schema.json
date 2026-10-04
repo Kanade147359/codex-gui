@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["SUCCESS", "BLOCKED", "NEEDS_INPUT", "PARTIAL"],
+      "description": "SUCCESS only when the entire user request is fulfilled. BLOCKED for an obstacle, NEEDS_INPUT for required missing information, PARTIAL for unfinished work."
+    },
+    "reason": {"type": "string", "description": "A short explanation of the actual task outcome."}
+  },
+  "required": ["status", "reason"]
+}

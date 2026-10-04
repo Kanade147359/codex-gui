@@ -25,7 +25,8 @@ import uuid
 
 argv = sys.argv[1:]
 resume = argv[1] if argv[:1] == ["resume"] else None
-prompt = sys.stdin.read().split()
+raw_prompt = sys.stdin.read().split("\n\nAt the end return only JSON", 1)[0]
+prompt = raw_prompt.split()
 logged_prompt = list(prompt)
 if os.environ.get("FAKE_CODEX_FORCE_MODE"):
     prompt = os.environ["FAKE_CODEX_FORCE_MODE"].split()
@@ -90,11 +91,21 @@ if mode == "gate":
         time.sleep(0.1)
     mode = "ok"
 # "Previous ..." is the fixed recovery instruction of a retry; the other crash modes behave normally after their first crash.
-if mode in ("ok", "nothread", "newthread", "Previous", "crash", "crashearly", "wipcrash", "crashunstarted"):
+if mode == "semantic":
+    outcome = prompt[1]
+    reason = " ".join(prompt[2:]) or "semantic test outcome"
+    if outcome == "SUCCESS":
+        open("out.txt", "a").write("hello\n")
+    text = json.dumps({"status": outcome, "reason": reason}) if outcome != "MISSING" else "done"
+    emit({"type": "item.completed", "item": {"id": "final", "type": "agent_message", "text": text}})
+    report_usage()
+elif mode in ("ok", "nothread", "newthread", "Previous", "crash", "crashearly", "wipcrash", "crashunstarted"):
     open("out.txt", "a").write("hello\n")
     print("this line is not json", flush=True)
     sys.stderr.write("a warning\n")
     emit({"type": "item.completed", "item": {"id": "i0", "type": "agent_message", "text": "done"}})
+    emit({"type": "item.completed", "item": {"id": "final", "type": "agent_message",
+          "text": json.dumps({"status": "SUCCESS", "reason": "Requested work completed."})}})
     report_usage()
 elif mode == "fail":
     emit({"type": "turn.failed", "error": {"message": "boom"}})

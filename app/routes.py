@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from . import agents_audit, agents_md, ctx_config
+from . import agents_audit, agents_md, completion, ctx_config
 from . import git_manager as git
 from .codex_login import LoginError
 from .fs_browser import BrowseError, list_dir
@@ -55,6 +55,13 @@ class NewTask(BaseModel):
     allow_subagents: bool = False              # nested agents are OFF unless the task needs them
     tool_profile: str = "full"                 # full | development | minimal
     cwd_subdir: str = ""                       # Advanced: run Codex in a sub-directory of the worktree
+    completion_contract: Optional[dict] = None
+
+
+class CompletionOverride(BaseModel):
+    outcome: Literal["success", "blocked"]
+    reason: str
+    confirm: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -206,10 +213,27 @@ async def create_task(request: Request, body: NewTask):
 async def options(request: Request):
     """Model choices (from the codex CLI) and recently used repositories for the New Task form."""
     m = manager(request)
+    request.app.state.completion_validation = completion.validation_capability()
     return {**await request.app.state.catalog.get(), "repos": m.db.recent_repos(),
             "backend": m.settings.backend, "subscription_only": m.settings.subscription_only,
             "default_auto_retry": m.settings.default_auto_retry, "default_max_retries": m.settings.default_max_retries,
-            "context_warn_percent": m.settings.context_warn_percent, "context_efficiency": context_options()}
+            "context_warn_percent": m.settings.context_warn_percent, "context_efficiency": context_options(),
+            "completion_approval": m.completion_approval_settings(),
+            "completion_validation": request.app.state.completion_validation}
+
+
+class CompletionApprovalSettings(BaseModel):
+    auto_approve_verified_success: bool
+
+
+@router.get("/api/completion/settings")
+async def get_completion_settings(request: Request):
+    return manager(request).completion_approval_settings()
+
+
+@router.put("/api/completion/settings")
+async def put_completion_settings(request: Request, body: CompletionApprovalSettings):
+    return manager(request).set_completion_approval(body.auto_approve_verified_success)
 
 
 @router.get("/api/fs")
@@ -315,6 +339,38 @@ async def send_instruction(request: Request, task_id: str, body: Instruction):
     """Additional instruction: continues the task's existing Codex session (codex exec resume)."""
     try:
         return await manager(request).send_instruction(task_id, body.prompt, body.reasoning_effort, body.service_tier)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/completion/checks")
+async def rerun_completion(request: Request, task_id: str):
+    try:
+        return await manager(request).rerun_completion(task_id)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.put("/api/tasks/{task_id}/completion/contract")
+async def completion_contract(request: Request, task_id: str, body: dict):
+    try:
+        return manager(request).set_completion_contract(task_id, body)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/completion/override")
+async def override_completion(request: Request, task_id: str, body: CompletionOverride):
+    try:
+        return manager(request).override_completion(task_id, body.outcome, body.reason, body.confirm)
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/dependents/cancel")
+async def cancel_dependents(request: Request, task_id: str):
+    try:
+        return await manager(request).cancel_dependents(task_id)
     except TaskError as e:
         raise api_error(e)
 

@@ -74,7 +74,9 @@ run("app.js");
   console.log(JSON.stringify({ errors, calls, instructionValue: getEl("#instruction").value, instructionDisabled: getEl("#instruction").disabled, published: !!(sandbox.window && sandbox.window.CtxUI),
     html: pick(["#ctx-banners", "#ctx-summary", "#ctx-settings", "#ctx-cache", "#ctx-tooloutputs", "#ctx-agents", "#tasks-body", "#send-btn", "#task-name", "#action-msg",
       "#task-status", "#deps-items", "#deps-summary", "#blocks-line", "#recovery-dl", "#recovery-hint", "#attempts-body", "#deps-list", "#instruction-hint",
-      "#scheduled-items", "#scheduled-done-items", "#scheduled-summary", "#scheduled-done-summary", "#sched-deps", "#schedule-hint"]),
+      "#scheduled-items", "#scheduled-done-items", "#scheduled-summary", "#scheduled-done-summary", "#sched-deps", "#schedule-hint",
+      "#completion-summary", "#completion-checks", "#completion-dependents", "#completion-validation-capability", "#completion-validation-note", "#completion-approval-note", "#completion-approvals"]),
+    completionAutoApproveChecked: getEl("#completion-auto-approve").checked,
     sendFastHidden: (registry["#send-fast-btn"] || {}).hidden,
     hidden: Object.fromEntries(["#deps-section", "#run-anyway-btn", "#retry-deps-btn", "#retry-now-btn", "#retry-btn", "#attempts", "#stop-btn", "#scheduled-section", "#scheduled-done",
       "#schedule-box", "#sched-deps-box"]

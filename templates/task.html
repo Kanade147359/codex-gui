@@ -24,6 +24,27 @@
   <details class="fold"><summary><h2>Prompt</h2></summary><pre id="prompt" class="block"></pre></details>
 </section>
 
+<section id="completion-gate">
+  <h2>Completion Gate</h2>
+  <dl class="meta" id="completion-summary"></dl>
+  <ul id="completion-checks" class="deps"></ul>
+  <p id="completion-dependents" class="muted"></p>
+  <details><summary>Approval history</summary><ul id="completion-approvals" class="deps"></ul></details>
+  <div class="inline-actions">
+    <button id="completion-instruction-btn">Send Additional Instruction</button>
+    <button id="completion-check-btn">Re-run Completion Checks</button>
+    <button id="completion-success-btn">Mark Success Manually</button>
+    <button id="completion-blocked-btn">Mark Blocked</button>
+    <button id="completion-cancel-btn" class="danger">Cancel Dependents</button>
+  </div>
+  <details class="fold">
+    <summary>Completion Contract</summary>
+    <label>Contract JSON<textarea id="completion-contract-editor" rows="6" spellcheck="false"></textarea></label>
+    <button id="completion-contract-save-btn">Save Contract</button>
+    <p class="small muted">Saving or re-running checks clears any prior manual approval. Validation commands run read-only with temporary scratch space and no network.</p>
+  </details>
+</section>
+
 <section id="quota-banner" class="banner quota" hidden>
   <b>Waiting for Codex quota.</b> <span id="quota-detail"></span>
   Nothing is retried automatically and no other billing path is used. Run the instruction again when your included usage is available.

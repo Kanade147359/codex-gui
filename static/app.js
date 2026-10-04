@@ -97,14 +97,21 @@ function retryIn(t) {
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 }
 function taskStatusText(t) {
+  if (t.status === "completed" && t.task_outcome) return t.task_outcome.replaceAll("_", " ").toUpperCase();
+  if (t.status === "waiting_dependencies") {
+    const issues = (t.dependencies || []).filter((d) => d.status === "completed" && d.task_outcome !== "success");
+    if (issues.length) return "WAITING — " + issues.map((d) => `${d.name} ${d.task_outcome.replaceAll("_", " ")}`).join("; ");
+  }
   if (t.status === "waiting_dependencies") return t.deps_total ? `Waiting (${t.deps_done}/${t.deps_total} complete)` : "Waiting for dependencies";
   if (t.status === "retry_wait") return `Retry ${t.retry_count}/${t.max_retries} in ${retryIn(t)}`;
   return statusText(t.status);
 }
 function statusCell(t) {
   const live = t.status === "retry_wait" ? ` data-retry-at="${esc(t.next_retry_at)}" data-retry="${t.retry_count}/${t.max_retries}"` : "";
-  let html = `<span class="status ${esc(t.status)}"${live}>${esc(taskStatusText(t))}</span>`;
+  let html = `<span class="status ${esc(t.status === "completed" ? t.task_outcome || "needs_review" : t.status)}"${live}>${esc(taskStatusText(t))}</span>`;
   if (t.status === "blocked" && t.status_detail) html += `<div class="sub">${esc(t.status_detail)}</div>`;
+  if (t.status === "waiting_dependencies" && t.status_detail) html += `<div class="sub">${esc(t.status_detail)}</div>`;
+  if (t.status === "completed" && t.task_outcome !== "success") html += `<div class="sub">${esc(t.outcome_reason)}</div>`;
   if (t.status === "retry_wait" && t.last_failure_message) html += `<div class="sub" title="${esc(t.last_failure_message)}">${esc(t.last_failure_message.slice(0, 80))}</div>`;
   return html;
 }
@@ -602,6 +609,14 @@ function initDashboard() {
         depends_on: dependsOn,
         auto_retry: f.auto_retry.checked,
         max_retries: Number(f.max_retries.value),
+        completion_contract: {
+          required_paths: f.required_paths.value.split("\n").map((s) => s.trim()).filter(Boolean),
+          required_changed_paths: f.required_changed_paths.value.split("\n").map((s) => s.trim()).filter(Boolean),
+          require_any_change: f.require_any_change.checked,
+          require_commit: f.require_commit.checked,
+          manual_approval: f.manual_approval.checked,
+          validation_commands: f.validation_commands.value.split("\n").map((s) => s.trim()).filter(Boolean),
+        },
         repository: f.repository.value,
         base_ref: baseValue(),
         name: f.name.value,
@@ -648,8 +663,27 @@ function initDashboard() {
       options = await api("GET", "/api/options");
       $("#default-model").textContent = options.recommended_model ? modelName(options.recommended_model) : (options.default_model || "Codex default");
       $("#backend-note").textContent = options.backend === "app-server" ? "via codex app-server" : "legacy codex exec backend";
+      const validation = options.completion_validation;
+      if (validation) {
+        $("#completion-validation-capability").textContent = validation.bwrap_available ? "✓ bwrap: Available" : "⚠ bwrap: Missing";
+        $("#completion-validation-note").textContent = validation.message || "";
+      }
+      $("#completion-auto-approve").checked = options.completion_approval?.auto_approve_verified_success !== false;
     } catch (_) {}
   }
+
+  $("#completion-auto-approve").addEventListener("change", async () => {
+    const toggle = $("#completion-auto-approve"), enabled = toggle.checked;
+    toggle.disabled = true;
+    try {
+      const value = await api("PUT", "/api/completion/settings", {auto_approve_verified_success: enabled});
+      toggle.checked = value.auto_approve_verified_success;
+      $("#completion-approval-note").textContent = "Saved. Applies to future completion checks; custom contracts take priority.";
+    } catch (e) {
+      toggle.checked = !enabled;
+      $("#completion-approval-note").textContent = e.message;
+    } finally { toggle.disabled = false; }
+  });
 
   loadOptions().then(() => { renderTasks(); });
   refresh();
@@ -696,6 +730,8 @@ function initTask() {
   let entryCount = 0;
   let stopping = false;
   let sending = false;
+  let gateWorking = false;
+  let contractLoaded = false;
   const logEl = $("#log");
   const MAX_ROWS = 5000;
 
@@ -713,7 +749,7 @@ function initTask() {
     const busy = active || waiting;
     document.title = `${t.name} - Codex GUI`;
     $("#task-name").textContent = t.name;
-    $("#task-status").className = "status " + t.status;
+    $("#task-status").className = "status " + (t.status === "completed" ? t.task_outcome || "needs_review" : t.status);
     $("#task-status").textContent = taskStatusText(t);
     if (t.status === "retry_wait") { $("#task-status").dataset.retryAt = t.next_retry_at; $("#task-status").dataset.retry = `${t.retry_count}/${t.max_retries}`; }
     else { delete $("#task-status").dataset.retryAt; }
@@ -799,12 +835,76 @@ function initTask() {
     renderContext(t);
     renderObserved(t);
     renderDeps(t);
+    renderCompletion(t);
     renderSchedule(t, canSchedule);
     renderRecovery(t);
     if (window.CtxUI) CtxUI.renderTask(t, ctxHandlers);
   }
 
   // ----- dependencies and recovery -----
+
+  function renderCompletion(t) {
+    const evidence = t.evidence_result || "UNKNOWN";
+    const approval = t.approval_source === "auto_evidence" ? "✓ Auto-approved" :
+      t.approval_source === "manual" || t.manual_override ? (t.task_outcome === "success" ? "✓ Approved manually" : "Marked blocked manually") :
+      t.outcome_source === "legacy" ? "Legacy success" :
+      t.status === "completed" && t.task_outcome === "success" ? "Previously accepted" :
+      t.semantic_status === "SUCCESS" && evidence === "PASS" ? "Awaiting approval" : "Not approved";
+    const rows = [["Execution", t.status === "completed" ? "Completed normally" : statusText(t.status)],
+      ["Semantic result", t.semantic_status === "SUCCESS" ? "✓ SUCCESS" : t.semantic_status || "UNKNOWN"],
+      ["Evidence", ({PASS: "✓ Verified", FAIL: "✗ Failed", UNKNOWN: "⚠ Unknown"})[evidence]],
+      ["Evidence reason", t.evidence_reason || "Completion has not been checked."],
+      ["Approval", approval], ["Approved at", dt(t.approved_at)],
+      ["Outcome", (t.task_outcome || "needs_review").replaceAll("_", " ").toUpperCase()],
+      ["Reason", t.outcome_reason || "Completion has not been checked."], ["Checked at", dt(t.completion_checked_at)],
+      ["Source", t.outcome_source || "unverified"]];
+    if (t.manual_override) rows.push(["Manual override", `${t.manual_override_by} · ${dt(t.manual_override_at)}`]);
+    $("#completion-summary").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+    $("#completion-approvals").innerHTML = (t.completion_approvals || []).map((a) =>
+      `<li>${esc(dt(a.approved_at))} · ${esc(a.approval_source)} · ${esc(a.semantic_status)} / ${esc(a.evidence_result)} → ${esc(a.task_outcome)} · ${esc(a.actor || "automatic")}<br>${esc(a.reason)}</li>`
+    ).join("") || '<li class="muted">No approval recorded.</li>';
+    const checks = t.completion_checks || [];
+    $("#completion-checks").innerHTML = checks.map((c) => {
+      const approved = c.name === "manual approval" && t.manual_override && t.task_outcome === "success";
+      return `<li>${({pass: "✓", fail: "✗", skipped: "−", pending: "⏸", unavailable: "⚠"})[approved ? "pass" : c.status] || "−"} ${esc(c.name)} <span class="muted">${esc(approved ? "approved manually" : c.reason)}</span></li>`;
+    }).join("");
+    const paused = (t.dependents || []).filter((d) => ["waiting_dependencies", "blocked"].includes(d.status)).length;
+    $("#completion-dependents").textContent = `Dependents: ${paused} paused`;
+    for (const sel of ["#completion-check-btn", "#completion-success-btn", "#completion-blocked-btn"]) $(sel).disabled = gateWorking || t.completion_pending || t.status !== "completed";
+    $("#completion-contract-save-btn").disabled = gateWorking || t.completion_pending || [...ACTIVE, "retry_wait"].includes(t.status);
+    $("#completion-instruction-btn").disabled = gateWorking || t.completion_pending || BUSY.includes(t.status) || !t.codex_thread_id;
+    $("#completion-cancel-btn").disabled = gateWorking || !paused;
+    if (!contractLoaded) {
+      $("#completion-contract-editor").value = JSON.stringify(t.completion_contract || {}, null, 2);
+      contractLoaded = true;
+    }
+  }
+
+  async function gateAction(action) {
+    if (gateWorking) return;
+    gateWorking = true;
+    renderCompletion(task);
+    try { await action(); setMsg("Completion gate updated."); await refresh(); }
+    catch (e) { setMsg(e.message, true); }
+    finally { gateWorking = false; if (task) renderCompletion(task); }
+  }
+  $("#completion-instruction-btn").addEventListener("click", () => { $("#instruction").scrollIntoView({block: "center"}); $("#instruction").focus(); });
+  $("#completion-check-btn").addEventListener("click", () => gateAction(() => api("POST", `/api/tasks/${id}/completion/checks`)));
+  $("#completion-success-btn").addEventListener("click", () => {
+    if (!confirm("Mark this task SUCCESS despite its current completion outcome? Dependent tasks may start immediately. Your account, time and reason will be recorded.")) return;
+    const reason = prompt("Reason for manual success:");
+    if (!reason || !reason.trim()) return;
+    gateAction(() => api("POST", `/api/tasks/${id}/completion/override`, {outcome: "success", reason, confirm: true}));
+  });
+  $("#completion-blocked-btn").addEventListener("click", () => {
+    const reason = prompt("Reason this task is blocked:");
+    if (!reason || !reason.trim()) return;
+    gateAction(() => api("POST", `/api/tasks/${id}/completion/override`, {outcome: "blocked", reason}));
+  });
+  $("#completion-cancel-btn").addEventListener("click", () => {
+    if (confirm("Cancel all waiting dependent tasks, including downstream dependents?")) gateAction(() => api("POST", `/api/tasks/${id}/dependents/cancel`));
+  });
+  $("#completion-contract-save-btn").addEventListener("click", () => gateAction(() => api("PUT", `/api/tasks/${id}/completion/contract`, JSON.parse($("#completion-contract-editor").value))));
 
   function renderDeps(t) {
     const deps = t.dependencies || [], blocks = t.dependents || [];
@@ -814,8 +914,8 @@ function initTask() {
       ? `(${t.deps_done}/${t.deps_total} complete)` + (t.status === "waiting_dependencies" ? ` · Waiting for ${left} task${left === 1 ? "" : "s"}` : "")
       : "";
     $("#deps-items").innerHTML = deps.map((d) => {
-      const [mark, cls] = DEP_MARK[d.status] || (ACTIVE.includes(d.status) || WAITING.includes(d.status) ? ["…", "wait"] : ["⏸", "wait"]);
-      return `<li><span class="mark ${cls}">${mark}</span> <a href="/tasks/${esc(d.id)}">${esc(d.name)}</a> <span class="muted">${esc(statusText(d.status))}</span></li>`;
+      const [mark, cls] = d.status === "completed" && d.task_outcome !== "success" ? ["⏸", "wait"] : DEP_MARK[d.status] || (ACTIVE.includes(d.status) || WAITING.includes(d.status) ? ["…", "wait"] : ["⏸", "wait"]);
+      return `<li><span class="mark ${cls}">${mark}</span> <a href="/tasks/${esc(d.id)}">${esc(d.name)}</a> <span class="muted">${esc(taskStatusText(d))}${d.status === "completed" && d.task_outcome !== "success" ? ": " + esc(d.outcome_reason) : ""}</span></li>`;
     }).join("");
     $("#blocks-line").hidden = !blocks.length;
     $("#blocks-line").innerHTML = blocks.length ? "Waiting for this task: " + blocks.map((d) => `<a href="/tasks/${esc(d.id)}">${esc(d.name)}</a> (${esc(statusText(d.status))})`).join(", ") : "";
@@ -836,9 +936,9 @@ function initTask() {
 
   function schedItem(r) {
     const deps = (r.dependencies || []).map((d) => {
-      const [mark, cls] = DEP_MARK[d.status] || (ACTIVE.includes(d.status) || WAITING.includes(d.status) ? ["…", "wait"] : ["⏸", "wait"]);
+      const [mark, cls] = d.status === "completed" && d.task_outcome !== "success" ? ["⏸", "wait"] : DEP_MARK[d.status] || (ACTIVE.includes(d.status) || WAITING.includes(d.status) ? ["…", "wait"] : ["⏸", "wait"]);
       return `<span class="dep"><span class="mark ${cls}">${mark}</span><a href="/tasks/${esc(d.id)}">${esc(d.name)}</a>` +
-        `${d.status === "completed" ? "" : ` <span class="muted">${esc(statusText(d.status))}</span>`}</span>`;
+        `${d.status === "completed" && d.task_outcome === "success" ? "" : ` <span class="muted">${esc(taskStatusText(d))}${d.status === "completed" ? ": " + esc(d.outcome_reason) : ""}</span>`}</span>`;
     }).join("");
     const note = r.status === "waiting_thread" ? `This thread is busy (${esc(r.wait_note || "")}): it is sent when the thread is idle.`
       : r.status === "running" ? "Sent. Use Stop to stop it; if Codex stops unexpectedly the task's automatic recovery continues the same thread."

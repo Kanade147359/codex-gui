@@ -19,7 +19,7 @@ def go(coro):
 
 def row(db, task_id, **over):
     fields = dict(id=task_id, name=task_id.upper(), repository="/r", worktree="/w", branch="b", base_ref="main",
-                  base_sha="abc", prompt="p", status="completed", created_at="2026-01-01T00:00:00Z")
+                  base_sha="abc", prompt="p", status="completed", task_outcome="success", created_at="2026-01-01T00:00:00Z")
     fields.update(over)
     return db.create_task(**fields)
 
@@ -274,8 +274,8 @@ def test_simultaneous_parent_completion_does_not_double_start(git_repo, make_man
         m.db.create_task(id="p2", name="P2", **base)
         d = await create(m, git_repo, "ok D", depends_on=["p1", "p2"], name="D")
         assert d["status"] == "waiting_dependencies"
-        m.db.set_status("p1", "completed")
-        m.db.set_status("p2", "completed")
+        m.db.set_status("p1", "completed", task_outcome="success")
+        m.db.set_status("p2", "completed", task_outcome="success")
         for _ in range(10):  # a flood of redundant evaluations
             m.tick()
             m._evaluate_dependents("p1")
@@ -478,7 +478,8 @@ def test_dependencies_over_http(git_repo, settings):
         assert c.post("/api/tasks", json={"repository": str(git_repo), "prompt": "ok", "depends_on": ["nope"]}).status_code == 400
         assert c.post("/api/tasks", json={"repository": str(git_repo), "prompt": "ok", "depends_on": [a["id"], a["id"]]}).status_code == 400
         shown = {t["id"]: t for t in c.get("/api/tasks").json()["tasks"]}[d["id"]]
-        assert shown["dependencies"] == [{"id": a["id"], "name": "A", "status": shown["dependencies"][0]["status"]}]
+        assert shown["dependencies"] == [{"id": a["id"], "name": "A", "status": shown["dependencies"][0]["status"],
+            "task_outcome": "needs_review", "outcome_reason": "Completion has not been checked."}]
         assert (shown["deps_done"], shown["deps_total"]) == (0, 1)
         detail = c.get(f"/api/tasks/{d['id']}").json()
         assert detail["dependencies"][0]["id"] == a["id"] and "pending_turn" not in detail
@@ -502,7 +503,7 @@ def test_dependencies_over_http(git_repo, settings):
     ("retry_wait", "queued", True), ("retry_wait", "stopped", True), ("retry_wait", "failed", True),
     ("waiting_dependencies", "running", False), ("waiting_dependencies", "starting", False), ("blocked", "running", False),
     ("retry_wait", "running", False), ("retry_wait", "completed", False), ("completed", "retry_wait", False),
-    ("queued", "retry_wait", False), ("queued", "waiting_dependencies", False),
+    ("queued", "retry_wait", False), ("queued", "waiting_dependencies", True), ("starting", "waiting_dependencies", True),
 ])
 def test_new_status_transitions(old, new, ok):
     from app.models import can_transition
@@ -526,6 +527,8 @@ def test_an_old_database_is_migrated_and_keeps_its_tasks(tmp_path):
     assert task["auto_retry_enabled"] == 1 and task["max_retries"] == 3 and task["retry_count"] == 0
     assert task["dependency_policy"] == "all_success" and task["worktree_pending"] == 0 and task["pending_turn"] is None
     row(db, "d", status="waiting_dependencies", depends_on=["old1"])  # the new tables are there too
+    assert task["status"] == "completed" and task["task_outcome"] == "success"
+    assert task["outcome_source"] == "legacy"
     assert db.queue_if_ready("d")
     db.close()
 
