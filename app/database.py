@@ -602,13 +602,10 @@ class Database:
                 f"UPDATE tasks SET {assignments} WHERE id = ? AND status = ? {extra_where}",
                 [*fields.values(), new, task_id, old])
             changed = cur.rowcount == 1
-<<<<<<< HEAD
             if changed:
                 self._audit_auto_approval(task_id, fields)
-=======
-            if changed and message is not None:
-                self._insert_message(task_id, message)
->>>>>>> codex-gui/dc7f24d3-codex-gui
+                if message is not None:
+                    self._insert_message(task_id, message)
         if changed:
             self._notify(task_id, old, new)
         return changed

@@ -218,7 +218,6 @@ ul.sched-list li.done { opacity: .75; }
 td .sched-badge { margin-top: 2px; font-size: 12px; color: var(--purple); }
 .deps-list label.check { display: block; }
 
-<<<<<<< HEAD
 /* Dependency graph shares the existing theme and polling lifecycle. */
 body[data-page="graph"] main { max-width: none; padding: 14px 20px; }
 .graph-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
@@ -246,7 +245,7 @@ body[data-page="graph"] main { max-width: none; padding: 14px 20px; }
 .graph-edge text { font:11px var(--mono); fill:var(--text); paint-order:stroke; stroke:var(--bg); stroke-width:6px; stroke-linejoin:round; }
 .graph-edge.selected .edge-line,.graph-edge:focus .edge-line { stroke:var(--accent); stroke-width:3; } .graph-edge.selected text { fill:var(--accent); }
 @media (max-width:900px) { .graph-shell { grid-template-columns:minmax(0,1fr); height:auto; } #graph-viewport { height:65vh; min-height:400px; } #graph-detail { max-height:500px; } }
-=======
+
 /* Images are copied to the GUI, and previews remain keyboard accessible. */
 .image-composer { margin: .5rem 0; padding: .6rem; border: 1px dashed var(--border, #777); border-radius: 6px; }
 .image-composer > .muted { margin-left: .5rem; }
@@ -261,4 +260,3 @@ body[data-page="graph"] main { max-width: none; padding: 14px 20px; }
 .image-lightbox img { display: block; max-width: 90vw; max-height: 80vh; object-fit: contain; margin-top: .6rem; }
 .message-history { padding-left: 1.5rem; }
 .message-history > li { margin: .75rem 0; }
->>>>>>> codex-gui/dc7f24d3-codex-gui

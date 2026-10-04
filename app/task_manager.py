@@ -82,25 +82,19 @@ class _Turn:
     started: bool = False
     # A retry of a thread-creating turn that never started: if Codex never saved that thread, a new one is acceptable.
     fresh_ok: bool = False
-<<<<<<< HEAD
     final_text: str = ""  # this turn's last completed assistant message; never tool output
     ignore_dependencies: bool = False  # explicit Run Anyway only, survives queue/restart
-=======
     attachment_ids: list[str] = field(default_factory=list)
 
     def message(self) -> dict:
         return dict(prompt=self.prompt, attachment_ids=self.attachment_ids, kind=self.trigger)
->>>>>>> codex-gui/dc7f24d3-codex-gui
 
     def to_json(self) -> str:
         """Stored in tasks.pending_turn: the turn that is queued, running or to be retried survives a GUI restart."""
         return json.dumps({"prompt": self.prompt, "resume_thread": self.resume_thread, "thread_id": self.thread_id,
                            "kind": self.kind, "trigger": self.trigger, "service_tier": self.service_tier,
-<<<<<<< HEAD
-                           "started": self.started, "fresh_ok": self.fresh_ok, "ignore_dependencies": self.ignore_dependencies})
-=======
-                           "started": self.started, "fresh_ok": self.fresh_ok, "attachment_ids": self.attachment_ids})
->>>>>>> codex-gui/dc7f24d3-codex-gui
+                           "started": self.started, "fresh_ok": self.fresh_ok, "ignore_dependencies": self.ignore_dependencies,
+                           "attachment_ids": self.attachment_ids})
 
     @classmethod
     def from_json(cls, raw: Optional[str]) -> Optional["_Turn"]:
@@ -111,12 +105,8 @@ class _Turn:
         if not isinstance(d, dict) or not isinstance(d.get("prompt"), str):
             return None
         return cls(d["prompt"], d.get("resume_thread"), d.get("thread_id"), d.get("kind") or "turn",
-<<<<<<< HEAD
                    d.get("trigger") or "instruction", d.get("service_tier"), bool(d.get("started")), bool(d.get("fresh_ok")),
-                   ignore_dependencies=bool(d.get("ignore_dependencies")))
-=======
-                   d.get("trigger") or "instruction", d.get("service_tier"), bool(d.get("started")), bool(d.get("fresh_ok")), d.get("attachment_ids") or [])
->>>>>>> codex-gui/dc7f24d3-codex-gui
+                   ignore_dependencies=bool(d.get("ignore_dependencies")), attachment_ids=d.get("attachment_ids") or [])
 
 
 class TaskError(Exception):
@@ -286,16 +276,12 @@ class TaskManager:
                           auto_retry: Optional[bool] = None, max_retries: Optional[int] = None,
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
-<<<<<<< HEAD
                           allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
-                          completion_contract: Optional[dict] = None) -> dict:
+                          completion_contract: Optional[dict] = None, attachment_ids=()) -> dict:
         try:
             rules = completion.contract(completion_contract)
         except ValueError as e:
             raise TaskError(str(e)) from e
-=======
-                          allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "", attachment_ids=()) -> dict:
->>>>>>> codex-gui/dc7f24d3-codex-gui
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("prompt is required")
@@ -372,12 +358,8 @@ class TaskManager:
                 status="waiting_dependencies" if deps else "queued",
                 git_summary="not started" if deps else "clean", worktree_pending=int(bool(deps)),
                 dependency_policy=dependency_policy, auto_retry_enabled=int(auto_retry), max_retries=max_retries,
-<<<<<<< HEAD
-                pending_turn=_Turn(prompt, trigger="initial").to_json(), created_at=now_iso(), **ctx_fields,
-                completion_contract=json.dumps(rules),
-=======
                 pending_turn=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).to_json(), created_at=now_iso(), **ctx_fields,
->>>>>>> codex-gui/dc7f24d3-codex-gui
+                completion_contract=json.dumps(rules),
             )
         except DependencyError as e:
             raise TaskError(str(e), 400, e.code) from e
@@ -996,14 +978,10 @@ class TaskManager:
             if compact:
                 await client.request("thread/compact/start", {"threadId": thread_id}, timeout=60)
             else:
-<<<<<<< HEAD
                 rules = json.loads(task["completion_contract"] or "{}")
                 prompt = turn.prompt + ("\nCompletion contract: " + json.dumps(rules) if rules else "")
-                params = {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],
+                params = {"threadId": thread_id, "input": self._image_input(prompt, turn.attachment_ids),
                           "outputSchema": completion.SCHEMA}
-=======
-                params = {"threadId": thread_id, "input": self._image_input(turn.prompt, turn.attachment_ids)}
->>>>>>> codex-gui/dc7f24d3-codex-gui
                 if task["reasoning_effort"] not in ("", "default"):
                     params["effort"] = task["reasoning_effort"]
                 # The speed is chosen for THIS turn only (Send Standard / Send Fast): serviceTierForTurn does not change the
