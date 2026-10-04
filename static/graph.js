@@ -180,6 +180,7 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
   q('#graph-focus-clear').onclick=()=>setFocus(null); q('#graph-focus-depth').onchange=()=>{if(focusId){render(true);fit();}};
   q('#graph-search').oninput=q('#graph-project').onchange=()=>{focusId=null;render();fit();refresh();};
   q('#graph-direction').onclick=()=>{vertical=!vertical;q('#graph-direction').textContent=vertical?'横配置':'縦配置';render(true);fit();};
+  q('#graph-wide').onclick=()=>{const on=document.body.classList.toggle('graph-wide');q('#graph-wide').setAttribute('aria-pressed',on);q('#graph-wide').textContent=on?'詳細パネルを表示':'グラフ最大化';fit();};
   q('#graph-layout').onclick=()=>{render(true);fit();}; q('#graph-fit').onclick=fit;
   function zoom(factor,x=viewport.clientWidth/2,y=viewport.clientHeight/2) {const next=Math.max(.02,Math.min(3,scale*factor)),f=next/scale;panX=x-(x-panX)*f;panY=y-(y-panY)*f;scale=next;transform();}
   q('#graph-zoom-in').onclick=()=>zoom(1.2);q('#graph-zoom-out').onclick=()=>zoom(1/1.2);

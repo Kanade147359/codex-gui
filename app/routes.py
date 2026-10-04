@@ -18,6 +18,18 @@ from .fs_browser import BrowseError, list_dir
 from .task_manager import TaskError, TaskManager
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+_STATIC = Path(__file__).resolve().parent.parent / "static"
+
+
+def static_url(name: str) -> str:
+    """/static URL stamped with the file's mtime so an edited asset is never served from a stale browser cache."""
+    try:
+        return f"/static/{name}?v={int((_STATIC / name).stat().st_mtime)}"
+    except OSError:
+        return f"/static/{name}"
+
+
+TEMPLATES.env.globals["static_url"] = static_url
 
 router = APIRouter()
 

@@ -16,6 +16,16 @@ from .routes import router
 from . import completion, ssh_agent
 from .task_manager import TaskManager
 
+
+class NoCacheStaticFiles(StaticFiles):
+    """Always revalidate (ETag) so GUI edits show up on the next load instead of after heuristic caching."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
@@ -47,5 +57,5 @@ def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner
     app.state.manager = TaskManager(settings, db, runner, app_server)
     app.state.catalog = ModelCatalog(settings.codex_bin)
     app.include_router(router)
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app.mount("/static", NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
     return app

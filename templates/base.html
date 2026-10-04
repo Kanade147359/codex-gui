@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Codex GUI{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ static_url('style.css') if static_url is defined else '/static/style.css?v=20261005' }}">
 </head>
 <body data-page="{% block page %}{% endblock %}" {% block bodyattrs %}{% endblock %}>
   <header class="topbar">
@@ -12,8 +12,8 @@
     {% block topbar %}{% endblock %}
   </header>
   <main>{% block content %}{% endblock %}</main>
-  <script src="/static/context.js"></script>
-  <script src="/static/attachments.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="{{ static_url('context.js') if static_url is defined else '/static/context.js?v=20261005' }}"></script>
+  <script src="{{ static_url('attachments.js') if static_url is defined else '/static/attachments.js?v=20261005' }}"></script>
+  <script src="{{ static_url('app.js') if static_url is defined else '/static/app.js?v=20261005' }}"></script>
 </body>
 </html>

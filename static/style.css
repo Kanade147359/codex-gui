@@ -224,7 +224,8 @@ body[data-page="graph"] main { max-width: none; padding: 14px 20px; }
 .graph-toolbar input { width: 220px; } .graph-toolbar select { width: 260px; } .graph-toolbar #graph-focus-depth { width: auto; }
 .graph-info { display:flex; gap:18px; align-items:center; flex-wrap:wrap; color:var(--muted); }
 .graph-info input { width:auto; } #graph-message { color:var(--red); min-height:18px; margin:6px 0; }
-.graph-shell { display:grid; grid-template-columns:minmax(0,1fr) 10px var(--graph-detail-w,330px); gap:0; height:var(--graph-h,72vh); min-height:240px; }
+.graph-shell { display:grid; grid-template-columns:minmax(0,1fr) 10px var(--graph-detail-w,330px); gap:0; height:var(--graph-h,calc(100vh - 215px)); min-height:480px; }
+body.graph-wide .graph-shell { grid-template-columns:minmax(0,1fr); height:calc(100vh - 175px); } body.graph-wide #graph-detail,body.graph-wide #graph-split-x { display:none; }
 #graph-detail { margin-left:2px; }
 #graph-split-x,#graph-split-y { background:transparent; border-radius:5px; touch-action:none; }
 #graph-split-x { cursor:col-resize; position:relative; } #graph-split-y { cursor:row-resize; height:12px; margin-top:2px; position:relative; }
@@ -257,7 +258,7 @@ body[data-page="graph"] main { max-width: none; padding: 14px 20px; }
 .graph-edge .edge-hit { fill:none; stroke:transparent; stroke-width:16; pointer-events:stroke; }
 .graph-edge text { font:11px var(--mono); fill:var(--text); paint-order:stroke; stroke:var(--bg); stroke-width:6px; stroke-linejoin:round; }
 .graph-edge.selected .edge-line,.graph-edge:focus .edge-line { stroke:var(--accent); stroke-width:3; } .graph-edge.selected text { fill:var(--accent); }
-@media (max-width:900px) { .graph-shell { grid-template-columns:minmax(0,1fr); height:auto; } #graph-viewport { height:var(--graph-h,65vh); min-height:240px; } #graph-detail { max-height:500px; margin:12px 0 0; } #graph-split-x { display:none; } }
+@media (max-width:900px) { .graph-shell { grid-template-columns:minmax(0,1fr); height:auto; } body.graph-wide .graph-shell { height:auto; } body.graph-wide #graph-viewport { height:calc(100vh - 175px); } #graph-viewport { height:var(--graph-h,80vh); min-height:400px; } #graph-detail { max-height:500px; margin:12px 0 0; } #graph-split-x { display:none; } }
 
 /* Images are copied to the GUI, and previews remain keyboard accessible. */
 .image-composer { margin: .5rem 0; padding: .6rem; border: 1px dashed var(--border, #777); border-radius: 6px; }

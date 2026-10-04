@@ -117,3 +117,10 @@ def test_send_while_running_is_409(client, git_repo):
     assert r.status_code == 409 and r.json()["detail"]["code"] == "active"
     client.post(f"/api/tasks/{tid}/stop")
     wait_done(client, tid)
+
+
+def test_static_assets_are_versioned_and_revalidated(client):
+    # Edited CSS/JS must show up on the next page load, not after heuristic browser caching.
+    html = client.get('/dependencies').text
+    assert '/static/graph.js?v=' in html and '/static/style.css?v=' in html
+    assert client.get('/static/graph.js').headers['cache-control'] == 'no-cache'
