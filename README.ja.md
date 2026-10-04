@@ -26,6 +26,7 @@ Codex CLI を複数同時に動かして一画面で管理する、ローカル 
 
 5. [Codex へのサインイン](#codex-へのサインイン)
 6. [追加指示](#追加指示)
+    - [画像添付](#画像添付)
 7. [使用量の最適化](#使用量の最適化)
 8. [Context Efficiency](#context-efficiency)
 9. [AGENTS.md エディタ](#agentsmd-エディタ)
@@ -123,6 +124,42 @@ Codex が ChatGPT アカウントにサインインしていないとき（ま�
   `exec` バックエンドでは実行中の追加指示は不可です（Send は無効、API は 409）。
 - Codex が thread id を報告しなかった場合はログに記録し、そのタスクでは Send できません（Start New Session は可能）。resume 時に別の thread id が返った場合は、ログに `WARNING` を出します。
 - GUI を再起動しても thread は Codex 側に残っているので、DB の `codex_thread_id` から再開できます（実測済み）。
+
+## 画像添付
+
+New Task と Additional instruction で、本文と一緒にスクリーンショット・参考画像を添付できます（画像だけでも送信可能）。
+**Attach images** で選択、入力欄に **Ctrl+V**（Mac は Cmd+V）でクリップボード画像を貼り付け、または入力欄・添付領域にドラッグ＆ドロップしてください。
+複数画像のサムネイルとファイル名が表示され、**Remove** で送信前の添付から個別に外せます。サムネイルをクリックすると拡大表示します。
+通常のテキスト貼り付け・日本語IME入力は従来どおりです。送信履歴は **Message history & images**、予約中の画像は **Scheduled instructions** で確認できます。
+
+初期対応形式は PNG・JPEG・WebP です。上限は **1メッセージ8枚、1枚10 MiB、合計40 MiB、各辺8192 px、1枚3200万画素**。
+バックエンドでも実データを検査し、形式違い・破損・過大な入力・アニメーションを拒否します。上限の定数は `app/attachments.py` にあります。
+
+画像は `$CODEX_GUI_HOME/attachments` にコピーし、画像IDと添付順序を本文・予約指示ごとにSQLiteへ保存します。
+元ファイルを消しても、GUI再起動・予約実行・再試行で利用できます。バックアップ時はDBとattachmentsディレクトリを一緒に保存してください。
+プレビュー削除・予約取消・worktree削除では、履歴や他タスクが参照する画像本体を削除しません。
+未使用アップロードの自動掃除は未実装のため、送信前に外した画像や送信しなかった画像もデータ領域に残ります。
+アップロード済みの下書きと本文は、利用可能な場合ブラウザのlocalStorageでページ再読込後にも復元します。アップロード未完了のファイルは再読込後に再選択が必要です。
+
+exec方式は `codex exec` / `codex exec resume <thread_id>` に `--image` を引数配列で渡し、標準の共有app-server方式は `localImage` 入力を使います。
+継続メッセージには、そのメッセージの画像だけを渡します。自動復旧では、Codexが指示開始を確認する前の失敗だけ画像を再送し、
+確認済みの指示は同じthreadを継続して過去の画像を再添付しません。実行中の追加入力は既存どおり、app-serverではsteer、execでは完了を待つか予約指示を使います。
+設定されたCLIの画像対応を確認し、画像が読めない・CLIが未対応の場合は理由を表示して入力を保持します。アップロード・送信に失敗しても下書きは消しません。
+
+WSLでは **Windows側ブラウザ** のファイル選択・貼り付け画像をバイト列としてアップロードし、**WSL内のCodex CLI** が読める保存パスを使用します。
+Windows側の元パスはCLIに渡しません。`CODEX_BIN` はWSL内のCLIを指定してください。WSLからWindows版 `codex.exe` を起動する画像送信は、理由を表示して拒否します。
+
+任意の追加検証（すべて一時GUIデータ・一時リポジトリを使用）：
+
+```sh
+CODEX_GUI_REAL_IMAGES=1 .venv/bin/python -m pytest tests/test_real_images.py -s
+# 実ブラウザのUI検証（Playwrightは任意のテスト依存）：
+.venv/bin/pip install playwright
+.venv/bin/playwright install chromium
+CODEX_GUI_BROWSER=1 .venv/bin/python -m pytest tests/test_ui_attachments_browser.py
+```
+
+実画像テストはサブスクリプション認証を隔離した `CODEX_HOME` で、新規・継続の画像認識をexecとapp-serverの両方で確認します。
 
 ## 使用量の最適化
 

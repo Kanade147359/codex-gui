@@ -22,6 +22,7 @@
     <dl class="meta" id="meta"></dl>
   </details>
   <details class="fold"><summary><h2>Prompt</h2></summary><pre id="prompt" class="block"></pre></details>
+  <details class="fold"><summary><h2>Message history &amp; images</h2></summary><ol id="image-message-history" class="message-history"></ol></details>
 </section>
 
 <section id="quota-banner" class="banner quota" hidden>
@@ -110,6 +111,7 @@
 <section>
   <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
   <textarea id="instruction" rows="3" placeholder="Next instruction for this task's Codex thread"></textarea>
+  <div id="instruction-attachments" class="image-composer"></div>
   <div class="inline-actions">
     <button id="send-btn" class="primary" title="Send at Standard speed">Send Standard</button>
     <button id="send-fast-btn" title="Send this one instruction at Fast speed (2x price, included usage is consumed faster)">Send Fast</button>
