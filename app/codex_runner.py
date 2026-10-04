@@ -10,6 +10,7 @@ from typing import Optional
 
 from .appserver import subscription_env
 from .ctx_config import efficiency_config, task_cwd
+from .completion import SCHEMA_PATH
 
 # One JSONL line from codex can contain a lot of command output.
 STREAM_LIMIT = 32 * 1024 * 1024
@@ -109,6 +110,8 @@ class CodexRunner:
             config["developer_instructions"] = self.instructions
         for key, value in config.items():
             cmd += ["-c", f"{key}={json.dumps(value)}"]  # a JSON scalar/list is valid TOML
+        if not resume_thread:
+            cmd += ["--output-schema", str(SCHEMA_PATH)]
         if resume_thread:
             cmd += ["resume", resume_thread]
         cmd.append("-")

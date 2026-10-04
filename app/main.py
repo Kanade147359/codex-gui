@@ -13,7 +13,7 @@ from .codex_runner import CodexRunner
 from .config import Settings
 from .database import Database
 from .routes import router
-from . import ssh_agent
+from . import completion, ssh_agent
 from .task_manager import TaskManager
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -43,6 +43,7 @@ def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner
 
     app = FastAPI(title="Codex GUI", lifespan=lifespan)
     app.state.settings = settings
+    app.state.completion_validation = completion.validation_capability()
     app.state.manager = TaskManager(settings, db, runner, app_server)
     app.state.catalog = ModelCatalog(settings.codex_bin)
     app.include_router(router)

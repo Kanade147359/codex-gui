@@ -239,7 +239,7 @@ A task's worktree receives the base ref's `AGENTS.md` at creation. Editing main 
 
 ## Task Dependencies
 
-Choose **After other tasks complete** under **Run** in New Task and pick the tasks to wait for in **Depends on**; the task starts automatically once all of them are `completed`
+Choose **After other tasks complete** under **Run** in New Task and pick the tasks to wait for in **Depends on**; the task starts automatically once all of them have execution status `completed` and semantic outcome `success`
 (A, B, C → D. The policy is `all_success`; the design allows adding things like `all_terminal` later).
 
 - **The worktree is created just before running.** A waiting task holds only a branch name and a worktree path, with no worktree (no useless worktrees are created).
@@ -251,8 +251,48 @@ Choose **After other tasks complete** under **Run** in New Task and pick the tas
   Dependencies in `waiting-for-quota` / `interrupted` are also resumable pauses, so the task keeps waiting.
 - Stopping a dependency makes it `stopped`, so tasks depending on it become `blocked`.
 - Dependencies form a DAG. **Self-dependencies, duplicates and cycles are rejected** (the same check applies when replacing the dependencies of a not-yet-started task with `PUT /api/tasks/{id}/dependencies`).
-- How double starts are prevented: `waiting_dependencies → queued` is **a single conditional UPDATE** that includes the "all dependencies completed" check, and `queued → run` is
+- How double starts are prevented: `waiting_dependencies → queued` is **a single conditional UPDATE** that includes the "all dependencies completed with success" check, and `queued → run` is
   **a single UPDATE conditioned on `claimed_by IS NULL` (the claim)**. Even if parents finish at the same moment and the listener, scheduler and API evaluate repeatedly, the task can start only once.
+
+## Semantic Completion Gate
+
+Execution status records whether Codex exited normally; `task_outcome` records whether the request was fulfilled.
+An exit code of zero can therefore leave `status=completed` and `task_outcome=needs_input`, `blocked`, `incomplete`, or `needs_review`.
+Only `completed` **and** `success` satisfy task and scheduled-instruction dependencies. Semantic issues stay waiting with the prerequisite's outcome and reason visible.
+Send Additional Instruction continues the same thread and worktree; a later SUCCESS releases waiting tasks. Semantic issues never trigger automatic retry.
+
+The optional Completion Contract in New Task supports `required_paths`, `required_changed_paths`, `require_any_change`, `require_commit`, `validation_commands`, and `manual_approval`.
+Paths are relative to the worktree root. Change and commit checks compare against the task's stored base commit, including committed, staged, unstaged and untracked changes.
+Missing artifacts, required changes or commits, and failed validation produce `incomplete` despite a SUCCESS claim. Explicit BLOCKED / NEEDS_INPUT / PARTIAL results retain their semantic outcome.
+Commands are argv arrays or strings split into argv (no implicit shell); shell syntax requires an explicit shell command.
+Validation uses Linux `bwrap`, a read-only filesystem, private PID/network namespaces, and temporary `/tmp` scratch space, with a 60-second timeout per command.
+GUI state is hidden. Startup and the dashboard detect `bwrap` with `shutil.which`; availability is checked again immediately before validation.
+Missing `bwrap` leaves execution normally completed and makes the outcome `needs_review` when validation commands are required, without retrying Codex or releasing dependents.
+Contracts without validation commands continue their normal deterministic checks and semantic evaluation. Failed sandbox setup fails the check; validation never falls back to running unsandboxed.
+
+Automatic completion approval defaults to ON and can be changed in the dashboard. This setting is persisted in the GUI database and applies to future completion checks, including explicit re-checks; changing it never re-runs old tasks.
+The existing completion checks supply a three-valued local evidence result: `PASS` when all configured checks pass and a valid structured result is available, `FAIL` for a failed contract/validation check, and `UNKNOWN` for missing results or unavailable validation infrastructure.
+Only structured `SUCCESS` plus evidence `PASS` can be auto-approved (`approval_source=auto_evidence`), releasing ordinary and scheduled-instruction dependencies. `FAIL` and `UNKNOWN` never release them or trigger automatic retries.
+With automatic approval OFF, verified SUCCESS waits in `needs_review`. A custom contract's `manual_approval` always takes priority, even with automatic approval ON.
+Approval uses the current structured result (`status` and `reason`) and existing explicit contract checks: it adds no prompt parser, inferred requirements, AI review, or commands derived from claims. It does not add verification of unsupported free-form claims; use a Custom Contract for required artifact, change, commit and validation facts.
+Automatic approval and its append-only `completion_approvals` audit row commit atomically with the successful task outcome. History includes semantic status, evidence result, source, time, reason and the check snapshot; manual decisions use source `manual` and record the local account. Task Detail exposes this history and shows semantic result, evidence and approval separately.
+
+Task Detail shows execution, outcome, reason, check results and paused dependents. Re-run Completion Checks uses the recorded result and current artifacts without spending another Codex turn.
+Mark Success Manually requires confirmation and a reason; the service records its local OS account, timestamp, previous outcome and reason in an append-only override history.
+Mark Blocked and Cancel Dependents are also available. Saving a contract or re-running checks revokes current manual approval; the audit history survives.
+
+Codex app-server turns use `turn/start.outputSchema`; initial exec turns use `--output-schema`.
+Exec resume receives a small final-result instruction, since its CLI interface does not expose that option. Both backends accept only a complete final assistant JSON object with `status` (SUCCESS / BLOCKED / NEEDS_INPUT / PARTIAL) and `reason`.
+Tool output, prose, invalid JSON and absent results from new runs are never assumed successful, even without a contract.
+When upgrading a database without `task_outcome`, existing completed tasks retain `success` (source `legacy`) and keep their dependencies satisfied.
+Migration never re-runs Codex, executes validation commands or applies new contracts to past tasks. New Completion Gate semantics apply to subsequent executions or explicitly requested re-evaluation; repeated migrations preserve recorded outcomes.
+Compaction preserves the existing semantic outcome and cannot release dependencies by itself.
+If the GUI restarts during completion checks, normal execution and the recorded semantic result are preserved, but the outcome becomes `needs_review`; checks can be re-run without automatically executing Codex again.
+
+API: `PUT /api/tasks/{id}/completion/contract`, `POST /api/tasks/{id}/completion/checks`,
+`POST /api/tasks/{id}/completion/override` (`outcome`, `reason`, `confirm`), and `POST /api/tasks/{id}/dependents/cancel`.
+
+Protocol references: [Codex non-interactive mode](https://developers.openai.com/codex/noninteractive/) and the installed CLI's generated app-server JSON Schema (`codex app-server generate-json-schema`).
 
 ## Scheduled Instructions
 
@@ -267,15 +307,15 @@ In **Additional instruction** on the detail page, write the instruction and use 
 - **Schedule Instruction** reserves it. Task Detail then lists **Scheduled instructions** (`#1 WAITING · After: ✓ P14 … P15 running`, `WAITING FOR THREAD`, `READY`, `RUNNING`, `COMPLETED`, `BLOCKED`, `CANCELLED`, `FAILED`) with **Cancel**.
   The dashboard only adds a small `Scheduled: 3 · Ready: 1` under the task name.
 
-It is sent only when **both** hold: every selected task is `completed`, and the target thread is idle (its task is `completed`: not running, queued, retrying, failed, stopped, interrupted or waiting for quota).
+It is sent only when **both** hold: every selected task is `completed` with outcome `success`, and the target thread is idle (its task is `completed`: not running, queued, retrying, failed, stopped, interrupted or waiting for quota).
 It always continues the same `codex_thread_id`, worktree and branch (`codex exec resume <thread>` / a new turn on the same app-server thread); no session is created, so the prompt cache is kept.
 
 | Status | Meaning |
 | --- | --- |
-| `waiting_dependencies` | at least one selected task is not `completed` yet (a task in `retry_wait` / `interrupted` / `waiting-for-quota` is **not** a failure: it waits for the outcome) |
+| `waiting_dependencies` | at least one selected task has not completed with `success` (includes semantic issues and resumable execution pauses) |
 | `waiting_thread` | all dependencies are done, but the thread is busy |
 | `ready` | everything is satisfied; waiting for its turn in the queue of the thread |
-| `running` | claimed and sent; it ends with the turn (`completed`, or `failed` when the task ends `failed` / `stopped`) |
+| `running` | claimed and sent; it ends with the turn (`completed` on semantic success, otherwise `failed` for an execution or semantic issue) |
 | `blocked` | a dependency ended `failed` / `stopped` / `blocked`, or the target worktree was deleted / has no thread (stays blocked; Cancel or create a new one) |
 | `cancelled` | cancelled before it was sent: it is never sent |
 

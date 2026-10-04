@@ -31,7 +31,7 @@ def no_orphan_sweep(monkeypatch):
 
 def row(db, task_id, status="completed", thread=None, **over):
     fields = dict(id=task_id, name=task_id.upper(), repository="/r", worktree="/w", branch="b", base_ref="main",
-                  base_sha="abc", prompt="p", status=status, created_at="2026-01-01T00:00:00Z")
+                  base_sha="abc", prompt="p", status=status, task_outcome="success", created_at="2026-01-01T00:00:00Z")
     if thread:
         fields["codex_thread_id"] = thread
     fields.update(over)
@@ -51,7 +51,7 @@ def settle(db, task_id, status):
     path = {"completed": ["queued", "starting", "running", "completed"], "running": ["queued", "starting", "running"]}[status]
     current = db.get_task(task_id)["status"]
     for step in path[path.index(current) + 1:] if current in path else path:
-        db.set_status(task_id, step)
+        db.set_status(task_id, step, **({"task_outcome": "success"} if step == "completed" else {}))
 
 
 def invocations(state, method=None):
@@ -397,7 +397,8 @@ def test_scheduled_counts_for_the_dashboard(db, make_manager):
     assert {t["id"]: (t["scheduled_pending"], t["scheduled_ready"]) for t in m.list_tasks_view()}["x"] == (1, 0)
     detail = m.present_task(m.get("x"))
     assert [s["status"] for s in detail["scheduled_instructions"]] == ["running", "waiting_dependencies"]
-    assert detail["scheduled_instructions"][1]["dependencies"] == [{"id": "a", "name": "A", "status": "running"}]
+    assert detail["scheduled_instructions"][1]["dependencies"] == [{"id": "a", "name": "A", "status": "running",
+        "task_outcome": "success", "outcome_reason": "Completion has not been checked."}]
 
 
 # ---------- restart ----------
