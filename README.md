@@ -26,6 +26,7 @@ A local web GUI for running several Codex CLI instances at once and managing the
 
 5. [Signing in to Codex](#signing-in-to-codex)
 6. [Follow-up Instructions](#follow-up-instructions)
+    - [Image Attachments](#image-attachments)
 7. [Usage Optimization](#usage-optimization)
 8. [Context Efficiency](#context-efficiency)
 9. [AGENTS.md Editor](#agentsmd-editor)
@@ -123,6 +124,46 @@ A task keeps using a single Codex thread.
   With the `exec` backend, follow-ups to a running turn are not possible (Send is disabled; the API returns 409).
 - If Codex does not report a thread id, this is logged and Send is unavailable for that task (Start New Session still works). If a different thread id comes back on resume, a `WARNING` is logged.
 - The thread stays on the Codex side even if you restart the GUI, so it can be resumed from `codex_thread_id` in the DB (verified on a real Codex).
+
+## Image Attachments
+
+New Task and Additional instruction accept screenshots/reference images together with text (or images alone).
+Use **Attach images**, paste a clipboard image with **Ctrl+V** (Cmd+V also works), or drop files onto the input/attachment area.
+Each image shows its filename and thumbnail; **Remove** removes it from the current draft, and clicking the thumbnail opens an enlarged view.
+Normal text paste and Japanese IME input keep their usual behaviour. Sent messages and their images appear under **Message history & images**;
+reserved messages also show images in **Scheduled instructions**.
+
+PNG, JPEG and WebP are supported: **8 images per message**, **10 MiB per image**, **40 MiB total**, **8192 pixels per side**,
+and **32 million pixels** per image. Animated, corrupt and oversized files are rejected by the backend based on the actual bytes,
+not the filename/MIME header. These limits live in `app/attachments.py`.
+
+Uploads are copied into `$CODEX_GUI_HOME/attachments` under generated IDs; ordered references are stored in SQLite per message and scheduled instruction.
+The original file can be removed. Restart, delayed execution and recovery keep the saved attachments. Back up the database and attachment directory together.
+Removing a preview, cancelling a reservation or deleting a worktree does **not** delete stored images that a history or another task may reference.
+Automatic cleanup of unused uploads is not implemented, so removed/abandoned uploads also remain on disk.
+Uploaded drafts and their text are restored on page reload using browser local storage when available; a file whose upload has not succeeded must be selected again after reload.
+
+The exec backend passes separate `--image` argv entries to `codex exec` or `codex exec resume <thread_id>`; the shared app-server uses `localImage` inputs.
+A follow-up includes only its own images. A retry resends its images only if Codex never confirmed that the instruction started;
+otherwise recovery continues the existing thread without reattaching past images. Running-turn input follows the existing rules
+(app-server: steer; exec: wait, or reserve a Scheduled Instruction).
+The configured CLI is checked for image support. Unreadable images/unsupported CLI versions produce an error and preserve input rather than sending only the text.
+HTTP submission/upload failures leave the draft available for retry.
+
+On WSL, images selected or pasted in a **Windows browser** are uploaded as bytes and saved to paths readable by the **WSL Codex CLI**;
+Windows client paths are never passed to it. Use a WSL-native `CODEX_BIN`. Launching a Windows `codex.exe` from WSL with image attachments is rejected with an explanation.
+
+Optional checks, always using temporary GUI/repository data:
+
+```sh
+CODEX_GUI_REAL_IMAGES=1 .venv/bin/python -m pytest tests/test_real_images.py -s
+# Chromium UI checks (Playwright is an optional test dependency):
+.venv/bin/pip install playwright
+.venv/bin/playwright install chromium
+CODEX_GUI_BROWSER=1 .venv/bin/python -m pytest tests/test_ui_attachments_browser.py
+```
+
+The real-image check uses subscription auth in an isolated `CODEX_HOME` and verifies both new and continued image recognition on exec and app-server.
 
 ## Usage Optimization
 

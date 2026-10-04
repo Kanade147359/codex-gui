@@ -6,7 +6,11 @@ import asyncio
 import json
 import os
 import signal
+import tempfile
+from pathlib import Path
 from typing import Optional
+
+from .attachments import AttachmentError
 
 from .appserver import subscription_env
 from .ctx_config import efficiency_config, task_cwd
@@ -87,6 +91,7 @@ class CodexRunner:
         self.subscription_only = subscription_only
         # Common working instructions, given to a NEW session only (a resumed one already has them).
         self.instructions = ""
+        self._image_support = set()
 
     def build_command(self, task: dict, resume_thread: Optional[str] = None) -> list[str]:
         """argv for one turn of a task. The prompt is NOT in argv: it is written to stdin ("-").
@@ -114,8 +119,46 @@ class CodexRunner:
             cmd += ["--output-schema", str(SCHEMA_PATH)]
         if resume_thread:
             cmd += ["resume", resume_thread]
+        for path in task.get("image_paths", []):
+            cmd += ["--image", path]
+        # exec --image accepts multiple values; terminate options so stdin's '-' stays the prompt.
+        if task.get("image_paths"):
+            cmd.append("--")
         cmd.append("-")
         return cmd
+
+    async def check_image_support(self, backend: str, resume: bool = False) -> None:
+        """Probe the configured executable, once per input mode. Never silently downgrade to text."""
+        if Path(self.codex_bin).suffix.lower() == ".exe" and os.name != "nt":
+            raise AttachmentError("WSL内の画像はWindows版codex.exeに直接渡せません。WSL内のCodex CLIをCODEX_BINに指定してください。")
+        key = (self.codex_bin, backend, resume)
+        if key in self._image_support:
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="codex-gui-images-") as directory:
+                if backend == "exec":
+                    args = [self.codex_bin, "exec", *(["resume"] if resume else []), "--help"]
+                else:
+                    args = [self.codex_bin, "app-server", "generate-json-schema", "--out", directory]
+                proc = await asyncio.create_subprocess_exec(*args, env=subscription_env(self.subscription_only),
+                                                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                try:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), 20)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    proc.kill()
+                    await proc.wait()
+                    raise
+                if backend == "exec":
+                    supported = b"--image" in stdout
+                else:
+                    # Both turn/start and turn/steer must support actual local image inputs.
+                    supported = all('"localImage"' in (Path(directory) / "v2" / filename).read_text()
+                                    for filename in ("TurnStartParams.json", "TurnSteerParams.json"))
+                if proc.returncode != 0 or not supported:
+                    raise AttachmentError("設定されたCodex CLIは画像入力に対応していません。CLIを更新してください。")
+        except (OSError, asyncio.TimeoutError) as e:
+            raise AttachmentError("Codex CLIの画像入力対応を確認できません。実行ファイル・バージョンを確認してください。") from e
+        self._image_support.add(key)
 
     async def spawn(self, task: dict, resume_thread: Optional[str] = None) -> asyncio.subprocess.Process:
         """Start the process in its own session so the whole group can be signalled."""

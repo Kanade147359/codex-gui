@@ -169,6 +169,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY, filename TEXT NOT NULL, extension TEXT NOT NULL, media_type TEXT NOT NULL,
+    width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, prompt TEXT NOT NULL,
+    attachment_ids TEXT NOT NULL DEFAULT '[]', kind TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id, id);
 CREATE TABLE IF NOT EXISTS recent_repos (
     path TEXT PRIMARY KEY,
     last_used TEXT NOT NULL
@@ -351,7 +360,8 @@ class Database:
         self._conn.commit()
 
     def _migrate(self) -> None:
-        for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS)):
+        for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),
+                                  ("scheduled_instructions", [("attachment_ids", "TEXT NOT NULL DEFAULT '[]'")])):
             have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
             legacy_completion_upgrade = table == "tasks" and "task_outcome" not in have
             with self._lock, self._conn:
@@ -437,7 +447,7 @@ class Database:
             except Exception:  # a bad listener must not undo or hide a state change that is already committed
                 log.exception("status listener failed for %s (%s -> %s)", task_id, old, new)
 
-    def create_task(self, depends_on=(), **fields) -> dict:
+    def create_task(self, depends_on=(), message=None, **fields) -> dict:
         """Insert a task, and its dependency edges in the same transaction (a task is never visible half-wired)."""
         cols = [c for c in TASK_COLUMNS if c in fields]
         unknown = set(fields) - set(TASK_COLUMNS)
@@ -450,9 +460,34 @@ class Database:
                 f"INSERT INTO tasks ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                 [fields[c] for c in cols],
             )
+            if message is not None:
+                self._insert_message(fields["id"], message)
             if depends_on:
                 self._insert_edges(fields["id"], list(depends_on))
         return self.get_task(fields["id"])
+
+    # Images are immutable and deliberately have no delete API: previews, histories and schedules may share them.
+    def add_attachment(self, row: dict) -> None:
+        self._execute(f"INSERT INTO attachments ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
+                      list(row.values()))
+
+    def get_attachment(self, image_id: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM attachments WHERE id = ?", (image_id,)).fetchone()
+        return dict(row) if row else None
+
+    def _insert_message(self, task_id: str, message: dict) -> None:
+        self._conn.execute("INSERT INTO task_messages (task_id, prompt, attachment_ids, kind, created_at) VALUES (?, ?, ?, ?, ?)",
+                           (task_id, message["prompt"], json.dumps(message.get("attachment_ids", [])), message["kind"], now_iso()))
+
+    def add_message(self, task_id: str, prompt: str, attachment_ids=(), kind="steer") -> None:
+        with self._lock, self._conn:
+            self._insert_message(task_id, dict(prompt=prompt, attachment_ids=list(attachment_ids), kind=kind))
+
+    def list_messages(self, task_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM task_messages WHERE task_id = ? ORDER BY id", (task_id,)).fetchall()
+        return [dict(r) | {"attachment_ids": json.loads(r["attachment_ids"])} for r in rows]
 
     # ---------- dependencies ----------
 
@@ -559,7 +594,7 @@ class Database:
 
     # ---------- atomic claims ----------
 
-    def _guarded(self, task_id: str, old: str, new: str, extra_where: str, fields: dict) -> bool:
+    def _guarded(self, task_id: str, old: str, new: str, extra_where: str, fields: dict, message=None) -> bool:
         """UPDATE ... WHERE id = ? AND status = old [AND extra]: one atomic step. True if this call made the change."""
         assignments = ", ".join(f"{k} = ?" for k in {**fields, "status": new})
         with self._lock, self._conn:
@@ -567,8 +602,13 @@ class Database:
                 f"UPDATE tasks SET {assignments} WHERE id = ? AND status = ? {extra_where}",
                 [*fields.values(), new, task_id, old])
             changed = cur.rowcount == 1
+<<<<<<< HEAD
             if changed:
                 self._audit_auto_approval(task_id, fields)
+=======
+            if changed and message is not None:
+                self._insert_message(task_id, message)
+>>>>>>> codex-gui/dc7f24d3-codex-gui
         if changed:
             self._notify(task_id, old, new)
         return changed
@@ -661,7 +701,7 @@ class Database:
             raise ValueError("use set_status() to change status")
         return self._update(task_id, fields)
 
-    def set_status(self, task_id: str, new_status: str, **fields) -> dict:
+    def set_status(self, task_id: str, new_status: str, message=None, **fields) -> dict:
         """Change status, enforcing the transition table. Extra fields are written atomically."""
         task = self.get_task(task_id)
         if task is None:
@@ -673,7 +713,7 @@ class Database:
         if unknown or "id" in fields:
             raise ValueError(f"cannot update fields: {sorted(unknown | ({'id'} & set(fields)))}")
         # Compare-and-swap on the old status: a concurrent change (another evaluator, another process) cannot be overwritten.
-        if not self._guarded(task_id, old, new_status, "", fields):
+        if not self._guarded(task_id, old, new_status, "", fields, message):
             raise InvalidTransition(f"{old} -> {new_status}: the task changed concurrently")
         return self.get_task(task_id)
 
@@ -705,10 +745,10 @@ class Database:
 
     # ---------- scheduled instructions ----------
 
-    def create_scheduled(self, task_id: str, prompt: str, service_tier: str, depends_on=(), created_by: str = "user") -> dict:
+    def create_scheduled(self, task_id: str, prompt: str, service_tier: str, depends_on=(), created_by: str = "user", attachment_ids=()) -> dict:
         """Insert an instruction and its dependency rows in one transaction. It starts as waiting_dependencies."""
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise ScheduledError("instruction is required", "empty")
         parents = [str(p) for p in depends_on]
         if len(set(parents)) != len(parents):
@@ -723,8 +763,8 @@ class Database:
                 if p not in known:
                     raise ScheduledError(f"dependency task not found: {p}", "missing")
             cur = self._conn.execute(
-                "INSERT INTO scheduled_instructions (task_id, prompt, status, service_tier, created_at, created_by) "
-                "VALUES (?, ?, 'waiting_dependencies', ?, ?, ?)", (task_id, prompt, service_tier, now_iso(), created_by))
+                "INSERT INTO scheduled_instructions (task_id, prompt, status, service_tier, created_at, created_by, attachment_ids) "
+                "VALUES (?, ?, 'waiting_dependencies', ?, ?, ?, ?)", (task_id, prompt, service_tier, now_iso(), created_by, json.dumps(list(attachment_ids))))
             sid = cur.lastrowid
             for p in parents:
                 self._conn.execute("INSERT INTO scheduled_instruction_dependencies (scheduled_instruction_id, depends_on_task_id) "
@@ -848,6 +888,8 @@ class Database:
                     [*task_fields.values(), "queued", row["task_id"], thread_id])
                 if cur.rowcount != 1:
                     raise _Rollback()
+                self._insert_message(row["task_id"], dict(prompt=row["prompt"], kind="scheduled_instruction",
+                                                         attachment_ids=json.loads(row["attachment_ids"])))
         except _Rollback:
             return False
         self._notify(row["task_id"], SCHEDULED_IDLE_TASK_STATUS, "queued")

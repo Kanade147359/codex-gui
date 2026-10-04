@@ -3,9 +3,12 @@ from pathlib import Path
 from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
+
+from .attachments import AttachmentError, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_MESSAGE_BYTES, MAX_DIMENSION, MAX_PIXELS
 
 from . import agents_audit, agents_md, completion, ctx_config
 from . import git_manager as git
@@ -23,11 +26,48 @@ def manager(request: Request) -> TaskManager:
     return request.app.state.manager
 
 
+@router.get("/api/attachments/limits")
+async def attachment_limits():
+    return dict(max_image_bytes=MAX_IMAGE_BYTES, max_message_bytes=MAX_MESSAGE_BYTES, max_images=MAX_IMAGES,
+                max_dimension=MAX_DIMENSION, max_pixels=MAX_PIXELS, media_types=["image/png", "image/jpeg", "image/webp"])
+
+
+@router.post("/api/attachments")
+async def upload_attachment(request: Request, filename: str = "image.png"):
+    # Read a bounded raw body, not multipart/Base64, and do not trust MIME or filename extensions.
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > MAX_IMAGE_BYTES:
+            raise HTTPException(413, detail={"message": "画像1枚の容量上限は10 MiBです。", "code": "invalid_attachment"})
+        data.extend(chunk)
+    try:
+        return await run_in_threadpool(manager(request).attachments.save, bytes(data), filename)
+    except AttachmentError as e:
+        raise HTTPException(400, detail={"message": str(e), "code": "invalid_attachment"}) from e
+    except OSError as e:
+        raise HTTPException(500, detail={"message": "画像を保存できません。保存先の権限・空き容量を確認してください。", "code": "attachment_storage"}) from e
+
+
+@router.get("/api/attachments/{image_id}")
+async def get_attachment(request: Request, image_id: str):
+    store = manager(request).attachments
+    try:
+        row = store.get(image_id)
+        path = store.path(row)
+        if not path.is_file():
+            raise AttachmentError("保存済み画像が見つかりません。")
+    except AttachmentError as e:
+        raise HTTPException(404, detail={"message": str(e), "code": "invalid_attachment"}) from e
+    return FileResponse(path, media_type=row["media_type"], headers={"X-Content-Type-Options": "nosniff",
+                                                                    "Cache-Control": "private, max-age=31536000, immutable"})
+
+
 class NewTask(BaseModel):
     repository: str
     base_ref: str = "main"
     name: str = ""
     prompt: str
+    attachment_ids: list[str] = []
     model: str = ""
     reasoning_effort: str = "default"
     auto_approval: bool = True
@@ -75,12 +115,14 @@ class ResumeRequest(BaseModel):
 
 class Instruction(BaseModel):
     prompt: str
+    attachment_ids: list[str] = []
     reasoning_effort: Optional[str] = None  # an explicit "Retry with ..." choice; omitted = unchanged
     service_tier: Optional[str] = None      # speed of THIS turn: "standard" (Send Standard) / "fast" (Send Fast); omitted = the task's
 
 
 class ScheduledInstruction(BaseModel):
     prompt: str
+    attachment_ids: list[str] = []
     depends_on: list[str] = []              # tasks that must be completed first; empty = send when the thread is idle
     service_tier: Optional[str] = "standard"  # THIS instruction's speed: "standard" / "fast" (never inherited from the last turn)
 
@@ -349,7 +391,7 @@ async def resume_interrupted(request: Request, body: ResumeRequest):
 async def send_instruction(request: Request, task_id: str, body: Instruction):
     """Additional instruction: continues the task's existing Codex session (codex exec resume)."""
     try:
-        return await manager(request).send_instruction(task_id, body.prompt, body.reasoning_effort, body.service_tier)
+        return await manager(request).send_instruction(task_id, body.prompt, body.reasoning_effort, body.service_tier, body.attachment_ids)
     except TaskError as e:
         raise api_error(e)
 
@@ -398,7 +440,7 @@ async def list_scheduled(request: Request, task_id: str):
 async def schedule_instruction(request: Request, task_id: str, body: ScheduledInstruction):
     """Reserve an instruction for the task's existing Codex thread: sent once the dependencies are completed and the thread is idle."""
     try:
-        return await manager(request).schedule_instruction(task_id, body.prompt, body.depends_on, body.service_tier)
+        return await manager(request).schedule_instruction(task_id, body.prompt, body.depends_on, body.service_tier, attachment_ids=body.attachment_ids)
     except TaskError as e:
         raise api_error(e)
 
@@ -415,7 +457,7 @@ async def cancel_scheduled(request: Request, task_id: str, scheduled_id: int):
 @router.post("/api/tasks/{task_id}/new-session")
 async def start_new_session(request: Request, task_id: str, body: Instruction):
     try:
-        return await manager(request).start_new_session(task_id, body.prompt)
+        return await manager(request).start_new_session(task_id, body.prompt, body.attachment_ids)
     except TaskError as e:
         raise api_error(e)
 

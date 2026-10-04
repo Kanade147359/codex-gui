@@ -150,6 +150,7 @@ function rememberFolds() {
 function initDashboard() {
   const dialog = $("#new-task-dialog");
   const form = $("#new-task-form");
+  const images = window.ImageAttachments?.create(form.elements.prompt, $("#new-task-attachments"), "new-task");
   const f = form.elements; // f.name etc. would collide with form's built-in properties
   const formError = $("#form-error");
   const formOk = $("#form-ok");
@@ -596,12 +597,13 @@ function initDashboard() {
   $("#cancel-btn").addEventListener("click", () => dialog.close());
 
   async function submitTask(keepOpen) {
+    if (!form.reportValidity()) return;
+    images?.setBusy(true);
     const buttons = [$("#run-btn"), $("#run-more-btn")];
     buttons.forEach((b) => (b.disabled = true));
     $("#run-btn").textContent = "Creating worktree…";
     formError.hidden = formOk.hidden = true;
     try {
-      if (!form.reportValidity()) return;
       const after = f.run_mode.value === "after";
       const dependsOn = after ? [...form.querySelectorAll('input[name="dep"]:checked')].map((c) => c.value) : [];
       if (after && !dependsOn.length) throw new Error("Select at least one task to wait for, or choose Immediately.");
@@ -621,6 +623,7 @@ function initDashboard() {
         base_ref: baseValue(),
         name: f.name.value,
         prompt: f.prompt.value,
+        ...(images?.hasImages() ? { attachment_ids: await images.ids() } : {}),
         model: selectedModel(),
         reasoning_effort: effortSel.value,
         auto_approval: f.auto_approval.checked,
@@ -636,6 +639,7 @@ function initDashboard() {
         ...(window.CtxUI ? CtxUI.formValues() : {}),
       });
       f.prompt.value = "";
+      images?.clear();
       f.name.value = "";
       if (keepOpen) {
         formOk.textContent = task.status === "waiting_dependencies"
@@ -651,6 +655,7 @@ function initDashboard() {
       formError.textContent = e.message;
       formError.hidden = false;
     } finally {
+      images?.setBusy(false);
       buttons.forEach((b) => (b.disabled = false));
       $("#run-btn").textContent = "Run";
     }
@@ -724,6 +729,7 @@ function initDashboard() {
 function initTask() {
   rememberFolds();
   const id = document.body.dataset.taskId;
+  const images = window.ImageAttachments?.create($("#instruction"), $("#instruction-attachments"), "task:" + id);
   let task = null;
   let offset = 0;
   let gitTab = "status";
@@ -754,6 +760,7 @@ function initTask() {
     if (t.status === "retry_wait") { $("#task-status").dataset.retryAt = t.next_retry_at; $("#task-status").dataset.retry = `${t.retry_count}/${t.max_retries}`; }
     else { delete $("#task-status").dataset.retryAt; }
     $("#prompt").textContent = t.prompt;
+    window.ImageAttachments?.history($("#image-message-history"), t.messages);
     $("#git-branch").textContent = t.branch;
     const rows = [
       ["Status", taskStatusText(t)], ["Repository", t.repository],
@@ -795,7 +802,7 @@ function initTask() {
     $("#resume-btn").hidden = t.status !== "interrupted";
     $("#resume-btn").disabled = sending || !t.codex_thread_id;
     const canSchedule = !t.worktree_removed;  // a reservation can be made while the thread is busy: that is its point
-    $("#instruction").disabled = !(idle || steerable || canSchedule);
+    $("#instruction").disabled = sending || !(idle || steerable || canSchedule);
     $("#session-id").textContent = t.codex_thread_id ? `thread ${t.codex_thread_id}` : "";
     $("#instruction-hint").textContent =
       waiting ? "The task is waiting for the scheduler; it takes instructions once it has run." :
@@ -950,6 +957,7 @@ function initTask() {
       `<span class="muted">Speed: ${esc(r.speed)}${when}</span><span class="spacer"></span>${cancel}</div>` +
       (r.dependencies && r.dependencies.length ? `<div class="sched-deps"><span class="muted">After:</span> ${deps}</div>` : "") +
       `<div class="sched-prompt">“${esc(r.prompt.length > 400 ? r.prompt.slice(0, 400) + "…" : r.prompt)}”</div>` +
+      (window.ImageAttachments ? `<div class="attachment-list">${ImageAttachments.gallery(r.attachments)}</div>` : "") +
       (note ? `<div class="small muted">${note}</div>` : "") + `</li>`;
   }
 
@@ -1014,24 +1022,27 @@ function initTask() {
   });
   $("#schedule-btn").addEventListener("click", async () => {
     const prompt = $("#instruction").value;
-    if (!prompt.trim()) { setMsg("Write an instruction first.", true); return; }
+    if (!prompt.trim() && !images?.hasImages()) { setMsg("Write an instruction or attach an image first.", true); return; }
     const after = $("#delivery-after").checked;
     const deps = after ? [...schedDeps] : [];
     if (after && !deps.length) { setMsg("Select at least one task to wait for, or choose “Send when thread is idle”.", true); return; }
     const fast = $("#sched-speed-fast").checked;
     if (fast && !confirm("Schedule this instruction at Fast speed?\n\nFast costs 2x at API-equivalent prices and consumes your included usage faster. Only this turn is Fast.")) return;
     sending = true;
+    images?.setBusy(true);
     renderTask();
     try {
       await action("Schedule Instruction", async () => {
-        await api("POST", `/api/tasks/${id}/scheduled`, { prompt, depends_on: deps, service_tier: fast ? "fast" : "standard" });
+        await api("POST", `/api/tasks/${id}/scheduled`, { prompt, ...(images?.hasImages() ? { attachment_ids: await images.ids() } : {}), depends_on: deps, service_tier: fast ? "fast" : "standard" });
         $("#instruction").value = "";
+        images?.clear();
         schedDeps.clear();
         schedDepsKey = "";
         return after ? `Scheduled: sent when ${deps.length} task(s) have completed and this thread is idle` : "Scheduled: sent when this thread is idle";
       });
     } finally {
       sending = false;
+      images?.setBusy(false);
       renderTask();
     }
   });
@@ -1279,22 +1290,31 @@ function initTask() {
 
   async function sendInstruction({ path = "messages", label = "Send", confirmText = "", effort = null, fallbackToLast = false, tier = null }) {
     let prompt = $("#instruction").value;
-    if (!prompt.trim() && fallbackToLast) prompt = task.last_prompt || "";
-    if (!prompt.trim()) { setMsg("Write an instruction first.", true); return; }
+    let previousImages = [];
+    if (!prompt.trim() && !images?.hasImages() && fallbackToLast) {
+      prompt = task.last_prompt || "";
+      const lastMessage = task.messages?.at(-1);
+      if (lastMessage?.prompt === prompt) previousImages = lastMessage.attachment_ids || [];
+    }
+    if (!prompt.trim() && !images?.hasImages() && !previousImages.length) { setMsg("Write an instruction or attach an image first.", true); return; }
     if (confirmText && !confirm(confirmText)) return;
     sending = true;
+    images?.setBusy(true);
     renderTask();
     try {
       await action(label, async () => {
-        const body = { prompt };
+        const body = { prompt, ...(images?.hasImages() ? { attachment_ids: await images.ids() } : {}) };
+        if (previousImages.length) body.attachment_ids = previousImages;
         if (effort) body.reasoning_effort = effort;
         if (tier) body.service_tier = tier;  // Send Standard / Send Fast: the speed of this turn only
         await api("POST", `/api/tasks/${id}/${path}`, body);
         $("#instruction").value = "";
+        images?.clear();
         return label + ": started";
       });
     } finally {
       sending = false;
+      images?.setBusy(false);
       renderTask();
     }
   }
@@ -1331,8 +1351,7 @@ function initTask() {
     confirmText: "Start a NEW Codex thread in this worktree?\n\nThe conversation so far is not carried over and the previous thread's cached input is not reused." }));
   $("#quota-retry-btn").addEventListener("click", () => {
     // No thread yet (the first turn never ran): a plain first run. Otherwise the same thread continues.
-    $("#instruction").value = task.last_prompt || "";
-    sendInstruction({ path: task.codex_thread_id ? "messages" : "new-session", label: "Retry" });
+    sendInstruction({ path: task.codex_thread_id ? "messages" : "new-session", label: "Retry", fallbackToLast: true });
   });
   document.querySelectorAll(".compact-btn").forEach((b) => b.addEventListener("click", () => {
     if (!confirm("Compact this thread?\n\nCodex summarizes the older context to shrink it. The task, worktree, branch and thread stay the same.\n" +

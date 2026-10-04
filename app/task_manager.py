@@ -19,7 +19,7 @@ import signal
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
@@ -29,6 +29,7 @@ from . import git_manager as git
 from .appserver import CLOSED, AppServerClient, AppServerError
 from .codex_login import CodexLogin
 from .codex_runner import WEB_SEARCH_MODES, CodexRunner, approval_params, nested, task_config, terminate_process
+from .attachments import AttachmentError, AttachmentStore
 from .config import Settings
 from .database import Database, DependencyError, ScheduledError
 from .instructions import load_instructions
@@ -81,14 +82,25 @@ class _Turn:
     started: bool = False
     # A retry of a thread-creating turn that never started: if Codex never saved that thread, a new one is acceptable.
     fresh_ok: bool = False
+<<<<<<< HEAD
     final_text: str = ""  # this turn's last completed assistant message; never tool output
     ignore_dependencies: bool = False  # explicit Run Anyway only, survives queue/restart
+=======
+    attachment_ids: list[str] = field(default_factory=list)
+
+    def message(self) -> dict:
+        return dict(prompt=self.prompt, attachment_ids=self.attachment_ids, kind=self.trigger)
+>>>>>>> codex-gui/dc7f24d3-codex-gui
 
     def to_json(self) -> str:
         """Stored in tasks.pending_turn: the turn that is queued, running or to be retried survives a GUI restart."""
         return json.dumps({"prompt": self.prompt, "resume_thread": self.resume_thread, "thread_id": self.thread_id,
                            "kind": self.kind, "trigger": self.trigger, "service_tier": self.service_tier,
+<<<<<<< HEAD
                            "started": self.started, "fresh_ok": self.fresh_ok, "ignore_dependencies": self.ignore_dependencies})
+=======
+                           "started": self.started, "fresh_ok": self.fresh_ok, "attachment_ids": self.attachment_ids})
+>>>>>>> codex-gui/dc7f24d3-codex-gui
 
     @classmethod
     def from_json(cls, raw: Optional[str]) -> Optional["_Turn"]:
@@ -99,8 +111,12 @@ class _Turn:
         if not isinstance(d, dict) or not isinstance(d.get("prompt"), str):
             return None
         return cls(d["prompt"], d.get("resume_thread"), d.get("thread_id"), d.get("kind") or "turn",
+<<<<<<< HEAD
                    d.get("trigger") or "instruction", d.get("service_tier"), bool(d.get("started")), bool(d.get("fresh_ok")),
                    ignore_dependencies=bool(d.get("ignore_dependencies")))
+=======
+                   d.get("trigger") or "instruction", d.get("service_tier"), bool(d.get("started")), bool(d.get("fresh_ok")), d.get("attachment_ids") or [])
+>>>>>>> codex-gui/dc7f24d3-codex-gui
 
 
 class TaskError(Exception):
@@ -125,6 +141,7 @@ class TaskManager:
                  app_server: Optional[AppServerClient] = None):
         self.settings = settings
         self.db = db
+        self.attachments = AttachmentStore(settings.home / "attachments", db)
         self.runner = runner or CodexRunner(settings.codex_bin, settings.subscription_only)
         self.runner.instructions = load_instructions(settings.instructions_path)
         self._app_server = app_server
@@ -269,16 +286,21 @@ class TaskManager:
                           auto_retry: Optional[bool] = None, max_retries: Optional[int] = None,
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
+<<<<<<< HEAD
                           allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
                           completion_contract: Optional[dict] = None) -> dict:
         try:
             rules = completion.contract(completion_contract)
         except ValueError as e:
             raise TaskError(str(e)) from e
+=======
+                          allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "", attachment_ids=()) -> dict:
+>>>>>>> codex-gui/dc7f24d3-codex-gui
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("prompt is required")
-        name = name.strip() or (prompt.splitlines()[0][:60])
+        await self._check_images(attachment_ids)
+        name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Image task")
         model = model.strip()
         if model.startswith("-"):
             raise TaskError("invalid model name")
@@ -339,7 +361,7 @@ class TaskManager:
 
         try:
             self.db.create_task(
-                depends_on=deps,
+                depends_on=deps, message=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).message(),
                 id=task_id, name=name, repository=repo, worktree=str(wt), branch=branch,
                 base_ref=base_ref, base_sha=base_sha, prompt=prompt, model=model,
                 reasoning_effort=reasoning_effort, auto_approval=int(auto_approval),
@@ -350,8 +372,12 @@ class TaskManager:
                 status="waiting_dependencies" if deps else "queued",
                 git_summary="not started" if deps else "clean", worktree_pending=int(bool(deps)),
                 dependency_policy=dependency_policy, auto_retry_enabled=int(auto_retry), max_retries=max_retries,
+<<<<<<< HEAD
                 pending_turn=_Turn(prompt, trigger="initial").to_json(), created_at=now_iso(), **ctx_fields,
                 completion_contract=json.dumps(rules),
+=======
+                pending_turn=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).to_json(), created_at=now_iso(), **ctx_fields,
+>>>>>>> codex-gui/dc7f24d3-codex-gui
             )
         except DependencyError as e:
             raise TaskError(str(e), 400, e.code) from e
@@ -437,8 +463,21 @@ class TaskManager:
             raise TaskError("task is blocked by a prerequisite; use Run Anyway or fix the dependency", 409, "blocked")
         self._require_worktree(task)
 
+    async def _check_images(self, ids, resume=False) -> None:
+        if not ids:
+            return
+        try:
+            await asyncio.to_thread(self.attachments.resolve, ids)
+            await self.runner.check_image_support(self.settings.backend, resume)
+        except AttachmentError as e:
+            raise TaskError(str(e), 400, "invalid_attachment") from e
+
+    def _image_input(self, prompt: str, ids) -> list[dict]:
+        return ([{"type": "text", "text": prompt}] if prompt else []) + [
+            {"type": "localImage", "path": path} for path in self.attachments.paths(ids)]
+
     async def send_instruction(self, task_id: str, prompt: str, reasoning_effort: Optional[str] = None,
-                               service_tier: Optional[str] = None) -> dict:
+                               service_tier: Optional[str] = None, attachment_ids=()) -> dict:
         """Another instruction for the task's existing Codex thread.
 
         Idle task: a new turn (`thread/resume` + `turn/start`, or `codex exec resume`). Running task (app-server): the
@@ -447,8 +486,9 @@ class TaskManager:
         Send Standard, "priority" = Send Fast; "standard" / "fast" are accepted too); omitted = the task's own speed.
         """
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("instruction is required")
+        await self._check_images(attachment_ids, resume=True)
         tier = self._turn_tier(service_tier)
         task = self.get(task_id)
         if reasoning_effort is not None and reasoning_effort != task["reasoning_effort"]:
@@ -457,7 +497,7 @@ class TaskManager:
         else:
             reasoning_effort = None
         if task["status"] in ACTIVE_STATUSES:
-            return await self._steer(task, prompt)
+            return await self._steer(task, prompt, attachment_ids)
         self._require_idle_with_worktree(task)
         thread = task["codex_thread_id"]
         if not thread:
@@ -470,7 +510,7 @@ class TaskManager:
             TaskLog.note(self.log_path(task_id),
                          f"reasoning effort changed {task['reasoning_effort']} -> {reasoning_effort} (requested by the user)")
             fields["reasoning_effort"] = reasoning_effort
-        return self._begin_turn(task, _Turn(prompt, resume_thread=thread, service_tier=tier), **fields)
+        return self._begin_turn(task, _Turn(prompt, resume_thread=thread, service_tier=tier, attachment_ids=list(attachment_ids)), **fields)
 
     @staticmethod
     def _turn_tier(value: Optional[str]) -> Optional[str]:
@@ -481,7 +521,7 @@ class TaskManager:
             raise TaskError(f"invalid service tier: {value}")
         return tier
 
-    async def _steer(self, task: dict, prompt: str) -> dict:
+    async def _steer(self, task: dict, prompt: str, attachment_ids=()) -> dict:
         """Add an instruction to the turn that is running now (turn/steer). The exec backend has no such thing."""
         if not self.uses_app_server:
             raise TaskError(f"task is {task['status']}; send the next instruction when it has finished", 409, "active")
@@ -491,11 +531,14 @@ class TaskManager:
         try:
             await (await self.client()).request(
                 "turn/steer", {"threadId": info["thread"], "expectedTurnId": info["turn"],
-                               "input": [{"type": "text", "text": prompt}]}, timeout=30)
+                               "input": self._image_input(prompt, attachment_ids)}, timeout=30)
+        except AttachmentError as e:
+            raise TaskError(str(e), 400, "invalid_attachment") from e
         except AppServerError as e:
             raise TaskError(f"could not add the instruction to the running turn: {e}", 409, "steer_failed") from e
         TaskLog.note(self.log_path(task["id"]), "additional instruction sent to the running turn (turn/steer):\n" +
                      prompt[:INSTRUCTION_LOG_CHARS])
+        self.db.add_message(task["id"], prompt, attachment_ids)
         return self.db.update_task(task["id"], last_prompt=prompt)
 
     async def resume_interrupted(self, task_ids: Optional[list[str]] = None) -> dict:
@@ -506,21 +549,26 @@ class TaskManager:
             if task["status"] != "interrupted" or (task_ids is not None and task["id"] not in task_ids):
                 continue
             try:
-                await self.send_instruction(task["id"], RESUME_PROMPT)
+                pending = self._in_flight_turn(task)
+                if pending.attachment_ids and not pending.started:
+                    await self.send_instruction(task["id"], pending.prompt, attachment_ids=pending.attachment_ids)
+                else:
+                    await self.send_instruction(task["id"], RESUME_PROMPT)
                 resumed.append(task["id"])
             except TaskError as e:
                 skipped.append({"id": task["id"], "reason": str(e)})
         return {"resumed": resumed, "skipped": skipped}
 
-    async def start_new_session(self, task_id: str, prompt: str) -> dict:
+    async def start_new_session(self, task_id: str, prompt: str, attachment_ids=()) -> dict:
         """A fresh Codex session in the same worktree. Deliberately separate from send_instruction: it
         gives up the old session's conversation and the cached input that goes with it."""
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("prompt is required")
+        await self._check_images(attachment_ids)
         task = self.get(task_id)
         self._require_idle_with_worktree(task)
-        return self._begin_turn(task, _Turn(prompt, trigger="new_session"), stop_reason="", long_context_ack="")
+        return self._begin_turn(task, _Turn(prompt, trigger="new_session", attachment_ids=list(attachment_ids)), stop_reason="", long_context_ack="")
 
     async def compact(self, task_id: str) -> dict:
         """Compact the task's Codex thread (thread/compact/start). Task, worktree, branch and thread id stay as they are."""
@@ -537,7 +585,8 @@ class TaskManager:
         """A new unit of work for an idle task: queued with its turn recorded, then claimed and started at once."""
         # No await between the status checks of the caller and this transition, so two requests cannot both pass.
         try:
-            updated = self.db.set_status(task["id"], "queued", **self._queue_fields(turn, **fields))
+            updated = self.db.set_status(task["id"], "queued", message=turn.message() if turn.kind == "turn" else None,
+                                         **self._queue_fields(turn, **fields))
         except InvalidTransition as e:
             raise TaskError(f"task changed while the instruction was being sent: {e}", 409, "active") from e
         self._dispatch(task["id"])
@@ -619,6 +668,10 @@ class TaskManager:
         except asyncio.CancelledError:
             self._end_attempt(task_id, "stopped", turn)  # stop() of a queued task; it already wrote the final status
             raise
+        except AttachmentError as e:
+            current = self.db.get_task(task_id)
+            if current and current["status"] in ACTIVE_STATUSES:
+                self._settle(task_id, log, turn, "failed", failure=Failure("invalid_attachment", recovery.NON_RETRYABLE, str(e)))
         except Exception as e:  # never leave a task stuck in an active status
             log.add_system(f"internal error: {e!r}")
             current = self.db.get_task(task_id)
@@ -657,6 +710,11 @@ class TaskManager:
     async def _prepare(self, task_id: str, log: TaskLog, turn: _Turn) -> bool:
         """Before Codex is started: the worktree must exist (a waiting task gets it now), and before a retry its state is
         recorded. Nothing is reset, cleaned or checked out. False if the run cannot go on (the task is settled already)."""
+        try:
+            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread))
+        except TaskError as e:
+            self._settle(task_id, log, turn, "failed", failure=Failure("invalid_attachment", recovery.NON_RETRYABLE, str(e)))
+            return False
         task = self.get(task_id)
         failure = await self._ensure_worktree(task, log)
         if failure:
@@ -808,8 +866,8 @@ class TaskManager:
             return _Turn(RECOVERY_PROMPT, resume_thread=thread, trigger=trigger, service_tier=turn.service_tier)
         if thread:
             return _Turn(turn.prompt, resume_thread=thread, trigger=trigger, service_tier=turn.service_tier,
-                         fresh_ok=turn.fresh_ok or turn.resume_thread is None)
-        return _Turn(turn.prompt, trigger=trigger, service_tier=turn.service_tier)
+                         fresh_ok=turn.fresh_ok or turn.resume_thread is None, attachment_ids=list(turn.attachment_ids))
+        return _Turn(turn.prompt, trigger=trigger, service_tier=turn.service_tier, attachment_ids=list(turn.attachment_ids))
 
     def _mark_started(self, task_id: str, turn: _Turn) -> None:
         """Codex confirmed the turn started: remember it, so that a retry knows its instruction is in the thread."""
@@ -938,10 +996,14 @@ class TaskManager:
             if compact:
                 await client.request("thread/compact/start", {"threadId": thread_id}, timeout=60)
             else:
+<<<<<<< HEAD
                 rules = json.loads(task["completion_contract"] or "{}")
                 prompt = turn.prompt + ("\nCompletion contract: " + json.dumps(rules) if rules else "")
                 params = {"threadId": thread_id, "input": [{"type": "text", "text": prompt}],
                           "outputSchema": completion.SCHEMA}
+=======
+                params = {"threadId": thread_id, "input": self._image_input(turn.prompt, turn.attachment_ids)}
+>>>>>>> codex-gui/dc7f24d3-codex-gui
                 if task["reasoning_effort"] not in ("", "default"):
                     params["effort"] = task["reasoning_effort"]
                 # The speed is chosen for THIS turn only (Send Standard / Send Fast): serviceTierForTurn does not change the
@@ -1105,8 +1167,10 @@ class TaskManager:
         if turn.kind == "compact":
             raise TaskError("compaction needs the app-server backend", 409, "unsupported")
         task = self.get(task_id)
+        task = {**task, "image_paths": self.attachments.paths(turn.attachment_ids),
+                "service_tier": turn.service_tier or task["service_tier"]}
         try:
-            proc = await self.runner.spawn({**task, "service_tier": turn.service_tier or task["service_tier"]}, turn.resume_thread)
+            proc = await self.runner.spawn(task, turn.resume_thread)
         except OSError as e:
             log.add_system(f"failed to start codex: {e}")
             permanent = isinstance(e, (FileNotFoundError, PermissionError, NotADirectoryError))
@@ -1652,14 +1716,15 @@ class TaskManager:
     # ---------- scheduled instructions (a follow-up turn for an existing thread, after other tasks) ----------
 
     async def schedule_instruction(self, task_id: str, prompt: str, depends_on=(), service_tier: Optional[str] = None,
-                                   created_by: str = "user") -> dict:
+                                   created_by: str = "user", attachment_ids=()) -> dict:
         """Reserve an instruction for the Codex thread of `task_id`. It is sent when every task in `depends_on` has
         completed AND the thread is idle (no `depends_on` = as soon as the thread is idle), on the SAME thread, worktree and
         branch. Its speed is its own: `service_tier` None means Standard, never "whatever the last turn used".
         Reasoning effort and approval come from the task."""
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not attachment_ids:
             raise TaskError("instruction is required", 400, "empty")
+        await self._check_images(attachment_ids, resume=True)
         task = self.get(task_id)
         tier = self._turn_tier(service_tier) or "default"
         deps = self._check_dependency_ids(depends_on)
@@ -1668,7 +1733,7 @@ class TaskManager:
         if task["worktree_removed"]:
             raise TaskError("worktree no longer exists", 409, "no_worktree")
         try:
-            row = self.db.create_scheduled(task_id, prompt, tier, deps, created_by)
+            row = self.db.create_scheduled(task_id, prompt, tier, deps, created_by, attachment_ids)
         except ScheduledError as e:
             raise TaskError(str(e), 400, e.code) from e
         TaskLog.note(self.log_path(task_id), f"scheduled instruction #{row['id']} created ({'Fast' if tier == 'priority' else tier if tier != 'default' else 'Standard'}"
@@ -1705,6 +1770,7 @@ class TaskManager:
                              "task_outcome": dep["task_outcome"], "outcome_reason": dep["outcome_reason"]})
         out = {k: row[k] for k in ("id", "task_id", "prompt", "status", "service_tier", "created_at", "ready_at", "started_at",
                                    "finished_at", "blocked_reason", "created_by")}
+        out["attachments"] = self.attachments.views(json.loads(row["attachment_ids"]))
         out.update(speed="Fast" if row["service_tier"] == "priority" else "Standard" if row["service_tier"] == "default" else row["service_tier"],
                    dependencies=deps, deps_done=sum(d["status"] == "completed" and d["task_outcome"] == "success" for d in deps), deps_total=len(deps))
         if row["status"] == "waiting_thread":
@@ -1765,7 +1831,8 @@ class TaskManager:
         thread = task and task["codex_thread_id"]
         if not task or not thread or task["status"] != "completed":
             return False
-        turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"])
+        turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"],
+                     attachment_ids=json.loads(row["attachment_ids"]))
         if not self.db.claim_scheduled(row["id"], self._queue_fields(turn), thread):
             return False
         TaskLog.note(self.log_path(task["id"]), f"scheduled instruction #{row['id']} sent to Codex thread {thread} "
@@ -2031,6 +2098,8 @@ class TaskManager:
         turns = self.db.list_turns(task["id"])
         latest = next((t for t in reversed(turns) if t["kind"] == "turn"), turns[-1] if turns else None)
         task = self._present(dict(task), latest, scheduled=self.db.scheduled_counts())
+        task["messages"] = [row | {"attachments": self.attachments.views(row["attachment_ids"])}
+                            for row in self.db.list_messages(task["id"])]
         task["scheduled_instructions"] = [self._scheduled_view(r) for r in self.db.list_scheduled(task["id"])]
         task["dependents"] = [{"id": d["id"], "name": d["name"], "status": d["status"]}
                               for d in map(self.db.get_task, self.db.dependents_of(task["id"])) if d]
