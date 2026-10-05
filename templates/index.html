@@ -7,20 +7,20 @@
 </label>
 {% endblock %}
 {% block content %}
-<a class="button" href="/dependencies">依存グラフ</a>
-<section class="center">
+<a class="button graph-link" href="/dependencies" data-mobile-panel="tasks queue">依存グラフを開く</a>
+<section class="center" data-mobile-panel="tasks settings">
   <h1>Codex Control Center</h1>
   <p class="defaults" id="defaults">Model default: <b id="default-model">…</b> &nbsp; Speed: <b>Standard</b>
     &nbsp; <span class="muted" id="backend-note"></span>
     &nbsp; <span class="muted" id="codex-account"></span></p>
 </section>
 
-<section class="usage-box" id="codex-login" hidden>
+<section class="usage-box" id="codex-login" data-mobile-panel="tasks settings" hidden>
   <h2>Codex sign-in</h2>
   <div id="codex-login-body"></div>
 </section>
 
-<section class="usage-box" id="usage-box">
+<section class="usage-box" id="usage-box" data-mobile-panel="tasks settings">
   <h2>Codex Usage <span class="muted" id="usage-plan"></span></h2>
   <div id="limits" class="muted">loading…</div>
   <p class="muted small" id="limits-note"></p>
@@ -28,7 +28,7 @@
     <button id="resume-all-btn" hidden title="Continue every interrupted task in its existing Codex thread">Resume interrupted</button></p>
 </section>
 
-<section class="usage-box">
+<section class="usage-box" data-mobile-panel="settings">
   <h2>Completion validation</h2>
   <p id="completion-validation-capability" class="muted">bwrap: Checking…</p>
   <p id="completion-validation-note" class="muted small"></p>
@@ -37,13 +37,13 @@
   <p id="completion-approval-note" class="muted small">Custom contracts requiring manual approval take priority.</p>
 </section>
 
-<details class="usage-box" id="efficiency-box" open>
+<details class="usage-box" id="efficiency-box" data-mobile-panel="settings" open>
   <summary title="Click to fold / unfold"><h2><span id="efficiency-title">LIFETIME EFFICIENCY</span> <span class="muted">(equivalent estimate)</span></h2></summary>
   <nav class="tabs" id="efficiency-tabs"></nav>
   <div id="efficiency" class="muted">loading…</div>
 </details>
 
-<section class="repo-bar" id="repo-bar" hidden>
+<section class="repo-bar" id="repo-bar" data-mobile-panel="tasks settings" hidden>
   <div><span class="muted">Repository</span> <span id="repo-path"></span></div>
   <div class="repo-facts">Git: <b id="repo-git">…</b> &nbsp; AGENTS.md: <b id="repo-agents">…</b></div>
   <div class="repo-actions">
@@ -52,7 +52,7 @@
   </div>
 </section>
 
-<p class="small"><button id="ctx-settings-btn" class="small-btn" title="Thresholds of Cache Health, the Tool Output Guard, compaction and cache age">Efficiency settings</button></p>
+<p class="small" data-mobile-panel="settings"><button id="ctx-settings-btn" class="small-btn" title="Thresholds of Cache Health, the Tool Output Guard, compaction and cache age">Efficiency settings</button></p>
 
 <dialog id="ctx-settings-dialog">
   <h2>Efficiency settings</h2>
@@ -66,13 +66,31 @@
   </div>
 </dialog>
 
+<div class="tasks-scroll">
 <table class="tasks" id="tasks-table">
   <thead>
     <tr><th>TASK</th><th>REPO</th><th>MODEL</th><th>EFFORT</th><th>CACHE</th><th>CTX</th><th>STATUS</th><th>GIT</th><th>BRANCH</th><th>CREATED</th></tr>
   </thead>
   <tbody id="tasks-body"><tr><td colspan="10" class="muted">loading…</td></tr></tbody>
 </table>
+</div>
 <footer class="summary" id="summary"></footer>
+
+<section class="mobile-only" data-mobile-panel="tasks" aria-label="Tasks">
+  <h2>Tasks</h2>
+  <div id="task-cards" class="task-cards"></div>
+</section>
+<section class="mobile-only" data-mobile-panel="queue" aria-label="Queue">
+  <h1>Queue / Scheduled Tasks</h1>
+  <p class="muted small">既存の手動依存関係と予約指示を表示します。</p>
+  <p id="mobile-queue-error" role="alert"></p>
+  <div id="mobile-queue" class="task-cards"></div>
+</section>
+<section class="mobile-only" data-mobile-panel="logs" aria-label="Logs">
+  <h1>Logs</h1>
+  <p class="muted">ログを読むタスクを選択してください。</p>
+  <div id="mobile-log-tasks" class="task-cards"></div>
+</section>
 
 <dialog id="new-task-dialog">
   <form id="new-task-form" method="dialog">
