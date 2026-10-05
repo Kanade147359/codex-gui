@@ -177,16 +177,16 @@ function initDashboard() {
     $("#tasks-body").innerHTML = tasks.length
       ? tasks.map((t) => `
         <tr data-id="${esc(t.id)}">
-          <td class="wrap"><a href="/tasks/${esc(t.id)}">${esc(t.name)}</a>${scheduledBadge(t)}</td>
-          <td title="${esc(t.repository)}">${esc(repoName(t.repository))}</td>
-          <td title="${esc(t.effective_model || "")}">${esc(modelName(t.effective_model || t.model))}</td>
-          <td>${esc(effortLabel(t.reasoning_effort))}${t.service_tier !== "default" ? ` <span class="warn" title="Fast mode consumes included usage more quickly.">fast</span>` : ""}</td>
-          <td title="cache hit rate of the latest turn (cached / input)">${esc(pct(t.cache_hit_rate))}</td>
-          <td title="current context / model window">${ctxCell(t.context)}${ctxBadges(t)}</td>
-          <td>${statusCell(t)}</td>
-          <td>${esc(t.git_summary)}</td>
-          <td>${esc(t.branch)}${t.branch_deleted ? " (deleted)" : ""}</td>
-          <td>${esc(dt(t.created_at))}</td>
+          <td class="wrap task-name"><a href="/tasks/${esc(t.id)}">${esc(t.name)}</a>${scheduledBadge(t)}</td>
+          <td data-label="Repo" title="${esc(t.repository)}"><div class="task-value">${esc(repoName(t.repository))}</div></td>
+          <td data-label="Model" title="${esc(t.effective_model || "")}"><div class="task-value">${esc(modelName(t.effective_model || t.model))}</div></td>
+          <td data-label="Effort"><div class="task-value">${esc(effortLabel(t.reasoning_effort))}${t.service_tier !== "default" ? ` <span class="warn" title="Fast mode consumes included usage more quickly.">fast</span>` : ""}</div></td>
+          <td data-label="Cache" title="cache hit rate of the latest turn (cached / input)"><div class="task-value">${esc(pct(t.cache_hit_rate))}</div></td>
+          <td data-label="Ctx" title="current context / model window"><div class="task-value">${ctxCell(t.context)}${ctxBadges(t)}</div></td>
+          <td data-label="Status"><div class="task-value">${statusCell(t)}</div></td>
+          <td data-label="Git"><div class="task-value">${esc(t.git_summary)}</div></td>
+          <td data-label="Branch"><div class="task-value">${esc(t.branch)}${t.branch_deleted ? " (deleted)" : ""}</div></td>
+          <td data-label="Created"><div class="task-value">${esc(dt(t.created_at))}</div></td>
         </tr>`).join("")
       : `<tr><td colspan="10" class="muted">No tasks yet. Click "+ New Task".</td></tr>`;
     const n = (k) => tasks.filter((t) => t.status === k).length;
