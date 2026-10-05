@@ -279,8 +279,8 @@ body.graph-wide .graph-shell { grid-template-columns:minmax(0,1fr); height:calc(
   body { font-size: 14px; }
   .topbar { flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; }
   .brand { margin-right: auto; }
-  .topbar .filter { flex: 1 0 100%; margin-left: 0; }
-  .topbar .filter select { flex: 1; min-width: 0; max-width: none; }
+  .topbar .filter { display: grid; grid-template-columns: auto minmax(0, 1fr); flex: 0 1 100%; min-width: 0; max-width: 100%; margin-left: 0; }
+  .topbar .filter select { width: 100%; min-width: 0; max-width: 100%; }
   main, body[data-page="graph"] main { min-width: 0; padding: 12px 12px 32px; }
   section, details { min-width: 0; }
   .defaults, .summary, .repo-bar, .sched-prompt, #agents-where { overflow-wrap: anywhere; }
@@ -303,7 +303,9 @@ body.graph-wide .graph-shell { grid-template-columns:minmax(0,1fr); height:calc(
   .title-row h1 { flex: 1 1 100%; overflow-wrap: anywhere; }
   dl.meta { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; }
   dl.meta dd, dl.usage dd { overflow-wrap: anywhere; }
-  dl.usage { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; }
+  dl.usage { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  dl.usage dt { overflow-wrap: anywhere; }
+  dl.usage dd { text-align: left; margin-bottom: 10px; }
   table.usage { display: block; max-width: 100%; overflow-x: auto; }
   table.usage th, table.usage td { white-space: nowrap; }
   .log .entry { flex-wrap: wrap; gap: 0 8px; }
