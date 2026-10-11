@@ -85,6 +85,10 @@ The diff shown is the **difference from the base commit** (including commits Cod
 
 ## Security
 
+For Corriedale Console development from a task terminal, use the standalone
+[Console Preview CLI](docs/console-preview.md): UI mock and isolated Agent modes,
+worktree provenance, lifecycle commands, verification and a Tailscale runbook.
+
 The GUI itself has no login (authentication). Anyone who can open it can drive Codex on the server — that means running commands, editing files and pushing to Git.
 By default it listens on `127.0.0.1` only. If you expose it to other machines, put it behind an authenticated reverse proxy or a VPN (Tailscale / WireGuard, etc.).
 ([Signing in to Codex](#signing-in-to-codex) is a sign-in to Codex (your ChatGPT account), not a login to the GUI.)

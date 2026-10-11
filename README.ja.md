@@ -1,5 +1,8 @@
 # Codex GUI
 
+Corriedale Consoleの開発用起動には[Console Preview CLI](docs/console-preview.md)を使えます。
+UI Mock／隔離Agent、worktreeの追跡、起動・停止・検証、Tailscale手順を提供します。
+
 [English](README.md) | **日本語**
 
 Codex CLI を複数同時に動かして一画面で管理する、ローカル Web GUI。Codex は **`codex app-server`**（thread / turn）経由で動かします。

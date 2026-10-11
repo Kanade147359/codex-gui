@@ -300,3 +300,15 @@ Before reporting completion:
 5. Report important limitations, unresolved issues, or behavior that could not be verified.
 
 If the requested result cannot safely be completed, report the blocker instead of pretending the task succeeded.
+
+## Development Console Preview
+
+For Corriedale Console changes, use `./preview.sh start --worktree PATH --mode ui`
+or `--mode integrated`; `verify` also runs checks, smoke tests and opens the browser.
+See [docs/console-preview.md](docs/console-preview.md) for lifecycle, isolation and remote HTTPS.
+Use this task's tool worktree and the target task's source; never deploy to the existing Lab.
+Keep Agent authentication and Security Gates enabled. UI mock success does not verify backend changes.
+Report Preview ID, source SHA/dirty state, startup state, URL, screens/operations,
+tests, blocked/NOT_RUN items, human visual review, and whether it remains running.
+Remote smartphone tests require a real device; otherwise report `NOT_RUN`.
+Preview success does not establish Production readiness.
