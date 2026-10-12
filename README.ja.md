@@ -300,6 +300,20 @@ New Task の **Run** で **After other tasks complete** を選び、**Depends on
 ブラウザ検証用の `tests/graph_browser_app.py` と `tests/graph_browser_smoke.cjs` は、一時データとlocalhostの別ポートを使い、実TaskやCodexを起動しません。環境変数は英語READMEの同節を参照してください。
 
 
+## スマートフォンUI
+
+768px以下では下部の **Tasks / Queue / Logs / Settings** で画面を切り替えます。Tasksはモデル・service tier・依存状態・最終更新付きのカード表示になり、詳細画面では既存の停止・継続・再開・リトライ・承認を操作できます。Git操作や削除は **More… → Task controls / Git / Delete…** にまとめています。769px以上は従来の一覧と操作配置です。
+
+詳細画面の下部入力欄は複数画像のファイル選択に対応し、Send Standard / Send Fastで継続します。予約は **More…** から既存のScheduleを使用します。Queueには手動依存と予約状態・保留理由を表示します。現行の予約は日時指定ではなく、依存成功とthread idleが送信条件です。ログは通常文を折り返し、コマンドは局所的に横スクロールします。上へスクロールすると追従を停止し、**最新へ** で追従を再開します。依存グラフは専用ページでドラッグ・ピンチズーム・タップ選択が可能です。
+
+ブラウザテストは一時DB・リポジトリとfake Codexを使います。320 / 375 / 390 / 430 / 768 / 769 / 1280pxで操作と横overflowを確認し、グラフのタッチ操作も検証します。OSキーボードはChromiumで表示できないためviewport縮小で検証し、実機のSafari / AndroidでのキーボードとSafe Areaは別途確認が必要です。
+
+```sh
+.venv/bin/python -m pip install playwright
+.venv/bin/python -m playwright install chromium
+CODEX_GUI_BROWSER=1 .venv/bin/python -m pytest tests/test_ui_mobile_browser.py tests/test_ui_attachments_browser.py
+```
+
 ## 予約指示（Scheduled Instructions）
 
 **予約指示**は、Task の**既存の Codex thread** に対する追加ターンを、他の Task が終わるまで保留しておく機能です。Task の依存関係とは別物で、対象 Task を待たせることも、Task を起動することもありません。

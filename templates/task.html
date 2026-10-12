@@ -2,9 +2,10 @@
 {% block title %}Task {{ task_id }} - Codex GUI{% endblock %}
 {% block page %}task{% endblock %}
 {% block bodyattrs %}data-task-id="{{ task_id }}"{% endblock %}
-{% block topbar %}<a class="button" href="/dependencies">依存グラフ</a><a class="crumb" href="/">&larr; all tasks</a>{% endblock %}
+{% block topbar %}<a class="button" href="/dependencies">依存グラフを開く</a><a class="crumb" href="/">&larr; all tasks</a>{% endblock %}
 {% block content %}
 <section>
+  <h2 class="mobile-only">Status</h2>
   <div class="title-row">
     <h1 id="task-name">…</h1>
     <span id="task-status" class="status"></span>
@@ -21,8 +22,13 @@
     <summary><h2>Details <span class="muted small" id="meta-summary"></span></h2></summary>
     <dl class="meta" id="meta"></dl>
   </details>
-  <details class="fold"><summary><h2>Prompt</h2></summary><pre id="prompt" class="block"></pre></details>
-  <details class="fold"><summary><h2>Message history &amp; images</h2></summary><ol id="image-message-history" class="message-history"></ol></details>
+  <details class="fold"><summary><h2>Prompt / Instruction</h2></summary><pre id="prompt" class="block"></pre></details>
+  <details class="fold"><summary><h2>Attachments / Message history</h2></summary><ol id="image-message-history" class="message-history"></ol></details>
+</section>
+
+<section id="mobile-execution" class="mobile-only">
+  <h2>Current execution</h2>
+  <div id="mobile-execution-status"></div>
 </section>
 
 <section id="completion-gate">
@@ -69,7 +75,7 @@
 </section>
 
 <details class="fold" id="recovery-section" data-fold="recovery">
-  <summary><h2>Recovery <span class="muted small" id="recovery-summary"></span></h2></summary>
+  <summary><h2><span class="desktop-only">Recovery</span><span class="mobile-only">Execution history / Recovery</span> <span class="muted small" id="recovery-summary"></span></h2></summary>
   <dl class="usage" id="recovery-dl"></dl>
   <div class="inline-actions">
     <button id="retry-now-btn" class="primary" hidden title="Do not wait for the timer: retry now">Retry Now</button>
@@ -124,14 +130,17 @@
   <p class="small muted" id="observed-note"></p>
 </details>
 
-<section>
-  <h2>Codex Log <span class="muted" id="log-count"></span></h2>
-  <div id="log" class="log"></div>
+<section id="logs">
+  <div class="log-heading"><h2>Codex Log <span class="muted" id="log-count"></span></h2>
+    <button id="log-latest" type="button" hidden>最新へ ↓</button>
+  </div>
+  <div id="log" class="log" tabindex="0" aria-label="Execution log"></div>
 </section>
 
-<section>
-  <h2>Additional instruction <span class="muted" id="session-id"></span></h2>
-  <textarea id="instruction" rows="3" placeholder="Next instruction for this task's Codex thread"></textarea>
+<section id="task-controls">
+  <h2><span class="mobile-only">Controls / </span>Additional instruction <span class="muted" id="session-id"></span></h2>
+  <div id="instruction-composer">
+  <textarea id="instruction" rows="3" aria-label="Additional instruction" placeholder="Next instruction for this task's Codex thread"></textarea>
   <div id="instruction-attachments" class="image-composer"></div>
   <div class="inline-actions">
     <button id="send-btn" class="primary" title="Send at Standard speed">Send Standard</button>
@@ -142,7 +151,11 @@
     <button id="new-session-btn" title="Start a fresh Codex thread in this worktree (the old thread's cache is not reused)">Start New Session</button>
     <button id="compact-btn" class="compact-btn" title="Compact this thread's context (thread/compact/start)" hidden>Compact Thread</button>
     <span id="instruction-hint" class="muted"></span>
+    <a class="button mobile-only" href="#task-controls">More…</a>
   </div>
+  </div>
+  <details id="mobile-task-tools" class="mobile-only fold"><summary>Task controls / Git / Delete…</summary><div class="inline-actions"></div></details>
+  <details id="mobile-execution-tools" class="mobile-only fold"><summary>Execution options…</summary><div class="inline-actions"></div></details>
   <p class="muted small" id="retry-hint" hidden></p>
   <fieldset class="run-group" id="schedule-box">
     <legend>Schedule instead of sending now</legend>

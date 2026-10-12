@@ -173,6 +173,7 @@ function initDashboard() {
       repos.map((r) => `<option value="${esc(r)}" ${r === want ? "selected" : ""}>${esc(repoName(r))} — ${esc(r)}</option>`).join("");
     if (!repos.includes(want)) filterEl.dataset.want = "";
     const tasks = filterEl.dataset.want ? allTasks.filter((t) => t.repository === filterEl.dataset.want) : allTasks;
+    window.MobileUI?.renderTasks(tasks);
 
     $("#tasks-body").innerHTML = tasks.length
       ? tasks.map((t) => `
@@ -846,6 +847,7 @@ function initTask() {
     renderSchedule(t, canSchedule);
     renderRecovery(t);
     if (window.CtxUI) CtxUI.renderTask(t, ctxHandlers);
+    window.MobileUI?.renderTask(t);
   }
 
   // ----- dependencies and recovery -----
@@ -1132,13 +1134,23 @@ function initTask() {
     try { renderUsage(await api("GET", `/api/tasks/${id}/usage`)); } catch (_) {}
   }
 
+  let followLog = true;
+  const latestBtn = $("#log-latest");
+  logEl.addEventListener("scroll", () => {
+    followLog = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 30;
+    latestBtn.hidden = followLog;
+  });
+  latestBtn.addEventListener("click", () => {
+    followLog = true; logEl.scrollTop = logEl.scrollHeight; latestBtn.hidden = true;
+  });
   function addEntries(entries) {
-    const stick = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 30;
+    const oldTop = logEl.scrollTop;
     const frag = document.createDocumentFragment();
     for (const e of entries) {
       const div = document.createElement("div");
       const kind = e.stream === "stdout" ? (e.type === "raw" ? "raw" : "") : e.stream;
       div.className = "entry " + kind + (/\/(agent_message|agentMessage)$/.test(e.type) ? " agent_message" : "") + (e.event ? " has-event" : "");
+      if (/commandExecution|command_execution|fileChange|file_change/.test(e.type)) div.classList.add("literal");
       div.innerHTML = `<span class="ts">${esc(hms(e.ts))}</span><span class="type" title="${esc(e.type)}">${esc(e.type)}</span><span class="msg">${esc(e.message)}</span>`;
       if (e.event) {
         div.querySelector(".type").addEventListener("click", () => {
@@ -1154,9 +1166,14 @@ function initTask() {
     }
     logEl.appendChild(frag);
     entryCount += entries.length;
-    while (logEl.childElementCount > MAX_ROWS) logEl.firstElementChild.remove();
+    let removedHeight = 0;
+    while (logEl.childElementCount > MAX_ROWS) {
+      removedHeight += logEl.firstElementChild.offsetHeight;
+      logEl.firstElementChild.remove();
+    }
     $("#log-count").textContent = `(${entryCount} lines)`;
-    if (stick) logEl.scrollTop = logEl.scrollHeight;
+    logEl.scrollTop = followLog ? logEl.scrollHeight : Math.max(0, oldTop - removedHeight);
+    latestBtn.hidden = followLog;
   }
 
   async function pullLog() {
@@ -1250,6 +1267,7 @@ function initTask() {
     action("Max retries", async () => { await api("POST", `/api/tasks/${id}/auto-retry`, { max_retries: Number(v) }); });
   });
   $("#stop-btn").addEventListener("click", () => {
+    if (window.MobileUI && !MobileUI.confirmAction("このタスクの実行を停止しますか？")) return;
     stopping = true;
     action("Stop", async () => { await api("POST", `/api/tasks/${id}/stop`); });
   });
@@ -1263,6 +1281,7 @@ function initTask() {
     action("Push", async () => (await api("POST", `/api/tasks/${id}/push`)).output || "pushed");
   });
   $("#del-wt-btn").addEventListener("click", () => action("Delete worktree", async () => {
+    if (window.MobileUI && !MobileUI.confirmAction("このタスクのworktreeを削除しますか？")) return "cancelled";
     try {
       await api("DELETE", `/api/tasks/${id}/worktree`);
     } catch (e) {

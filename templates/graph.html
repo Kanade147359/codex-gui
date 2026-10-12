@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block page %}graph{% endblock %}
 {% block title %}タスク依存グラフ — Codex GUI{% endblock %}
-{% block topbar %}<a href="/">タスク一覧</a><strong>依存グラフ</strong>{% endblock %}
+{% block topbar %}<a href="/">タスク一覧</a><strong>依存グラフ</strong><button id="graph-detail-close" class="mobile-only" hidden>グラフに戻る</button>{% endblock %}
 {% block content %}
 <div class="graph-toolbar">
   <input id="graph-search" type="search" placeholder="タスクID・タイトルを検索" aria-label="タスク検索">
@@ -14,7 +14,7 @@
 <div class="graph-info"><span>前提 → 後続 · 手動設定のみ表示（AI呼び出しなし）</span><span id="graph-count" role="status" aria-live="polite"></span></div>
 <p id="graph-message" role="alert"></p>
 <div class="graph-shell">
-  <div id="graph-viewport" tabindex="0" aria-label="依存グラフ。背景ドラッグで移動、ホイールでズーム">
+  <div id="graph-viewport" tabindex="0" aria-label="依存グラフ。ドラッグで移動、ピンチまたはホイールでズーム">
     <svg id="graph-svg" width="100%" height="100%" role="img" aria-label="タスクの前提から後続への依存関係">
       <defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
       <g id="graph-world"></g>

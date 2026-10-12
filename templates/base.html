@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>{% block title %}Codex GUI{% endblock %}</title>
   <link rel="stylesheet" href="{{ static_url('style.css') if static_url is defined else '/static/style.css?v=20261005' }}">
 </head>
@@ -12,6 +12,13 @@
     {% block topbar %}{% endblock %}
   </header>
   <main>{% block content %}{% endblock %}</main>
+  <nav class="mobile-nav" aria-label="Mobile navigation">
+    <a href="/#tasks" data-mobile-tab="tasks">Tasks</a>
+    <a href="/#queue" data-mobile-tab="queue">Queue</a>
+    <a href="{% if self.page() == 'task' %}#logs{% else %}/#logs{% endif %}" data-mobile-tab="logs">Logs</a>
+    <a href="/#settings" data-mobile-tab="settings">Settings</a>
+  </nav>
+  <script src="{{ static_url('mobile.js') if static_url is defined else '/static/mobile.js?v=20261005' }}"></script>
   <script src="{{ static_url('context.js') if static_url is defined else '/static/context.js?v=20261005' }}"></script>
   <script src="{{ static_url('attachments.js') if static_url is defined else '/static/attachments.js?v=20261005' }}"></script>
   <script src="{{ static_url('app.js') if static_url is defined else '/static/app.js?v=20261005' }}"></script>

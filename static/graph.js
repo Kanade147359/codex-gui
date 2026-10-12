@@ -166,16 +166,22 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
     } catch(e) {message(e.message);} finally {polling=false;}
   }
   world.addEventListener('click', e=> {
+    if (Date.now() < ignoreClicksUntil) return;
     const node=e.target.closest('[data-node]'), edge=e.target.closest('[data-edge]');
     if(node && e.detail >= 2) { setFocus(node.dataset.node); return; } // double click: show only this task's lineage
     if(node) selected={type:'node',id:node.dataset.node}; else if(edge) selected={type:'edge',id:edge.dataset.edge};
-    render();
+    render(); showMobileDetail();
   });
   world.addEventListener('keydown', e=>{if(e.key==='Enter'||e.key===' ') {e.preventDefault();e.target.dispatchEvent(new MouseEvent('click',{bubbles:true}));}});
   q('#graph-detail').addEventListener('click', e=> {
     const link=e.target.closest('[data-select-edge]'); if(link) {selected={type:'edge',id:link.dataset.selectEdge};render();return;}
     const focus=e.target.closest('[data-focus]'); if(focus) setFocus(focus.dataset.focus||null);
   });
+  function showMobileDetail() {
+    if (!matchMedia('(max-width: 768px)').matches || !selected) return;
+    document.body.classList.add('graph-selected'); q('#graph-detail-close').hidden=false;
+  }
+  q('#graph-detail-close').onclick=()=>{document.body.classList.remove('graph-selected');q('#graph-detail-close').hidden=true;};
   function setFocus(id) { focusId=id; if(id) selected={type:'node',id}; render(true); fit(); }
   q('#graph-focus-clear').onclick=()=>setFocus(null); q('#graph-focus-depth').onchange=()=>{if(focusId){render(true);fit();}};
   q('#graph-search').oninput=q('#graph-project').onchange=()=>{focusId=null;render();fit();refresh();};
@@ -185,10 +191,41 @@ if (typeof document !== 'undefined' && document.body.dataset.page === 'graph') {
   function zoom(factor,x=viewport.clientWidth/2,y=viewport.clientHeight/2) {const next=Math.max(.02,Math.min(3,scale*factor)),f=next/scale;panX=x-(x-panX)*f;panY=y-(y-panY)*f;scale=next;transform();}
   q('#graph-zoom-in').onclick=()=>zoom(1.2);q('#graph-zoom-out').onclick=()=>zoom(1/1.2);
   viewport.addEventListener('wheel',e=>{e.preventDefault();const r=viewport.getBoundingClientRect();zoom(Math.exp(-e.deltaY*.001),e.clientX-r.left,e.clientY-r.top);},{passive:false});
-  let drag=null;
-  viewport.addEventListener('pointerdown',e=>{if(e.target.closest('[data-node],[data-edge]')||e.button!==0)return;drag={x:e.clientX,y:e.clientY,px:panX,py:panY};viewport.setPointerCapture(e.pointerId);});
-  viewport.addEventListener('pointermove',e=>{if(drag){panX=drag.px+e.clientX-drag.x;panY=drag.py+e.clientY-drag.y;transform();}});
-  viewport.addEventListener('pointerup',()=>drag=null);viewport.addEventListener('pointercancel',()=>drag=null);
+  const pointers=new Map(); let gesture=null, ignoreClicksUntil=0, gestureMoved=false;
+  function snapshotGesture() {
+    const ps=[...pointers.values()];
+    if (!ps.length) {gesture=null;return;}
+    const x=ps.reduce((sum,p)=>sum+p.x,0)/ps.length, y=ps.reduce((sum,p)=>sum+p.y,0)/ps.length;
+    gesture={x,y,px:panX,py:panY,scale,distance:ps.length>1?Math.hypot(ps[1].x-ps[0].x,ps[1].y-ps[0].y):0};
+  }
+  viewport.addEventListener('pointerdown',e=>{
+    if(e.button!==0 || (e.pointerType!=='touch' && e.target.closest('[data-node],[data-edge]')))return;
+    if (!pointers.size) gestureMoved=false;
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY,target:e.target,touch:e.pointerType==='touch'});
+    if(pointers.size>1)gestureMoved=true;
+    viewport.setPointerCapture(e.pointerId); snapshotGesture();
+  });
+  viewport.addEventListener('pointermove',e=>{
+    const p=pointers.get(e.pointerId);if(!p||!gesture)return;p.x=e.clientX;p.y=e.clientY;
+    const ps=[...pointers.values()], x=ps.reduce((sum,p)=>sum+p.x,0)/ps.length, y=ps.reduce((sum,p)=>sum+p.y,0)/ps.length;
+    if(Math.hypot(x-gesture.x,y-gesture.y)>6 || ps.length>1)gestureMoved=true;
+    const r=viewport.getBoundingClientRect(), distance=ps.length>1?Math.hypot(ps[1].x-ps[0].x,ps[1].y-ps[0].y):0;
+    scale=gesture.distance?Math.max(.02,Math.min(3,gesture.scale*distance/gesture.distance)):gesture.scale;
+    const factor=scale/gesture.scale;
+    panX=x-r.left-(gesture.x-r.left-gesture.px)*factor;
+    panY=y-r.top-(gesture.y-r.top-gesture.py)*factor;transform();
+  });
+  function endPointer(e) {
+    const p=pointers.get(e.pointerId);if(!p)return;
+    if(e.type==='pointerup' && p.touch && !gestureMoved && pointers.size===1) {
+      const node=p.target.closest('[data-node]'), edge=p.target.closest('[data-edge]');
+      if(node)selected={type:'node',id:node.dataset.node};else if(edge)selected={type:'edge',id:edge.dataset.edge};
+      if(node||edge){render();showMobileDetail();}
+    }
+    if(gestureMoved || p.touch)ignoreClicksUntil=Date.now()+400;
+    pointers.delete(e.pointerId);snapshotGesture();
+  }
+  viewport.addEventListener('pointerup',endPointer);viewport.addEventListener('pointercancel',endPointer);
   viewport.addEventListener('keydown',e=>{const moves={ArrowLeft:[40,0],ArrowRight:[-40,0],ArrowUp:[0,40],ArrowDown:[0,-40]};if(e.target!==viewport)return;if(moves[e.key]){e.preventDefault();panX+=moves[e.key][0];panY+=moves[e.key][1];transform();}if(e.key==='+'||e.key==='=')zoom(1.2);if(e.key==='-')zoom(1/1.2);if(e.key==='0')fit();});
   // Resizable graph zone: height (bottom grip) and detail-panel width (side grip), remembered per browser.
   const root=document.documentElement, store={
