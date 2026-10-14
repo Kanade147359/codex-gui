@@ -636,6 +636,16 @@ class Autopilot:
             task_id=task["id"],
             turn=len(self.manager.db.list_turns(task["id"])),
             execution_key=digest([task["last_turn_at"], task["semantic_result"]]),
+            # Freeze the GUI-recorded completion claim for the independent reviewer.
+            # The acceptance gate separately rechecks the live task result and execution key.
+            recorded_completion=dict(
+                parsed_result=result,
+                origin=(
+                    "controller_mechanical_integration"
+                    if n["spec"]["kind"] == "integration" and not task["codex_thread_id"]
+                    else "strict_final_assistant_json"
+                ),
+            ),
             prompt_digest=digest(task["last_prompt"]),
             instructions_digest=digest(instructions),
             repository=task["repository"],

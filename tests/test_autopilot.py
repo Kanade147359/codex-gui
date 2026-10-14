@@ -68,6 +68,84 @@ def test_T05_T06_quota_classification_is_envelope_only():
         assert claude_error(events, "2.1.185").kind == kind
 
 
+def test_real_reviewer_coverage_must_use_exact_changed_paths():
+    from app.autopilot.providers import REVIEW_SCHEMA, review_schema, validate_result
+
+    candidate = {
+        "id": "candidate-coverage",
+        "run_generation": 1,
+        "payload": {
+            "scope": {
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+                "tree_sha": "c" * 40,
+                "diff_digest": "d" * 64,
+            },
+            "changed_paths": ["src/a.py"],
+        },
+    }
+    schema = review_schema(candidate)
+    assert schema["properties"]["coverage"]["items"]["enum"] == ["src/a.py"]
+    assert "enum" not in REVIEW_SCHEMA["properties"]["coverage"]["items"]
+    approved = {
+        "candidate_id": candidate["id"],
+        "run_generation": 1,
+        "scope": candidate["payload"]["scope"],
+        "verdict": "APPROVE",
+        "blocking": [],
+        "nonblocking": [],
+        "coverage": ["src/a.py"],
+        "unverified": [],
+        "resolved": [],
+    }
+    assert validate_result(approved, candidate) == approved
+
+    broken = dict(approved, coverage=["src/a.py created as the only changed file"])
+    with pytest.raises(ValueError, match="exact changed paths"):
+        validate_result(broken, candidate)
+    with pytest.raises(ValueError, match="exact changed paths"):
+        validate_result(dict(approved, coverage=["src/a.py", "README.md"]), candidate)
+
+    # A reviewer must not claim approval of a file that was never inspected.
+    with pytest.raises(ValueError, match="exact changed paths"):
+        validate_result(dict(approved, coverage=["README.md"]), candidate)
+    # Nonapproval reports can still document incomplete coverage and why.
+    incomplete = dict(broken, verdict="INCONCLUSIVE", unverified=["src/a.py"])
+    assert validate_result(incomplete, candidate) == incomplete
+
+
+def test_review_prompt_includes_recorded_completion(git_repo, tmp_path):
+    from app.autopilot.providers import review_prompt
+
+    async def scenario():
+        base = await sha(git_repo)
+        (git_repo / "completion.txt").write_text("done\\n")
+        await git(git_repo, "add", "completion.txt")
+        await git(git_repo, "commit", "-m", "test completion")
+        head = await sha(git_repo)
+        recorded = {
+            "parsed_result": {"status": "SUCCESS", "reason": "implemented and verified"},
+            "origin": "strict_final_assistant_json",
+        }
+        candidate = {
+            "id": "completion-candidate",
+            "run_generation": 1,
+            "payload": {
+                "scope": await scope(git_repo, base, head),
+                "contract": {},
+                "acceptance": "create completion.txt",
+                "changed_paths": ["completion.txt"],
+                "recorded_completion": recorded,
+            },
+        }
+        source = await snapshot(str(git_repo), head, base, tmp_path / "completion-snapshot")
+        data = json.loads(await review_prompt(candidate, source))
+        assert data["recorded_completion"] == recorded
+        assert data["changed_paths"] == ["completion.txt"]
+
+    asyncio.run(scenario())
+
+
 def test_T22_migration_preserves_legacy(db, settings):
     from app.database import Database
 
