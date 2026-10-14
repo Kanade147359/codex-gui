@@ -78,6 +78,8 @@ class AppServerClient:
         self._global: list[Callable[[str, dict], None]] = []
         self._start_lock = asyncio.Lock()
         self.stderr_tail: list[str] = []
+        self.process_env: Optional[dict] = None
+        self.process_cwd: Optional[str] = None
 
     # ---------- process ----------
 
@@ -101,7 +103,7 @@ class AppServerClient:
             self.stderr_tail = []
             try:
                 self._proc = await asyncio.create_subprocess_exec(
-                    *self.build_command(), env=subscription_env(self.subscription_only),
+                    *self.build_command(), env=self.process_env if self.process_env is not None else subscription_env(self.subscription_only), cwd=self.process_cwd,
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     start_new_session=True, limit=STREAM_LIMIT)
             except OSError as e:

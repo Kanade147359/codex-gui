@@ -469,3 +469,9 @@ body.graph-wide .graph-shell { grid-template-columns:minmax(0,1fr); height:calc(
     padding-right: 6px;
   }
 }
+/* Autopilot history stays readable on small screens; untrusted review text uses textContent. */
+.ap-panel { margin: 1rem; padding: 1rem; }
+.ap-panel textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
+.ap-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; }
+.ap-panel button { margin: .3rem; }
+.ap-node { border: 1px solid var(--border, #555); padding: .8rem; margin: .8rem 0; }

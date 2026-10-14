@@ -150,6 +150,8 @@ class TaskManager:
         self.scheduler = Scheduler(self.tick, settings.scheduler_interval_seconds)
         self.db.add_status_listener(self._status_changed)
         self._slots = asyncio.Semaphore(settings.max_concurrent) if settings.max_concurrent > 0 else None
+        from .autopilot.controller import Autopilot
+        self.autopilot = Autopilot(self)
         self._limits: Optional[dict] = None
         self._limits_at = 0.0
         self._limits_history_at = 0.0
@@ -277,7 +279,8 @@ class TaskManager:
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
                           allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
-                          completion_contract: Optional[dict] = None, attachment_ids=()) -> dict:
+                          completion_contract: Optional[dict] = None, attachment_ids=(),
+                          _defer_dispatch: bool = False, _task_id: Optional[str] = None) -> dict:
         try:
             rules = completion.contract(completion_contract)
         except ValueError as e:
@@ -331,7 +334,7 @@ class TaskManager:
             repo, base_sha, tool_output=tool_output, tool_output_limit=tool_output_limit, skills=skills, skills_budget=skills_budget,
             allow_subagents=allow_subagents, tool_profile=tool_profile, cwd_subdir=cwd_subdir)
 
-        task_id = make_task_id()
+        task_id = _task_id or make_task_id()
         branch = branch_name(task_id, name)
         wt = worktree_path(self.settings.worktrees_dir, repo, task_id)
         # A task that waits for others gets its worktree just before it runs (see _ensure_worktree): no idle worktrees
@@ -368,7 +371,7 @@ class TaskManager:
             self._verify_in_background(task_id)
         if deps:
             self._evaluate_one(task_id)  # the prerequisites may be done already (or already failed)
-        else:
+        elif not _defer_dispatch:
             self._dispatch(task_id)
         return self.db.get_task(task_id)
 
@@ -604,6 +607,10 @@ class TaskManager:
             return False
         task = self.db.get_task(task_id)
         if task is None or task["status"] != "queued" or task["claimed_by"]:
+            return False
+        if not self.autopilot.can_dispatch(task_id):
+            return False
+        if self._slots and len(self._jobs) >= self.settings.max_concurrent:
             return False
         turn = self._pending_turn(task)
         check_deps = turn.trigger == "initial" and not turn.ignore_dependencies
@@ -1264,6 +1271,11 @@ class TaskManager:
     async def _completion_fields(self, task_id: str, text: str) -> dict:
         try:
             fields = await completion.check(self.get(task_id), text, self.settings.home)
+            if self.autopilot.ledger.node_for_task(task_id):
+                # Existing evidence PASS is not execution of the Autopilot validation profile.
+                fields.update(task_outcome="needs_review", approval_source="", approved_at=None,
+                              outcome_reason="Autopilot candidate validation and independent review pending")
+                return fields
             return completion.approve_verified(fields, self.completion_approval_settings()["auto_approve_verified_success"])
         except Exception as e:
             # Check infrastructure errors are semantic uncertainty, never automatic process retries.
@@ -1496,6 +1508,7 @@ class TaskManager:
     async def shutdown(self) -> None:
         """Called when the GUI exits: running turns are stopped. Threads stay on disk and can be resumed later."""
         self._shutting_down = True
+        await self.autopilot.shutdown()
         await self.scheduler.stop()
         self.db.remove_status_listener(self._status_changed)
         for task_id in list(self._jobs):
@@ -1684,7 +1697,7 @@ class TaskManager:
         """One scheduling pass (the Scheduler calls it every few seconds and whenever a status changes). Idempotent."""
         if self._shutting_down:
             return
-        for name, step in (("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
+        for name, step in (("autopilot", self.autopilot.tick), ("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
                            ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue)):
             try:
                 step()
@@ -1840,7 +1853,7 @@ class TaskManager:
             self._start_retry(task_id)
 
     def _tick_queue(self) -> None:
-        for task in self.db.list_tasks_by_status(["queued"]):
+        for task in sorted(self.db.list_tasks_by_status(["queued"]),key=self.autopilot.queue_priority):
             if not task["claimed_by"]:
                 self._dispatch(task["id"])
 

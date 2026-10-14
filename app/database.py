@@ -358,6 +358,8 @@ class Database:
             approval_source TEXT NOT NULL, approved_at TEXT NOT NULL, reason TEXT NOT NULL,
             task_outcome TEXT NOT NULL, actor TEXT NOT NULL, completion_checks TEXT NOT NULL)""")
         self._conn.commit()
+        from .autopilot.ledger import migrate
+        migrate(self)
 
     def _migrate(self) -> None:
         for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),

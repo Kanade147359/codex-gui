@@ -4,6 +4,8 @@
 {% block bodyattrs %}data-task-id="{{ task_id }}"{% endblock %}
 {% block topbar %}<a class="button" href="/dependencies">依存グラフを開く</a><a class="crumb" href="/">&larr; all tasks</a>{% endblock %}
 {% block content %}
+<section class="panel ap-panel" id="ap-task-review" data-task-id="{{ task_id }}" hidden></section>
+<script src="{{ static_url('autopilot-task.js') }}" defer></script>
 <section>
   <h2 class="mobile-only">Status</h2>
   <div class="title-row">
