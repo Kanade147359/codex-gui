@@ -52,7 +52,8 @@ if node == "00":
     (root / "plan.json").write_text(json.dumps(changes))
     (root / "HANDOFF.md").write_text("Fixed planning handoff: COMMON-OK\n")
 if node == "D":
-    assert all((root / (p + ".txt")).read_text().startswith("good\n") for p in ("A", "B", "C")), (
+    expected = "good\nCOMMON-OK\n" if synthetic else "good\n"
+    assert all((root / (p + ".txt")).read_text() == expected for p in ("A", "B", "C")), (
         "pinned integration input missing"
     )
     if synthetic:
