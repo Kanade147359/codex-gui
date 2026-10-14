@@ -61,7 +61,9 @@ workflow-owned jobs/turns and disables retry, fallback, merge and successors.
 Stopped workflows cannot automatically resume; a new reviewed plan is required.
 Worktrees and logs remain available.
 
-On restart, known completed results are reconciled. An external operation with
+On restart, known completed results are reconciled. A recorded completed merge is
+checked against the worktree branch, fixed head, clean index and every pinned input
+before submission continues, without issuing another merge. An external operation with
 unknown outcome or a still-live CLI enters `reconciling`, preserving PID identity,
 Git ref, scope and logs. It is not blindly launched a second time. `Reconcile`
 performs inspection; uncertain operations require an owner-reviewed recovery plan.
@@ -70,11 +72,14 @@ repair reservation and downstream release are idempotent in SQLite.
 
 The default host caps are implementation 3, review 1, managed validation 1 and
 integration 1. Workflow policy may reduce these; host Settings may change the
-caps. Review/fix/integration precede new work and old queued tasks age into priority.
+caps (`CODEX_GUI_AUTOPILOT_IMPLEMENTATION_SLOTS`, `REVIEW_SLOTS`, `VALIDATOR_SLOTS`,
+`INTEGRATION_SLOTS`, each with the `CODEX_GUI_AUTOPILOT_` prefix). Review/fix/integration
+precede new work and old queued tasks age into priority.
 Codex fallback uses the existing `_slots` provider semaphore. No second scheduler
 or double-held implementation semaphore is added.
 
-Each integration node owns its worktree and task branch. It merges explicitly
+Each integration node owns its worktree and workflow branch under
+`autopilot/<workflow-id>/integration/<node-id>`. It merges explicitly
 pinned accepted SHA inputs, skips commits already included, records order and
 start/end refs, and always validates/reviews the combined result. Conflicts use
 the dedicated integration Codex task, then submit a new full candidate. Successors
@@ -109,6 +114,20 @@ python -m venv /tmp/codex-gui-autopilot-venv
 /tmp/codex-gui-autopilot-venv/bin/pip install -r requirements-dev.txt
 /tmp/codex-gui-autopilot-venv/bin/pytest -q tests/test_autopilot.py
 ```
+
+Optional isolated checks (no real model calls):
+
+```
+CODEX_GUI_AUTOPILOT_CLI_SMOKE=1 pytest -q tests/test_autopilot_cli_smoke.py
+CODEX_GUI_AUTOPILOT_AUTH_SMOKE=1 pytest -q tests/test_autopilot_auth_smoke.py
+CODEX_GUI_BROWSER=1 pytest -q tests/test_autopilot_browser.py
+```
+
+The auth smoke stages only OAuth credentials in a private temporary home and reads
+CLI auth metadata; it does not inspect limits or start model turns. Credentials are
+read-only in review processes, so a required refresh may stop for owner login instead
+of modifying the original account state. Real subscription review requires the owner
+confirmation described above and is a separate operational acceptance step.
 
 All new tests use temporary databases/repositories, fake implementation CLI,
 synthetic review CLI and real isolated managed validators. The A/B/C→I1→D test

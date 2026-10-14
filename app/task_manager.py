@@ -280,7 +280,7 @@ class TaskManager:
                           skills: str = "default", skills_budget: Optional[int] = None,
                           allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
                           completion_contract: Optional[dict] = None, attachment_ids=(),
-                          _defer_dispatch: bool = False, _task_id: Optional[str] = None) -> dict:
+                          _defer_dispatch: bool = False, _task_id: Optional[str] = None, _branch: Optional[str] = None) -> dict:
         try:
             rules = completion.contract(completion_contract)
         except ValueError as e:
@@ -335,7 +335,7 @@ class TaskManager:
             allow_subagents=allow_subagents, tool_profile=tool_profile, cwd_subdir=cwd_subdir)
 
         task_id = _task_id or make_task_id()
-        branch = branch_name(task_id, name)
+        branch = _branch or branch_name(task_id, name)
         wt = worktree_path(self.settings.worktrees_dir, repo, task_id)
         # A task that waits for others gets its worktree just before it runs (see _ensure_worktree): no idle worktrees
         # for tasks that may never start. An immediate task gets it now, as before.
@@ -630,6 +630,9 @@ class TaskManager:
     def _forget_job(self, task_id: str, job: asyncio.Task) -> None:
         if self._jobs.get(task_id) is job:  # a newer turn of the same task may already be registered
             del self._jobs[task_id]
+        if not self._shutting_down:
+            self.autopilot.tick()
+            self._tick_queue()
 
     # ---------- running ----------
 
@@ -709,6 +712,21 @@ class TaskManager:
         if failure:
             log.add_system(f"cannot start: {failure.message}")
             self._settle(task_id, log, turn, "failed", failure=failure)
+            return False
+        from .autopilot.providers import ProviderFailure
+        try:
+            await self.autopilot.preflight_execution(self.get(task_id))
+        except ProviderFailure as e:
+            node=self.autopilot.ledger.node_for_task(task_id)
+            if node:
+                self.autopilot.ledger.transition(node["id"],node["state"],"blocked_auth" if e.kind=="auth" else "blocked_configuration",reason=str(e))
+            self._settle(task_id,log,turn,"failed",failure=Failure(e.kind,recovery.NON_RETRYABLE,str(e)))
+            return False
+        except AppServerError as e:
+            self._settle(task_id,log,turn,"failed",failure=recovery.classify_app_server_error(e))
+            return False
+        except TaskError as e:
+            self._settle(task_id,log,turn,"failed",failure=Failure("auth",recovery.NON_RETRYABLE,str(e)))
             return False
         if turn.trigger in RETRY_TRIGGERS:
             task = self.get(task_id)

@@ -1,4 +1,5 @@
 """Managed arbitrary-code validation with an allowlisted filesystem and writable build outputs."""
+
 import asyncio
 import os
 from pathlib import Path
@@ -16,11 +17,15 @@ class InfrastructureUnavailable(RuntimeError):
 
 
 def redact(text):
-    text = re.sub(r"(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password)\s*[=:]\s*)[^\s,\"}]+", r"\1[REDACTED]", text)
+    text = re.sub(
+        r"(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password)\s*[=:]\s*)[^\s,\"}]+",
+        r"\1[REDACTED]",
+        text,
+    )
     return re.sub(r"(?:sk-[A-Za-z0-9_-]{12,}|gh[opusr]_[A-Za-z0-9_]{12,})", "[REDACTED]", text)
 
 
-def sandbox(root, scratch, outputs=(), network=False):
+def sandbox(root, scratch, outputs=(), network=False, cwd="/source"):
     bwrap = shutil.which("bwrap")
     if not bwrap:
         raise InfrastructureUnavailable("bubblewrap is required; no unsandboxed fallback")
@@ -35,29 +40,66 @@ def sandbox(root, scratch, outputs=(), network=False):
         for path in ("/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf"):
             if Path(path).exists():
                 args += ["--ro-bind", path, path]
-    args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
-             "--ro-bind", str(root), "/source", "--bind", str(scratch), "/scratch", "--chdir", "/source"]
+    args += [
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--ro-bind",
+        str(root),
+        "/source",
+        "--bind",
+        str(scratch),
+        "/scratch",
+        "--chdir",
+        cwd,
+    ]
     for output in outputs:
         # An output mount may overlay existing code: reject that before executing the candidate.
         target = Path(root) / output
+        if not target.resolve().is_relative_to(Path(root).resolve()) or any(
+            parent.is_symlink() for parent in [target, *target.parents] if parent != Path(root).parent
+        ):
+            raise InfrastructureUnavailable("build output traverses a symlink")
         if target.exists() and (target.is_symlink() or target.is_file() or any(target.iterdir())):
             raise InfrastructureUnavailable("build output must be an absent or empty directory: " + output)
+        target.mkdir(parents=True, exist_ok=True)  # Empty mountpoints do not change the Git source tree.
         args += ["--dir", "/source/" + output, "--tmpfs", "/source/" + output]
     return args
 
 
 def minimal_env():
-    return dict(PATH="/usr/local/bin:/usr/bin:/bin", HOME="/scratch", TMPDIR="/scratch", LANG="C.UTF-8",
-                PYTHONDONTWRITEBYTECODE="1", PYTEST_ADDOPTS="-p no:cacheprovider", npm_config_cache="/scratch/npm",
-                CARGO_HOME="/scratch/cargo", CARGO_TARGET_DIR="/scratch/target", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+    return dict(
+        PATH="/usr/local/bin:/usr/bin:/bin",
+        HOME="/scratch",
+        TMPDIR="/scratch",
+        LANG="C.UTF-8",
+        PYTHONDONTWRITEBYTECODE="1",
+        PYTEST_ADDOPTS="-p no:cacheprovider",
+        npm_config_cache="/scratch/npm",
+        CARGO_HOME="/scratch/cargo",
+        CARGO_TARGET_DIR="/scratch/target",
+        GIT_CONFIG_GLOBAL="/dev/null",
+        GIT_CONFIG_SYSTEM="/dev/null",
+    )
 
 
 async def run_bounded(argv, *, cwd=None, env=None, timeout=300, stdin=None, on_start=None, log_path=None):
-    proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=env, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=cwd,
+        env=env,
+        stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+    )
     if on_start:
         on_start(proc)
     collected = bytearray()
+
     async def consume():
         if stdin is not None:
             proc.stdin.write(stdin.encode())
@@ -71,6 +113,7 @@ async def run_bounded(argv, *, cwd=None, env=None, timeout=300, stdin=None, on_s
                 raise InfrastructureUnavailable("output limit exceeded")
             collected.extend(chunk)
         await proc.wait()
+
     timed_out = False
     try:
         await asyncio.wait_for(consume(), timeout)
@@ -96,16 +139,42 @@ class Validator:
         checks = []
         for p in profile["artifacts"]:
             target = Path(root) / p
-            valid = target.exists() and not target.is_symlink() and target.resolve().is_relative_to(Path(root).resolve())
+            valid = (
+                target.exists() and not target.is_symlink() and target.resolve().is_relative_to(Path(root).resolve())
+            )
             checks.append(dict(artifact=p, exit_status=0 if valid else 1))
         with tempfile.TemporaryDirectory(prefix="ap-validator-") as scratch:
             for i, command in enumerate(profile["commands"]):
+                command_started = time.time()
                 argv = sandbox(root, scratch, profile["outputs"]) + ["--", *command]
-                rc, output, timeout = await run_bounded(argv, env=minimal_env(), timeout=profile["timeout"], on_start=on_start, log_path=log_dir / f"{i}.log")
+                rc, output, timeout = await run_bounded(
+                    argv,
+                    env=minimal_env(),
+                    timeout=profile["timeout"],
+                    on_start=on_start,
+                    log_path=log_dir / f"{i}.log",
+                )
                 if "bwrap:" in output and rc != 0:
                     raise InfrastructureUnavailable(output[-1000:])
-                checks.append(dict(command=command, command_digest=digest(command), exit_status=rc, timed_out=timeout,
-                                   log=str(log_dir / f"{i}.log"), excerpt=output[-4000:] if rc or timeout else ""))
+                checks.append(
+                    dict(
+                        command=command,
+                        command_digest=digest(command),
+                        exit_status=rc,
+                        timed_out=timeout,
+                        started_at=command_started,
+                        finished_at=time.time(),
+                        log=str(log_dir / f"{i}.log"),
+                        excerpt=output[-4000:] if rc or timeout else "",
+                    )
+                )
         passed = bool(checks) and all(c["exit_status"] == 0 and not c.get("timed_out") for c in checks)
-        return dict(scope=candidate["payload"]["scope"], profile_digest=digest(profile), environment="bwrap:allowlisted-runtime;network=off;source=read-only",
-                    started_at=began, finished_at=time.time(), checks=checks, state="PASS" if passed else "FAIL")
+        return dict(
+            scope=candidate["payload"]["scope"],
+            profile_digest=digest(profile),
+            environment="bwrap:allowlisted-runtime;network=off;source=read-only",
+            started_at=began,
+            finished_at=time.time(),
+            checks=checks,
+            state="PASS" if passed else "FAIL",
+        )

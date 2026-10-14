@@ -1,6 +1,7 @@
 (() => {
   const el = id => document.getElementById(id);
   let preview = null, selected = null;
+  let backlogSelections = [];
   async function api(url, body) {
     const r = await fetch(url, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {});
     const data = await r.json();
@@ -43,7 +44,24 @@
   }
   el('ap-backlog-load').onclick = async () => {
     try { const data = await api('/api/autopilot/backlog'); el('ap-backlog').replaceChildren();
-      for (const task of data.tasks) {const row = text('label',`${task.name}: ${task.category} `); const check = document.createElement('input'); check.type = 'checkbox'; check.disabled = task.category === 'already_registered'; check.onchange = () => {el('ap-message').textContent = `Manifest task_id: ${task.task_id}; contract: ${JSON.stringify(task.contract)}`;}; row.prepend(check); el('ap-backlog').append(row);}
+      backlogSelections = [];
+      for (const task of data.tasks) {
+        const row = text('div',`${task.name}: ${task.category} `);
+        const check = document.createElement('input'); check.type = 'checkbox'; check.disabled = task.category === 'already_registered';
+        const paths = document.createElement('input'); paths.value = JSON.stringify(task.paths); paths.setAttribute('aria-label',`編集担当path ${task.task_id}`);
+        const validation = document.createElement('textarea'); validation.rows = 3; validation.value = JSON.stringify(task.validation); validation.setAttribute('aria-label',`必須validation ${task.task_id}`);
+        row.prepend(check); row.append(text('p',`Contract: ${JSON.stringify(task.contract)}`),paths,validation); el('ap-backlog').append(row);
+        backlogSelections.push({task,check,paths,validation});
+      }
+    } catch(e) {showError(e);}
+  };
+  el('ap-backlog-prepare').onclick = async () => {
+    try {
+      const tasks = backlogSelections.filter(s => s.check.checked).map(s => ({task_id:s.task.task_id,paths:JSON.parse(s.paths.value),validation:JSON.parse(s.validation.value)}));
+      const result = await api('/api/autopilot/backlog/dry-run',{tasks});
+      el('ap-manifest').value = JSON.stringify(result.manifest,null,2); preview = result.preview;
+      el('ap-preview-result').textContent = JSON.stringify(preview,null,2); el('ap-start').disabled = false;
+      el('ap-opt-in').checked = false; el('ap-message').textContent = '一括登録のprofile・contract・権限を確認してopt-inしてください。';
     } catch(e) {showError(e);}
   };
   refresh(); setInterval(refresh,3000);

@@ -9,65 +9,114 @@ from app.codex_runner import CodexRunner
 
 
 class ImplementationRunner(CodexRunner):
-    def build_command(self,task,resume_thread=None):
-        return [sys.executable,str(Path(__file__).with_name("fake_autopilot_implementation.py"))]+(["resume",resume_thread] if resume_thread else [])
+    def build_command(self, task, resume_thread=None):
+        return [sys.executable, str(Path(__file__).with_name("fake_autopilot_implementation.py"))] + (
+            ["resume", resume_thread] if resume_thread else []
+        )
 
 
 class FixtureProvider(ClaudeProvider):
-    def __init__(self,provider,scenario=None):
+    def __init__(self, provider, scenario=None):
         super().__init__()
         self.provider = provider
         self.scenario = scenario or {}
         self.calls = []
 
-    async def probe_capabilities_and_auth(self,policy):
-        return dict(version="fixture",auth="fake; no real account")
+    async def probe_capabilities_and_auth(self, policy):
+        return dict(version="fixture", auth="fake; no real account", fixture=True)
 
-    async def start_review(self,candidate,policy,root,attempt,on_identity):
-        self.calls.append(dict(candidate=candidate["id"],attempt=attempt["id"]))
+    async def start_review(self, candidate, policy, root, attempt, on_identity):
+        self.calls.append(dict(candidate=candidate["id"], attempt=attempt["id"]))
+
         def started(proc):
             self.processes[attempt["id"]] = proc
-            on_identity(dict(pid=proc.pid,version="synthetic fixture",model="fake",session="independent-"+attempt["id"]))
+            on_identity(
+                dict(pid=proc.pid, version="synthetic fixture", model="fake", session="independent-" + attempt["id"])
+            )
+
         try:
-            _,output,_ = await run_bounded([sys.executable,str(Path(__file__).with_name("fake_autopilot_review.py"))],
-                            stdin=json.dumps(dict(candidate=candidate,provider=self.provider,scenario=self.scenario,root=str(root))),on_start=started,timeout=15)
+            _, output, _ = await run_bounded(
+                [sys.executable, str(Path(__file__).with_name("fake_autopilot_review.py"))],
+                stdin=json.dumps(
+                    dict(candidate=candidate, provider=self.provider, scenario=self.scenario, root=str(root))
+                ),
+                on_start=started,
+                timeout=15,
+                log_path=attempt.get("event_log"),
+            )
             events = [json.loads(s) for s in output.splitlines()]
             if events and "fixture_error" in events[0]:
-                raise ProviderFailure(events[0]["fixture_error"],"Synthetic fixture provider failure")
-            result = self.consume_events(output,"2.1.185",candidate)
-            return dict(result,provider=self.provider,model="fake",version="synthetic fixture",session=result.pop("_session",None),independence="independent fixture process")
+                raise ProviderFailure(events[0]["fixture_error"], "Synthetic fixture provider failure")
+            result = self.consume_events(output, "2.1.185", candidate)
+            return dict(
+                result,
+                provider=self.provider,
+                model="fake",
+                version="synthetic fixture",
+                session=result.pop("_session", None),
+                independence="independent fixture process",
+            )
         finally:
-            self.processes.pop(attempt["id"],None)
+            self.processes.pop(attempt["id"], None)
 
 
-def install(manager,claude=None,codex=None):
+def install(manager, claude=None, codex=None):
     manager.runner = ImplementationRunner()
-    manager.autopilot = Autopilot(manager,providers=dict(claude=claude or FixtureProvider("claude"),codex=codex or FixtureProvider("codex")))
+    manager.autopilot = Autopilot(
+        manager, providers=dict(claude=claude or FixtureProvider("claude"), codex=codex or FixtureProvider("codex"))
+    )
     return manager.autopilot
 
 
-def plan(repo,names=("C",)):
-    nodes=[]
+def plan(repo, names=("C",)):
+    nodes = []
     for n in names:
-        nodes.append(dict(id=n,prompt="fixture "+n,paths=[n+".txt"],validation=dict(commands=[["python3","-c",f"from pathlib import Path; assert Path('{n}.txt').exists()"]],artifacts=[n+".txt"])))
-    return dict(version=1,name="isolated fixture",repository=str(repo),base_ref="main",nodes=nodes,
-                policy=dict(extra_usage_disabled_confirmed=True,provider_backoff=1),permissions=dict(commit_owned_changes=True),inputs={})
+        nodes.append(
+            dict(
+                id=n,
+                prompt="fixture " + n,
+                paths=[n + ".txt"],
+                validation=dict(
+                    commands=[["python3", "-c", f"from pathlib import Path; assert Path('{n}.txt').exists()"]],
+                    artifacts=[n + ".txt"],
+                ),
+            )
+        )
+    return dict(
+        version=1,
+        name="isolated fixture",
+        repository=str(repo),
+        base_ref="main",
+        nodes=nodes,
+        policy=dict(extra_usage_disabled_confirmed=True, provider_backoff=1),
+        permissions=dict(commit_owned_changes=True),
+        inputs={},
+    )
 
 
-async def register(ap,raw):
+async def register(ap, raw):
     preview = await ap.dry_run(raw)
-    w = await ap.register(raw,preview["input_digest"])
-    await ap.control(w["id"],"start")
+    w = await ap.register(raw, preview["input_digest"])
+    await ap.control(w["id"], "start")
     return w["id"]
 
 
-async def drive(manager,predicate,timeout=20):
+async def drive(manager, predicate, timeout=20):
     import asyncio
     import time
-    deadline=time.monotonic()+timeout
-    while time.monotonic()<deadline:
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         manager.tick()
         if predicate():
             return
-        await asyncio.sleep(.02)
-    raise AssertionError("workflow timed out: "+json.dumps([manager.autopilot.ledger.view(w["id"]) for w in manager.autopilot.ledger.rows("workflows")],default=str)[-6000:])
+        await asyncio.sleep(0.02)
+    views = [manager.autopilot.ledger.view(w["id"]) for w in manager.autopilot.ledger.rows("workflows")]
+    diagnostics = manager.settings.home / "autopilot-test-failure.json"
+    diagnostics.write_text(json.dumps(views, indent=2, default=str))
+    raise AssertionError(
+        "workflow timed out: "
+        + json.dumps([(n["name"], n["state"], n["reason"][:200]) for w in views for n in w["nodes"]])
+        + "; diagnostics: "
+        + str(diagnostics)
+    )

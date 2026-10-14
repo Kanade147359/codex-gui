@@ -32,6 +32,11 @@ class Settings:
     retry_backoff_seconds: tuple = (10.0, 30.0, 60.0)
     # How often the scheduler looks at waiting / queued / retry_wait tasks (it also wakes up on every status change).
     scheduler_interval_seconds: float = 2.0
+    # Autopilot caps are shared across opt-in workflows; existing ordinary tasks retain their settings.
+    autopilot_implementation_slots: int = 3
+    autopilot_review_slots: int = 1
+    autopilot_validator_slots: int = 1
+    autopilot_integration_slots: int = 1
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -47,6 +52,10 @@ class Settings:
             default_max_retries=int(os.environ.get("CODEX_GUI_MAX_RETRIES", "3")),
             retry_backoff_seconds=tuple(float(x) for x in os.environ.get("CODEX_GUI_RETRY_BACKOFF", "10,30,60").split(",") if x.strip()),
             scheduler_interval_seconds=float(os.environ.get("CODEX_GUI_SCHEDULER_INTERVAL", "2")),
+            autopilot_implementation_slots=int(os.environ.get("CODEX_GUI_AUTOPILOT_IMPLEMENTATION_SLOTS","3")),
+            autopilot_review_slots=int(os.environ.get("CODEX_GUI_AUTOPILOT_REVIEW_SLOTS","1")),
+            autopilot_validator_slots=int(os.environ.get("CODEX_GUI_AUTOPILOT_VALIDATOR_SLOTS","1")),
+            autopilot_integration_slots=int(os.environ.get("CODEX_GUI_AUTOPILOT_INTEGRATION_SLOTS","1")),
         )
 
     @property
