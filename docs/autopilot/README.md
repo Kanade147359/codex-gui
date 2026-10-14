@@ -54,6 +54,13 @@ fallback reason, findings, repair budget, acceptance and operation history.
 Old candidates and incomplete attempts stay in history. Normal implementation
 success is not granted until the controller gate commits acceptance atomically.
 
+Explicit new instructions for an unconsumed/leaf task resume its existing thread,
+reserve a new turn and invalidate prior review generations. Scheduled instructions
+use the same atomic reservation and wait for independent acceptance before the next
+instruction. Owner instructions are audited as input; they do not clear manual gates
+or silently update already-consumed downstream inputs. An accepted task may start a
+new leaf turn; only genuine prior success resets its automatic repair budget.
+
 Pause stops new dispatch. Already claimed read-only validation/review may finish;
 their results are saved and acceptance waits for Resume. A claimed integration
 operation keeps its durable metadata. Stop increments run generation, cancels only

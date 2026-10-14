@@ -1,0 +1,394 @@
+{
+  "evidence_kind": "SYNTHETIC_PROVIDER_ISOLATED_E2E",
+  "tested_code_sha": "6040c605a4e2578be072b6d991590474b8cb7d5a",
+  "raw_ledger_sha256": "1f8ec7af76689d38e876233c96ad3e5bf36b3c4d8f1d55e285764727323bed5e",
+  "workflow_state": "completed",
+  "restart": "fresh TaskManager/controller and reopened SQLite; no Pause/Resume required",
+  "manual_send": 0,
+  "manual_approve": 0,
+  "manual_merge": 0,
+  "initial_repository_sha": "93088774878a5f2e621783fb559f7e885f2e2aea",
+  "nodes": [
+    {
+      "name": "A",
+      "kind": "code",
+      "state": "accepted",
+      "fix_rounds": 1,
+      "pinned_inputs": [],
+      "candidates": [
+        {
+          "id": "97cb3de6a1af4ca8a00b4c3a65c860be",
+          "generation": 1,
+          "scope": {
+            "base_sha": "93088774878a5f2e621783fb559f7e885f2e2aea",
+            "diff_digest": "4cfdd2c456086aa00d49afb50e2c39b012072fa9ff81ec016c1f09af60bef288",
+            "head_sha": "f925ead5dd210d484e294904bcb46cc276d631cc",
+            "tree_sha": "38dbb245f31c43be5264562c01c17aae5411e380"
+          },
+          "state": "submitted",
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "c3977233e404a34dbc7d1e4c40581e98482916c1b86f2f480823b9760bdc261d",
+              "exit_statuses": [
+                0,
+                0
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "claude",
+              "state": "completed",
+              "verdict": "CHANGES_REQUESTED",
+              "error_kind": null,
+              "fallback_reason": "",
+              "session": "review-01966afc78094091ba4dce21ac8dd64d",
+              "model": "fake",
+              "blocking": [
+                {
+                  "id": "A-value",
+                  "line": 1,
+                  "path": "A.txt",
+                  "reason": "Acceptance requires good, fixture currently writes bad"
+                }
+              ],
+              "resolved": []
+            }
+          ],
+          "acceptance_count": 0
+        },
+        {
+          "id": "6cce97e7e80244c4a431df725252ecd8",
+          "generation": 2,
+          "scope": {
+            "base_sha": "93088774878a5f2e621783fb559f7e885f2e2aea",
+            "diff_digest": "ea39b8c75eefba25aaf89aaa31af4252a5f1d701a0af090ca06db05ee3fe3be6",
+            "head_sha": "90ea399517b80b780e2ce4c0e66874ba80e78c54",
+            "tree_sha": "a075b0479dbf68508a12fa8be7e41e5fd6e3d339"
+          },
+          "state": "accepted",
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "c3977233e404a34dbc7d1e4c40581e98482916c1b86f2f480823b9760bdc261d",
+              "exit_statuses": [
+                0,
+                0
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "fallback_reason": "confirmed Claude included quota",
+              "session": "review-249bdf47a7e84d48b925084ed9333486",
+              "model": "fake",
+              "blocking": [],
+              "resolved": [
+                "A-value"
+              ]
+            }
+          ],
+          "acceptance_count": 1
+        }
+      ],
+      "operations": [
+        {
+          "kind": "fix",
+          "state": "completed",
+          "payload": {
+            "candidate_id": "97cb3de6a1af4ca8a00b4c3a65c860be",
+            "finished_at": "2026-10-14T14:34:53Z",
+            "implementation_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            },
+            "prompt_digest": "2f845775cbf3bb0f5868c22cd4221a8903c7b8d3ddfd0d351135d83b5fe1cc88",
+            "thread": "implementation-4922f505f5e04fc7addc3321aef9c64a"
+          }
+        }
+      ]
+    },
+    {
+      "name": "B",
+      "kind": "code",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "pinned_inputs": [],
+      "candidates": [
+        {
+          "id": "09436630f3d843d8b6f97a8a2f47fb4f",
+          "generation": 1,
+          "scope": {
+            "base_sha": "93088774878a5f2e621783fb559f7e885f2e2aea",
+            "diff_digest": "0c669c0a941859491e5d653539e51293f025c787646dda0b6296e1dc940bd6d7",
+            "head_sha": "29db9490ae209e190751c666f2fecddb525638e9",
+            "tree_sha": "1d8c833b7b9c3bf81824152ab72277964a25b0dc"
+          },
+          "state": "accepted",
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "04b4a38221a593ed2c516453b168a364c57a52e199f4e0fc3d9dbb1054dab679",
+              "exit_statuses": [
+                0,
+                0
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "claude",
+              "state": "incomplete",
+              "verdict": null,
+              "error_kind": "included_quota",
+              "fallback_reason": "",
+              "session": null,
+              "model": null,
+              "blocking": [],
+              "resolved": []
+            },
+            {
+              "provider": "codex",
+              "state": "completed",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "fallback_reason": "confirmed Claude included quota",
+              "session": "review-889062db3f344472a9f1cc673953c2ab",
+              "model": "fake",
+              "blocking": [],
+              "resolved": []
+            }
+          ],
+          "acceptance_count": 1
+        }
+      ],
+      "operations": []
+    },
+    {
+      "name": "C",
+      "kind": "code",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "pinned_inputs": [],
+      "candidates": [
+        {
+          "id": "28ef965fe93046229c7f7df6a741bf76",
+          "generation": 1,
+          "scope": {
+            "base_sha": "93088774878a5f2e621783fb559f7e885f2e2aea",
+            "diff_digest": "fba0b66705720572dbc966d492590dee32db771909f8d9e26e3e13f1f8ddd7e1",
+            "head_sha": "940e3c4e01fa5ce699b6cc0c4fff67bb62484ad5",
+            "tree_sha": "fc3ef9f999139692db80c166b909d7a9db775432"
+          },
+          "state": "accepted",
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "f7f89592113862350385b156666028f5e1c3dce409114d29345aaef299ae5058",
+              "exit_statuses": [
+                0,
+                0
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "fallback_reason": "confirmed Claude included quota",
+              "session": "review-f6159ae6b6f8475ebfc3456248bbfc36",
+              "model": "fake",
+              "blocking": [],
+              "resolved": []
+            }
+          ],
+          "acceptance_count": 1
+        }
+      ],
+      "operations": []
+    },
+    {
+      "name": "I1",
+      "kind": "integration",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "pinned_inputs": [
+        {
+          "candidate_id": "6cce97e7e80244c4a431df725252ecd8",
+          "head_sha": "90ea399517b80b780e2ce4c0e66874ba80e78c54",
+          "kind": "code",
+          "node": "A"
+        },
+        {
+          "candidate_id": "09436630f3d843d8b6f97a8a2f47fb4f",
+          "head_sha": "29db9490ae209e190751c666f2fecddb525638e9",
+          "kind": "code",
+          "node": "B"
+        },
+        {
+          "candidate_id": "28ef965fe93046229c7f7df6a741bf76",
+          "head_sha": "940e3c4e01fa5ce699b6cc0c4fff67bb62484ad5",
+          "kind": "code",
+          "node": "C"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "043df81b5e684931aa168b97e956ffdc",
+          "generation": 1,
+          "scope": {
+            "base_sha": "93088774878a5f2e621783fb559f7e885f2e2aea",
+            "diff_digest": "98ade33c5f26df6a7f4244c8a93a39afe0b55394925c9fea745d8189b45235ae",
+            "head_sha": "23e5366404e68f46a7cb804bb92aca7f1241bac6",
+            "tree_sha": "a2f8fbc3d29fc1efb9e5a1c34f469d6329519cb8"
+          },
+          "state": "accepted",
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "b3504767c510d875ced04c0b04d363cf12497e37fdb68089d761f2a2882a2b69",
+              "exit_statuses": [
+                0,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "fallback_reason": "confirmed Claude included quota",
+              "session": "review-c73d924df8d64a3e84ca98bd09f1627c",
+              "model": "fake",
+              "blocking": [],
+              "resolved": []
+            }
+          ],
+          "acceptance_count": 1
+        }
+      ],
+      "operations": [
+        {
+          "kind": "integration",
+          "state": "merged",
+          "payload": {
+            "accepted_candidate_id": "043df81b5e684931aa168b97e956ffdc",
+            "accepted_head_sha": "23e5366404e68f46a7cb804bb92aca7f1241bac6",
+            "accepted_review_id": "32cde5f37a384704bef6b57fb6406803",
+            "expected_ref": "refs/heads/autopilot/1bd0154f556541508f9e5263fd82fb39/integration/I1",
+            "head_sha": "23e5366404e68f46a7cb804bb92aca7f1241bac6",
+            "inputs": [
+              {
+                "candidate_id": "6cce97e7e80244c4a431df725252ecd8",
+                "head_sha": "90ea399517b80b780e2ce4c0e66874ba80e78c54",
+                "kind": "code",
+                "node": "A"
+              },
+              {
+                "candidate_id": "09436630f3d843d8b6f97a8a2f47fb4f",
+                "head_sha": "29db9490ae209e190751c666f2fecddb525638e9",
+                "kind": "code",
+                "node": "B"
+              },
+              {
+                "candidate_id": "28ef965fe93046229c7f7df6a741bf76",
+                "head_sha": "940e3c4e01fa5ce699b6cc0c4fff67bb62484ad5",
+                "kind": "code",
+                "node": "C"
+              }
+            ],
+            "start_sha": "93088774878a5f2e621783fb559f7e885f2e2aea",
+            "state": "merged",
+            "steps": [
+              {
+                "action": "merge",
+                "exit_status": 0,
+                "head": "90ea399517b80b780e2ce4c0e66874ba80e78c54",
+                "start_sha": "93088774878a5f2e621783fb559f7e885f2e2aea"
+              },
+              {
+                "action": "merge",
+                "exit_status": 0,
+                "head": "29db9490ae209e190751c666f2fecddb525638e9",
+                "start_sha": "399761dfe2eace3236d2438b9407d131bb987cda"
+              },
+              {
+                "action": "merge",
+                "exit_status": 0,
+                "head": "940e3c4e01fa5ce699b6cc0c4fff67bb62484ad5",
+                "start_sha": "f1aa564185d8da67a6d39b04718e3dcb0e2143ca"
+              }
+            ],
+            "task_id": "7ebd0b00",
+            "validation_ids": [
+              "f8341b0a466943f4b77659c2d619ae10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "D",
+      "kind": "code",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "pinned_inputs": [
+        {
+          "candidate_id": "043df81b5e684931aa168b97e956ffdc",
+          "head_sha": "23e5366404e68f46a7cb804bb92aca7f1241bac6",
+          "kind": "integration",
+          "node": "I1"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "964c635b887e4b8da811550ec01a4c68",
+          "generation": 1,
+          "scope": {
+            "base_sha": "23e5366404e68f46a7cb804bb92aca7f1241bac6",
+            "diff_digest": "883cf263362b2473559aa3169b9caa08c0c10ad4e4c637be44f425f2b38517aa",
+            "head_sha": "c36890aa628d4972deae0c16aac9ebc532348d36",
+            "tree_sha": "2b5d48e71b55644fb869b4edeabc3cf3de08c718"
+          },
+          "state": "accepted",
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "75586398ab406b2888edfb3246eb4dd454da8fb556db83edc6ff2ca3ea23aa5f",
+              "exit_statuses": [
+                0,
+                0
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "fallback_reason": "confirmed Claude included quota",
+              "session": "review-b0b3a5dc2784477abae124a6ccfced92",
+              "model": "fake",
+              "blocking": [],
+              "resolved": []
+            }
+          ],
+          "acceptance_count": 1
+        }
+      ],
+      "operations": []
+    }
+  ]
+}
