@@ -314,6 +314,7 @@ class Ledger:
                 or task["status"] != "completed"
                 or task["completion_pending"]
                 or digest([task["last_turn_at"], task["semantic_result"]]) != p["execution_key"]
+                or p.get("recorded_completion", {}).get("parsed_result") != result
                 or digest(task["last_prompt"]) != p["prompt_digest"]
                 or digest(owner_instructions) != p["instructions_digest"]
                 or c.execute("SELECT count(*) FROM turns WHERE task_id=?", (task["id"],)).fetchone()[0] != p["turn"]
