@@ -358,6 +358,8 @@ class Database:
             approval_source TEXT NOT NULL, approved_at TEXT NOT NULL, reason TEXT NOT NULL,
             task_outcome TEXT NOT NULL, actor TEXT NOT NULL, completion_checks TEXT NOT NULL)""")
         self._conn.commit()
+        from .autopilot.ledger import migrate
+        migrate(self)
 
     def _migrate(self) -> None:
         for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),
@@ -856,7 +858,7 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def claim_scheduled(self, sid: int, task_fields: dict, thread_id: str) -> bool:
+    def claim_scheduled(self, sid: int, task_fields: dict, thread_id: str, on_claim=None) -> bool:
         """ready -> running AND the target task completed -> queued, as ONE transaction. True for exactly one caller.
 
         The instruction row is only taken if it is still ready, nothing of the same task is running or ahead of it, every
@@ -885,6 +887,8 @@ class Database:
                     [*task_fields.values(), "queued", row["task_id"], thread_id])
                 if cur.rowcount != 1:
                     raise _Rollback()
+                if on_claim is not None:
+                    on_claim(self._conn)
                 self._insert_message(row["task_id"], dict(prompt=row["prompt"], kind="scheduled_instruction",
                                                          attachment_ids=json.loads(row["attachment_ids"])))
         except _Rollback:

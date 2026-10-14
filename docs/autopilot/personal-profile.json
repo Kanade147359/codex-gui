@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "Personal subscription workflow",
+  "repository": "/absolute/path/to/isolated/repository",
+  "base_ref": "main",
+  "permissions": {"commit_owned_changes": true, "publish_main": false},
+  "policy": {
+    "extra_usage_disabled_confirmed": false,
+    "max_fix_rounds": 3,
+    "no_progress_limit": 2,
+    "infra_retries": 2,
+    "implementation_slots": 3,
+    "review_slots": 1,
+    "validator_slots": 1,
+    "integration_slots": 1,
+    "claude_model": "",
+    "codex_model": "",
+    "account": "personal",
+    "bucket": "included"
+  },
+  "inputs": {"COMMON.md": "Read repository instructions. Implement the explicit acceptance scope."},
+  "nodes": [{
+    "id": "implementation",
+    "kind": "code",
+    "prompt": "Implement the requested behavior and its regression tests.",
+    "input_files": ["COMMON.md"],
+    "paths": ["src", "tests"],
+    "contract": {"require_any_change": true, "require_commit": true},
+    "validation": {"commands": [["python3", "-m", "pytest", "-q"]], "timeout": 300, "outputs": [], "artifacts": []}
+  }]
+}

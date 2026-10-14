@@ -1,0 +1,68 @@
+{
+  "tested_code_sha": "6040c605a4e2578be072b6d991590474b8cb7d5a",
+  "baseline_sha": "405d722daab33e8a5ff4413373a9f384f80b47b9",
+  "draft_pr": "https://github.com/Kanade147359/codex-gui/pull/3",
+  "status": [
+    "IMPLEMENTED_UNMERGED",
+    "VERIFIED_WITH_FAKE_PROVIDERS",
+    "CLI_AUTH_METADATA_AND_LOCAL_ENDPOINT_SMOKE_VERIFIED",
+    "REAL_SUBSCRIPTION_REVIEW_NOT_RUN",
+    "NOT_DEPLOYED"
+  ],
+  "checks": [
+    {
+      "command": "pytest -q",
+      "passed": 779,
+      "failed": 3,
+      "skipped": 27,
+      "result": "ONLY_REPRODUCED_BASELINE_FAILURES"
+    },
+    {
+      "command": "CODEX_GUI_AUTOPILOT_AUTH_SMOKE=1 CODEX_GUI_AUTOPILOT_CLI_SMOKE=1 pytest -q tests/test_autopilot.py tests/test_autopilot_api.py tests/test_autopilot_auth_smoke.py tests/test_autopilot_cli_smoke.py",
+      "passed": 50,
+      "failed": 0
+    },
+    {
+      "command": "CODEX_GUI_BROWSER=1 pytest -q tests/test_autopilot_browser.py tests/test_ui_mobile_browser.py -k 'autopilot or 320'",
+      "passed": 3,
+      "deselected": 9,
+      "failed": 0
+    },
+    {
+      "command": "git diff --check; node --check static/autopilot.js; node --check static/autopilot-task.js; ruff check --select F401,F821",
+      "result": "PASS"
+    }
+  ],
+  "baseline_failures": [
+    "tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded",
+    "tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model",
+    "tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap"
+  ],
+  "baseline_comparison": "All three reproduced on unchanged baseline extracted into isolated /tmp directory; assertions unchanged",
+  "safety": {
+    "production_gui_modified": false,
+    "production_database_modified": false,
+    "main_merged": false,
+    "billing_settings_changed": false,
+    "real_model_calls": 0,
+    "real_quota_exhaustion_attempts": 0
+  },
+  "limits": [
+    "Real subscription review/output/quota/billing behavior NOT_RUN; owner extra-usage-disabled confirmation not supplied",
+    "CLI auth checks establish metadata/session separation, not a successful real-model entitlement check",
+    "Quota fixtures are explicitly synthetic and version-coupled",
+    "Source bundles above 1 MiB stop for explicit partitioning",
+    "Validator network is disabled and only the allowlisted system runtime is exposed; dependencies must be preinstalled there",
+    "Unknown external CLI/Git outcomes remain in reconciliation instead of blind replay",
+    "Main checkout/live target changes stop safe publication; no deploy/restart",
+    "Managed formal-validation caps do not OS-enforce builds independently started by implementation agents"
+  ],
+  "artifacts": [
+    "docs/autopilot/README.md",
+    "docs/autopilot/personal-profile.json",
+    "docs/autopilot/implementation-contract.md",
+    "docs/autopilot/provider-compatibility.md",
+    "docs/autopilot/regression-coverage.md",
+    "docs/autopilot/e2e-evidence.json"
+  ]
+}

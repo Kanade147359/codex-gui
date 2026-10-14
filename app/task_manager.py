@@ -150,6 +150,8 @@ class TaskManager:
         self.scheduler = Scheduler(self.tick, settings.scheduler_interval_seconds)
         self.db.add_status_listener(self._status_changed)
         self._slots = asyncio.Semaphore(settings.max_concurrent) if settings.max_concurrent > 0 else None
+        from .autopilot.controller import Autopilot
+        self.autopilot = Autopilot(self)
         self._limits: Optional[dict] = None
         self._limits_at = 0.0
         self._limits_history_at = 0.0
@@ -277,7 +279,8 @@ class TaskManager:
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
                           allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
-                          completion_contract: Optional[dict] = None, attachment_ids=()) -> dict:
+                          completion_contract: Optional[dict] = None, attachment_ids=(),
+                          _defer_dispatch: bool = False, _task_id: Optional[str] = None, _branch: Optional[str] = None) -> dict:
         try:
             rules = completion.contract(completion_contract)
         except ValueError as e:
@@ -331,8 +334,8 @@ class TaskManager:
             repo, base_sha, tool_output=tool_output, tool_output_limit=tool_output_limit, skills=skills, skills_budget=skills_budget,
             allow_subagents=allow_subagents, tool_profile=tool_profile, cwd_subdir=cwd_subdir)
 
-        task_id = make_task_id()
-        branch = branch_name(task_id, name)
+        task_id = _task_id or make_task_id()
+        branch = _branch or branch_name(task_id, name)
         wt = worktree_path(self.settings.worktrees_dir, repo, task_id)
         # A task that waits for others gets its worktree just before it runs (see _ensure_worktree): no idle worktrees
         # for tasks that may never start. An immediate task gets it now, as before.
@@ -368,7 +371,7 @@ class TaskManager:
             self._verify_in_background(task_id)
         if deps:
             self._evaluate_one(task_id)  # the prerequisites may be done already (or already failed)
-        else:
+        elif not _defer_dispatch:
             self._dispatch(task_id)
         return self.db.get_task(task_id)
 
@@ -565,6 +568,8 @@ class TaskManager:
 
     def _begin_turn(self, task: dict, turn: _Turn, **fields) -> dict:
         """A new unit of work for an idle task: queued with its turn recorded, then claimed and started at once."""
+        if self.autopilot.queue_owner_turn(task,turn,fields):
+            return self.get(task["id"])
         # No await between the status checks of the caller and this transition, so two requests cannot both pass.
         try:
             updated = self.db.set_status(task["id"], "queued", message=turn.message() if turn.kind == "turn" else None,
@@ -605,6 +610,10 @@ class TaskManager:
         task = self.db.get_task(task_id)
         if task is None or task["status"] != "queued" or task["claimed_by"]:
             return False
+        if not self.autopilot.can_dispatch(task_id):
+            return False
+        if self._slots and self.settings.max_concurrent > 0 and len(self._jobs) >= self.settings.max_concurrent:
+            return False
         turn = self._pending_turn(task)
         check_deps = turn.trigger == "initial" and not turn.ignore_dependencies
         if not self.db.claim_queued(task_id, self.instance_id, check_dependencies=check_deps):
@@ -623,6 +632,9 @@ class TaskManager:
     def _forget_job(self, task_id: str, job: asyncio.Task) -> None:
         if self._jobs.get(task_id) is job:  # a newer turn of the same task may already be registered
             del self._jobs[task_id]
+        if not self._shutting_down:
+            self.autopilot.tick()
+            self._tick_queue()
 
     # ---------- running ----------
 
@@ -702,6 +714,21 @@ class TaskManager:
         if failure:
             log.add_system(f"cannot start: {failure.message}")
             self._settle(task_id, log, turn, "failed", failure=failure)
+            return False
+        from .autopilot.providers import ProviderFailure
+        try:
+            await self.autopilot.preflight_execution(self.get(task_id))
+        except ProviderFailure as e:
+            node=self.autopilot.ledger.node_for_task(task_id)
+            if node:
+                self.autopilot.ledger.transition(node["id"],node["state"],"blocked_auth" if e.kind=="auth" else "blocked_configuration",reason=str(e))
+            self._settle(task_id,log,turn,"failed",failure=Failure(e.kind,recovery.NON_RETRYABLE,str(e)))
+            return False
+        except AppServerError as e:
+            self._settle(task_id,log,turn,"failed",failure=recovery.classify_app_server_error(e))
+            return False
+        except TaskError as e:
+            self._settle(task_id,log,turn,"failed",failure=Failure("auth",recovery.NON_RETRYABLE,str(e)))
             return False
         if turn.trigger in RETRY_TRIGGERS:
             task = self.get(task_id)
@@ -1264,6 +1291,13 @@ class TaskManager:
     async def _completion_fields(self, task_id: str, text: str) -> dict:
         try:
             fields = await completion.check(self.get(task_id), text, self.settings.home)
+            if self.autopilot.ledger.node_for_task(task_id):
+                # Existing evidence PASS is not execution of the Autopilot validation profile.
+                result=completion.parse_result(text)
+                if result and result["status"]=="SUCCESS":
+                    fields.update(task_outcome="needs_review", approval_source="", approved_at=None,
+                                  outcome_reason="Autopilot candidate validation and independent review pending")
+                return fields
             return completion.approve_verified(fields, self.completion_approval_settings()["auto_approve_verified_success"])
         except Exception as e:
             # Check infrastructure errors are semantic uncertainty, never automatic process retries.
@@ -1496,6 +1530,7 @@ class TaskManager:
     async def shutdown(self) -> None:
         """Called when the GUI exits: running turns are stopped. Threads stay on disk and can be resumed later."""
         self._shutting_down = True
+        await self.autopilot.shutdown()
         await self.scheduler.stop()
         self.db.remove_status_listener(self._status_changed)
         for task_id in list(self._jobs):
@@ -1684,7 +1719,7 @@ class TaskManager:
         """One scheduling pass (the Scheduler calls it every few seconds and whenever a status changes). Idempotent."""
         if self._shutting_down:
             return
-        for name, step in (("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
+        for name, step in (("autopilot", self.autopilot.tick), ("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
                            ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue)):
             try:
                 step()
@@ -1811,7 +1846,12 @@ class TaskManager:
             return False
         turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"],
                      attachment_ids=json.loads(row["attachment_ids"]))
-        if not self.db.claim_scheduled(row["id"], self._queue_fields(turn), thread):
+        try:
+            if not self.db.claim_scheduled(row["id"], self._queue_fields(turn), thread,
+                    on_claim=lambda connection:self.autopilot.queue_owner_turn(task,turn,{},_connection=connection,_scheduled=True)):
+                return False
+        except TaskError as e:
+            self.db.block_scheduled(row["id"],str(e))
             return False
         TaskLog.note(self.log_path(task["id"]), f"scheduled instruction #{row['id']} sent to Codex thread {thread} "
                      f"({'Fast' if row['service_tier'] == 'priority' else 'Standard' if row['service_tier'] == 'default' else row['service_tier']})")
@@ -1822,6 +1862,9 @@ class TaskManager:
         (retry_wait -> the same thread and worktree): the instruction stays running and is never sent again. A paused task
         (interrupted, waiting-for-quota) keeps it running too: resuming it continues this same turn."""
         task = self.db.get_task(row["task_id"])
+        node=self.autopilot.ledger.node_for_task(row["task_id"])
+        if task and task["status"]=="completed" and task["task_outcome"]=="needs_review" and node and node["state"] not in ("blocked_budget","blocked_no_progress","blocked_result","blocked_scope","stopped"):
+            return  # The turn finished; its managed validation/independent acceptance is still pending.
         if task is None:
             self.db.finish_scheduled(row["id"], "failed", "the target task no longer exists")
         elif task["status"] == "completed":
@@ -1840,7 +1883,7 @@ class TaskManager:
             self._start_retry(task_id)
 
     def _tick_queue(self) -> None:
-        for task in self.db.list_tasks_by_status(["queued"]):
+        for task in sorted(self.db.list_tasks_by_status(["queued"]),key=self.autopilot.queue_priority):
             if not task["claimed_by"]:
                 self._dispatch(task["id"])
 

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Autopilot — Codex GUI{% endblock %}
+{% block page %}autopilot{% endblock %}
+{% block content %}
+<section class="panel ap-panel">
+  <h1>Autopilot</h1>
+  <p>固定した候補を検証し、Claude Codeで独立レビューします。確認済みの利用枠不足時だけ独立Codexへ切り替えます。</p>
+  <label for="ap-manifest">Workflow manifest（JSON / YAML）</label>
+  <textarea id="ap-manifest" rows="15" spellcheck="false" placeholder="version: 1"></textarea>
+  <p><label><input id="ap-opt-in" type="checkbox"> このmanifestの編集範囲・検証・予算・開始時権限にopt-inする</label></p>
+  <button id="ap-preview">Dry-run</button> <button id="ap-start" disabled>Start</button>
+  <p id="ap-message" role="status"></p><pre id="ap-preview-result"></pre>
+</section>
+<section class="panel ap-panel"><h2>Workflows</h2><div id="ap-workflows"></div></section>
+<section class="panel ap-panel"><h2>既存 Needs Review</h2><p>選択したtaskの既存contract・編集担当path・必須validationを確認してください。manual gateは維持されます。</p><button id="ap-backlog-load">Dry-run分類</button><button id="ap-backlog-prepare">選択taskを一括dry-run</button><div id="ap-backlog"></div></section>
+<section class="panel ap-panel"><h2>Graph・待機理由・固定入力</h2><div id="ap-graph"></div></section>
+<script src="{{ static_url('autopilot.js') }}" defer></script>
+{% endblock %}

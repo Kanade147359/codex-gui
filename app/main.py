@@ -13,6 +13,7 @@ from .codex_runner import CodexRunner
 from .config import Settings
 from .database import Database
 from .routes import router
+from .autopilot.routes import router as autopilot_router
 from . import completion, ssh_agent
 from .task_manager import TaskManager
 
@@ -57,5 +58,6 @@ def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner
     app.state.manager = TaskManager(settings, db, runner, app_server)
     app.state.catalog = ModelCatalog(settings.codex_bin)
     app.include_router(router)
+    app.include_router(autopilot_router)
     app.mount("/static", NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
     return app
