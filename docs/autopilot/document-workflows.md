@@ -92,8 +92,13 @@ the graph exposes its exact target digest and owner rationale, **Owner approve**
 **Owner reject**, and **Owner resume**. Approval is recorded while the node stays
 blocked; explicit resume requires approval for that same target. A changed contract,
 candidate, run generation or decision target invalidates the old decision. Rejection
-keeps the slice blocked. Stop disables these actions. AI review acceptance remains
-separate and mandatory even after owner approval; reviewer-requested human decisions
+keeps the slice blocked. Stop disables these actions. `manual_gates` authorize a
+design before implementation. `contract.manual_approval` instead requires a separate
+owner approval of the exact completed candidate, after required validation and AI
+APPROVE. A design approval never satisfies that final candidate gate. Disabling
+`automatic_acceptance` also requires this explicit candidate approval. Once all gates
+are satisfied, waiting successors resume with the accepted SHA. AI review remains
+mandatory even after owner approval; reviewer-requested human decisions
 are returned to a fresh independent review rather than promoted directly to success.
 
 API: `POST /api/autopilot/workflows/{id}/nodes/{name}/decision` with

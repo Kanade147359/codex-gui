@@ -144,3 +144,5 @@ includes A repair, B quota fallback, restart, accepted integration and D reading
 the integrated code. There are no manual Send/Approve/merge actions after Start.
 Fake quota events are fixtures, not exhausted real subscriptions. See the final
 verification record for coverage, compatibility and outstanding real-provider smoke.
+
+Current document-workflow acceptance: [verification](document-workflow-verification.md) and [fixed-SHA results](document-workflow-verification.json). Earlier bootstrap records remain historical.
