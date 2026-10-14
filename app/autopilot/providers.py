@@ -410,6 +410,24 @@ class IsolatedAppServer(AppServerClient):
     def build_command(self):
         return self.command
 
+    async def close(self):
+        proc, reader = self._proc, self._reader
+        await super().close()
+        if proc and proc.stdin:
+            proc.stdin.close()
+            try:
+                await proc.stdin.wait_closed()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        if reader:
+            await asyncio.gather(reader, return_exceptions=True)
+        # Process.wait() can precede pipe EOF when a CLI helper inherited a descriptor.
+        # Dispose this owned low-level transport while its event loop is still alive.
+        transport = getattr(proc, "_transport", None) if proc else None
+        if transport:
+            transport.close()
+            await asyncio.sleep(0)
+
 
 class CodexProvider(ReviewProvider):
     def __init__(self, binary="codex", client_factory=IsolatedAppServer):

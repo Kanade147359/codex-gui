@@ -610,7 +610,7 @@ class TaskManager:
             return False
         if not self.autopilot.can_dispatch(task_id):
             return False
-        if self._slots and len(self._jobs) >= self.settings.max_concurrent:
+        if self._slots and self.settings.max_concurrent > 0 and len(self._jobs) >= self.settings.max_concurrent:
             return False
         turn = self._pending_turn(task)
         check_deps = turn.trigger == "initial" and not turn.ignore_dependencies

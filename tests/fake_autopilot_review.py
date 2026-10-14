@@ -19,7 +19,7 @@ if name == "A" and (root / "A.txt").read_text() == "bad\n":
     blocking = [
         dict(id="A-value", path="A.txt", line=1, reason="Acceptance requires good, fixture currently writes bad")
     ]
-if scenario.get("always_changes"):
+if scenario.get("always_changes") and (not scenario.get("changes_only") or name in scenario["changes_only"]):
     verdict = "CHANGES_REQUESTED"
     blocking = [dict(id="persistent", path=name + ".txt", line=1, reason="Persistent fixture finding")]
 result = dict(

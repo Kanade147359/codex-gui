@@ -381,18 +381,22 @@ def test_T09_partial_findings_survive_quota_fallback(make_manager, git_repo):
     asyncio.run(scenario())
 
 
-def test_T14_no_progress_and_budget_are_bounded(make_manager, git_repo):
+@pytest.mark.parametrize("no_progress,expected,rounds", [(2, "blocked_no_progress", 2), (10, "blocked_budget", 3)])
+def test_T14_no_progress_and_budget_are_bounded(make_manager, git_repo, no_progress, expected, rounds):
     async def scenario():
         m = make_manager()
-        ap = install(m, FixtureProvider("claude", dict(always_changes=True)))
-        identity = await register(ap, plan(git_repo, ("C", "E")))
+        ap = install(m, FixtureProvider("claude", dict(always_changes=True, changes_only=["C"])))
+        raw = plan(git_repo, ("C", "E"))
+        raw["policy"]["no_progress_limit"] = no_progress
+        identity = await register(ap, raw)
         await drive(
             m,
             lambda: all(
-                n["state"] in ("blocked_no_progress", "blocked_budget") for n in ap.ledger.view(identity)["nodes"]
+                n["state"] == (expected if n["name"] == "C" else "accepted") for n in ap.ledger.view(identity)["nodes"]
             ),
         )
         assert all(n["fix_rounds"] <= 3 for n in ap.ledger.view(identity)["nodes"])
+        assert next(n for n in ap.ledger.view(identity)["nodes"] if n["name"] == "C")["fix_rounds"] == rounds
         before = len(m.db.list_turns(ap.ledger.view(identity)["nodes"][0]["task_id"]))
         for _ in range(10):
             m.tick()
