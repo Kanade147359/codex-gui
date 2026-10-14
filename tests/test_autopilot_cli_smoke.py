@@ -117,7 +117,7 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
                 dict(
                     threadId=cancel_tid,
                     input=[dict(type="text", text="offline cancellation")],
-                    outputSchema=REVIEW_SCHEMA,
+                    outputSchema=review_schema(candidate),
                 ),
             )
             while len(mock.requests) < 2:
