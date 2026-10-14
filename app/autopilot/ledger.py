@@ -293,9 +293,10 @@ class Ledger:
                 0
             ]
             prior_findings = set(p.get("unresolved", []))
-            from .decisions import gate_approved
+            from .decisions import gate_approved, candidate_approved
 
             manual_satisfied = gate_approved(self, n, w, c)
+            final_owner_satisfied = candidate_approved(self, n, w, c)
             for previous in c.execute(
                 "SELECT payload FROM ap_reviews WHERE candidate_id=? AND id!=?", (cid, review["id"])
             ):
@@ -328,14 +329,11 @@ class Ledger:
                     and all(x.get("exit_status") == 0 and not x.get("timed_out") for x in e["payload"]["checks"])
                     for e in evidence
                 )
-                or not w["plan"]["policy"]["automatic_acceptance"]
+                or (not w["plan"]["policy"]["automatic_acceptance"] and not final_owner_satisfied)
+                or (n["spec"]["manual_gates"] and not manual_satisfied)
                 or (
-                    (
-                        n["spec"]["manual_gates"]
-                        or n["spec"]["contract"].get("manual_approval")
-                        or p["contract"].get("manual_approval")
-                    )
-                    and not manual_satisfied
+                    (n["spec"]["contract"].get("manual_approval") or p["contract"].get("manual_approval"))
+                    and not final_owner_satisfied
                 )
                 or not result
                 or result["status"] != "SUCCESS"
@@ -362,6 +360,7 @@ class Ledger:
                             review_id=r["id"],
                             policy_digest=p["policy_digest"],
                             reason="AI review accepted",
+                            owner_candidate_accepted=final_owner_satisfied,
                         )
                     ),
                     now_iso(),

@@ -43,6 +43,26 @@ def gate_approved(ledger, node, workflow, connection=None):
     )
 
 
+def candidate_approved(ledger, node, workflow, connection=None):
+    from .ledger import unpack
+
+    rows = (
+        [unpack(r) for r in connection.execute("SELECT * FROM ap_decisions WHERE node_id=?", (node["id"],))]
+        if connection is not None
+        else ledger.rows("decisions", "node_id=?", (node["id"],))
+    )
+    return any(
+        r["state"] == "approved"
+        and r["payload"].get("purpose") == "candidate_acceptance"
+        and r["payload"].get("candidate_id") == node["candidate_id"]
+        and r["payload"].get("spec_digest") == digest(node["spec"])
+        and r["payload"].get("run_generation") == workflow["generation"]
+        and r["payload"].get("decision_epoch") == node["decision_epoch"]
+        and r["payload"].get("authorization") == authorization(workflow)
+        for r in rows
+    )
+
+
 def decide(ap, nid, expected, action, note):
     if action not in ("approve", "reject", "resume") or not isinstance(note, str) or not note.strip():
         raise ValueError("explicit owner approve/reject/resume and rationale are required")
@@ -59,7 +79,13 @@ def decide(ap, nid, expected, action, note):
         if action == "resume":
             if not previous or previous["state"] != "approved" or n["state"] != "blocked_decision":
                 raise ValueError("Resume requires an explicit approval for this exact target")
-            state = "review_queued" if n["candidate_id"] else "pending"
+            state = (
+                "review_complete"
+                if json_payload(previous).get("purpose") == "candidate_acceptance"
+                else "review_queued"
+                if n["candidate_id"]
+                else "pending"
+            )
             c.execute("UPDATE ap_nodes SET state=?,reason='' WHERE id=? AND state='blocked_decision'", (state, nid))
         else:
             if n["state"] != "blocked_decision":
@@ -75,7 +101,13 @@ def decide(ap, nid, expected, action, note):
                     candidate_id=n["candidate_id"],
                     decision_epoch=n["decision_epoch"],
                     authorization=authorization(w),
-                    purpose="manual_gates" if not n["candidate_id"] else "review_decision",
+                    purpose=(
+                        "manual_gates"
+                        if not n["candidate_id"]
+                        else "candidate_acceptance"
+                        if n["reason"].startswith("Candidate owner acceptance required")
+                        else "review_decision"
+                    ),
                 )
                 c.execute(
                     "INSERT INTO ap_decisions VALUES(?,?,?,?,?,?)",
@@ -90,3 +122,9 @@ def decide(ap, nid, expected, action, note):
                 )
     ap.manager.scheduler.wake()
     return ap.ledger.view(n["workflow_id"])
+
+
+def json_payload(row):
+    import json
+
+    return json.loads(row["payload"])

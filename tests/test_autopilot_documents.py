@@ -631,3 +631,43 @@ def test_multibyte_diff_partitioning_preserves_every_byte(git_repo):
         assert len(pages) > 1 and all(len(page["diff"].encode()) <= 65536 for page in pages)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("automatic", [True, False])
+def test_design_approval_never_substitutes_for_final_candidate_owner_acceptance(settings, git_repo, automatic):
+    app = create_app(settings, FakeRunner())
+    ap = install(app.state.manager)
+    with TestClient(app) as client:
+        raw = plan(git_repo)
+        raw["policy"]["automatic_acceptance"] = automatic
+        raw["nodes"][0].update(manual_gates=["design before implementation"], contract=dict(manual_approval=True))
+        if automatic:
+            successor = plan(git_repo, ("E",))["nodes"][0]
+            successor["depends_on"] = ["C"]
+            raw["nodes"].append(successor)
+        wid = api_register(client, raw)
+        url = f"/api/autopilot/workflows/{wid}/nodes/C/decision"
+        first = api_wait(client, wid, lambda v: v["nodes"][0]["state"] == "blocked_decision")["nodes"][0]
+        assert first["candidate_id"] is None
+        body = dict(owner_action=True, expected_target=first["decision_target"], note="Owner approves design only")
+        assert client.post(url, json=dict(body, action="approve")).status_code == 200
+        assert client.post(url, json=dict(body, action="resume")).status_code == 200
+        final = api_wait(client, wid, lambda v: v["nodes"][0]["state"] == "blocked_decision")["nodes"][0]
+        assert final["candidate_id"] and final["candidate_id"] != first["candidate_id"]
+        assert final["candidates"][0]["validation"][0]["state"] == "PASS"
+        assert final["candidates"][0]["reviews"][-1]["payload"]["verdict"] == "APPROVE"
+        assert final["candidates"][0]["acceptances"] == []
+        assert client.post(f"/api/autopilot/workflows/{wid}/resume", json={}).status_code == 200
+        assert client.post(url, json=dict(body, action="resume")).status_code == 400
+        required = dict(
+            owner_action=True,
+            expected_target=final["decision_target"],
+            note="Owner inspected this exact candidate and approves final acceptance",
+        )
+        assert client.post(url, json=dict(required, action="approve")).status_code == 200
+        assert client.get(f"/api/autopilot/workflows/{wid}").json()["nodes"][0]["state"] == "blocked_decision"
+        assert client.post(url, json=dict(required, action="resume")).status_code == 200
+        accepted = api_wait(client, wid, lambda v: v["state"] == "completed")["nodes"][0]
+        assert len(accepted["decisions"]) == 2 and len(accepted["candidates"]) == 1
+        assert len(accepted["candidates"][0]["reviews"]) == 1
+        assert accepted["decisions"][-1]["payload"]["purpose"] == "candidate_acceptance"

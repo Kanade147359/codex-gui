@@ -67,6 +67,7 @@ async def propose(ap, planner):
         expected_plan=digest(w["plan"]),
         plan=normalized,
         changed=changed,
+        before={name: next(spec for spec in w["plan"]["nodes"] if spec["id"] == name) for name in changed},
         expansions=expansions,
         artifact=dict(
             head_sha=candidate["payload"]["scope"]["head_sha"], path=path, digest=bytes_digest(text.encode())

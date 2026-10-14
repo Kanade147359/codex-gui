@@ -403,6 +403,15 @@ class Autopilot:
                 n["state"] in ("launching", "integrating") and n["spec"]["kind"] == "integration" for n in all_nodes
             )
             for n in nodes:
+                if (
+                    n["state"] == "blocked_dependencies"
+                    and n["spec"]["depends_on"]
+                    and all(by_name[p]["state"] == "accepted" for p in n["spec"]["depends_on"])
+                ):
+                    if self.ledger.transition(
+                        n["id"], "blocked_dependencies", "pending", reason="Pinned parent gates resolved"
+                    ):
+                        n = self.ledger.get("nodes", n["id"])
                 if n["id"] in self.jobs or n["state"] in BLOCKED:
                     continue
                 state = n["state"]
@@ -415,9 +424,7 @@ class Autopilot:
                         continue
                     if not all(p["state"] == "accepted" for p in parents):
                         continue
-                    if (
-                        n["spec"]["manual_gates"] or n["spec"]["contract"].get("manual_approval")
-                    ) and not decisions.gate_approved(self.ledger, n, w):
+                    if n["spec"]["manual_gates"] and not decisions.gate_approved(self.ledger, n, w):
                         self.ledger.transition(
                             n["id"],
                             state,
@@ -1129,9 +1136,17 @@ class Autopilot:
             with self.ledger.transaction() as c:
                 c.execute("UPDATE ap_nodes SET state='review_complete' WHERE id=? AND state='reviewing'", (n["id"],))
             return
-        if not w["plan"]["policy"]["automatic_acceptance"]:
+        final_owner_required = (
+            not w["plan"]["policy"]["automatic_acceptance"]
+            or n["spec"]["contract"].get("manual_approval")
+            or candidate["payload"]["contract"].get("manual_approval")
+        )
+        if final_owner_required and not decisions.candidate_approved(self.ledger, n, w):
             self.ledger.transition(
-                n["id"], "reviewing", "blocked_decision", reason="Workflow policy disables automatic acceptance"
+                n["id"],
+                "reviewing",
+                "blocked_decision",
+                reason="Candidate owner acceptance required after validation and independent review",
             )
             return
         if not self.ledger.accept(candidate, review, current):
