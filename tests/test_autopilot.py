@@ -114,6 +114,38 @@ def test_real_reviewer_coverage_must_use_exact_changed_paths():
     assert validate_result(incomplete, candidate) == incomplete
 
 
+def test_review_prompt_includes_recorded_completion(git_repo, tmp_path):
+    from app.autopilot.providers import review_prompt
+
+    async def scenario():
+        base = await sha(git_repo)
+        (git_repo / "completion.txt").write_text("done\\n")
+        await git(git_repo, "add", "completion.txt")
+        await git(git_repo, "commit", "-m", "test completion")
+        head = await sha(git_repo)
+        recorded = {
+            "parsed_result": {"status": "SUCCESS", "reason": "implemented and verified"},
+            "origin": "strict_final_assistant_json",
+        }
+        candidate = {
+            "id": "completion-candidate",
+            "run_generation": 1,
+            "payload": {
+                "scope": await scope(git_repo, base, head),
+                "contract": {},
+                "acceptance": "create completion.txt",
+                "changed_paths": ["completion.txt"],
+                "recorded_completion": recorded,
+            },
+        }
+        source = await snapshot(str(git_repo), head, base, tmp_path / "completion-snapshot")
+        data = json.loads(await review_prompt(candidate, source))
+        assert data["recorded_completion"] == recorded
+        assert data["changed_paths"] == ["completion.txt"]
+
+    asyncio.run(scenario())
+
+
 def test_T22_migration_preserves_legacy(db, settings):
     from app.database import Database
 
