@@ -16,7 +16,12 @@ def digest(value):
 
 def input_digest(node, workflow):
     return digest(
-        dict(dependencies=node["inputs"], bundle=workflow["plan"]["inputs"], references=node["spec"]["input_files"])
+        dict(
+            dependencies=node["inputs"],
+            bundle=workflow["plan"]["inputs"],
+            spec=node["spec"],
+            rules=workflow["plan"].get("rules", {}),
+        )
     )
 
 
@@ -28,6 +33,7 @@ def safe_path(value):
         or "\\" in value
         or PurePosixPath(value).is_absolute()
         or any(p in ("..", ".git") for p in value.split("/"))
+        or ":" in value
     ):
         raise ValueError("paths must be relative and outside .git")
     return str(PurePosixPath(value))
@@ -38,7 +44,14 @@ def owns(path, paths):
 
 
 def profile(value, kind):
-    if not isinstance(value, dict) or set(value) - {"commands", "artifacts", "timeout", "outputs", "network"}:
+    if not isinstance(value, dict) or set(value) - {
+        "commands",
+        "artifacts",
+        "timeout",
+        "outputs",
+        "network",
+        "environment",
+    }:
         raise ValueError("invalid validation profile")
     for key in ("commands", "artifacts", "outputs"):
         if key in value and not isinstance(value[key], list):
@@ -62,7 +75,16 @@ def profile(value, kind):
         raise ValueError("build outputs cannot replace the source root or required artifacts")
     if value.get("network", False):
         raise ValueError("v1 validation has no tool network; preinstall dependencies in the host runtime")
-    return dict(commands=commands, artifacts=artifacts, timeout=timeout, outputs=outputs, network=False)
+    environment = value.get("environment", {})
+    if not isinstance(environment, dict) or set(environment) - {"toolchains", "mounts", "env", "offline"}:
+        raise ValueError("invalid validation environment")
+    from .environment import normalize
+
+    environment = normalize(environment)
+    result = dict(commands=commands, artifacts=artifacts, timeout=timeout, outputs=outputs, network=False)
+    if environment:
+        result["environment"] = environment
+    return result
 
 
 def manifest(value):
@@ -145,7 +167,11 @@ def manifest(value):
         if type(permissions[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
     inputs = value.get("inputs", {})
-    if not isinstance(inputs, dict) or any(not isinstance(s, str) or len(s) > 262144 for s in inputs.values()):
+    if (
+        not isinstance(inputs, dict)
+        or any(not isinstance(s, str) or len(s.encode()) > 262144 for s in inputs.values())
+        or sum(len(s.encode()) for s in inputs.values()) > 4 * 1024 * 1024
+    ):
         raise ValueError("inputs must be a map of immutable Markdown texts")
     inputs = {safe_path(p): s for p, s in inputs.items()}
     nodes = value.get("nodes", [])
@@ -164,6 +190,12 @@ def manifest(value):
             "manual_gates",
             "task_id",
             "input_files",
+            "draft",
+            "envelope",
+            "integration_mode",
+            "plan_artifact",
+            "handoff",
+            "review_files",
         }:
             raise ValueError("invalid node fields")
         n = dict(raw)
@@ -180,9 +212,34 @@ def manifest(value):
             if key in n and not isinstance(n[key], list):
                 raise ValueError(f"{key} must be a list")
         n["paths"] = [safe_path(p) for p in n.get("paths", [])]
-        if not n["paths"]:
+        n.setdefault("draft", False)
+        if type(n["draft"]) is not bool:
+            raise ValueError("draft must be boolean")
+        if any(p == ".autopilot-inputs" or p.startswith(".autopilot-inputs/") for p in n["paths"]):
+            raise ValueError("input bundle is controller-owned")
+        if not n["paths"] and not n["draft"]:
             raise ValueError("explicit edit ownership is required")
-        n["validation"] = profile(n.get("validation", {}), n["kind"])
+        n["validation"] = profile(n.get("validation", {}), n["kind"]) if not n["draft"] else n.get("validation", {})
+        if n["draft"] and not isinstance(n["validation"], dict):
+            raise ValueError("draft validation must be an object")
+        envelope = n.get("envelope", {})
+        if not isinstance(envelope, dict) or set(envelope) - {"paths", "validation_profiles"}:
+            raise ValueError("invalid planning authorization envelope")
+        n["envelope"] = dict(
+            paths=[safe_path(p) for p in envelope.get("paths", n["paths"])],
+            validation_profiles=[profile(p, n["kind"]) for p in envelope.get("validation_profiles", [])],
+        )
+        n.setdefault("integration_mode", "merge-only")
+        if n["integration_mode"] not in ("merge-only", "merge-then-implement") or (
+            n["kind"] != "integration" and n["integration_mode"] != "merge-only"
+        ):
+            raise ValueError("invalid integration mode")
+        for key in ("handoff", "review_files"):
+            n[key] = [safe_path(p) for p in n.get(key, [])]
+        if n.get("plan_artifact"):
+            n["plan_artifact"] = safe_path(n["plan_artifact"])
+            if n["plan_artifact"] not in n["validation"].get("artifacts", []):
+                raise ValueError("plan revision must be a required artifact")
         from app.completion import contract
 
         n["contract"] = contract(n.get("contract", {}))

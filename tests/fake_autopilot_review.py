@@ -9,7 +9,11 @@ import uuid
 request = json.load(sys.stdin)
 candidate, provider, scenario = request["candidate"], request["provider"], request["scenario"]
 payload = candidate["payload"]
-name = payload["acceptance"].splitlines()[0].split()[-1]
+received = request["received"]
+assert received["candidate_id"] == candidate["id"] and received["scope"] == payload["scope"]
+assert received["requirements"] == payload.get("requirements", {})
+assert received["changed_paths"] == payload["changed_paths"]
+name = payload.get("requirements", {}).get("node") or payload["acceptance"].splitlines()[0].split()[-1]
 root = Path(request["root"])
 verdict, blocking = "APPROVE", []
 if scenario.get("delay"):
@@ -19,6 +23,20 @@ if name == "A" and (root / "A.txt").read_text() == "bad\n":
     blocking = [
         dict(id="A-value", path="A.txt", line=1, reason="Acceptance requires good, fixture currently writes bad")
     ]
+common = [doc for doc in received["requirements"].get("documents", []) if doc["name"].endswith("COMMON.md")]
+if common and "COMMON-OK" in common[0]["body"] and name in ("A", "B", "C", "D"):
+    if "COMMON-OK" not in (root / (name + ".txt")).read_text():
+        verdict = "CHANGES_REQUESTED"
+        blocking = [
+            dict(
+                id="COMMON-required",
+                path=name + ".txt",
+                line=1,
+                reason="COMMON.md alone requires COMMON-OK; implementation omitted it",
+            )
+        ]
+for doc in received["requirements"].get("documents", []):
+    assert (root / ".autopilot-inputs" / doc["name"]).read_text() == doc["body"]
 if scenario.get("always_changes") and (not scenario.get("changes_only") or name in scenario["changes_only"]):
     verdict = "CHANGES_REQUESTED"
     blocking = [dict(id="persistent", path=name + ".txt", line=1, reason="Persistent fixture finding")]
@@ -38,6 +56,8 @@ result = dict(
     unverified=[],
     resolved=payload.get("unresolved", []) if not blocking else [],
 )
+if payload.get("read_protocol"):
+    result["requested_reads"] = []
 if scenario.get("ignore_prior_findings"):
     result["resolved"] = []
 if scenario.get("error"):

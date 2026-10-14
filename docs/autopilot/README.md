@@ -7,9 +7,10 @@ It uses the existing TaskManager scheduler and SQLite connection. Ordinary
 It never deploys, restarts a service, changes billing or purchases/consumes credits.
 
 Open `/autopilot`, paste a manifest, run **Dry-run**, inspect the fixed plan and
-permissions, opt in, then **Start**. Input Markdown belongs in the manifest's
-`inputs` map; nodes reference it by `input_files`. The controller writes a fixed
-read-only input bundle, rather than repeating documents in each prompt.
+permissions, opt in, then **Start**. Multiple Markdown files or a ZIP can also be uploaded and edited before conversion.
+See [Markdown workflows](document-workflows.md) for Draft planning, handoffs, owner
+decisions, partitioned reviews and offline validation environments. Input bodies
+are materialized inside each worker/snapshot and supplied to reviewers.
 See [personal profile](personal-profile.json) for a minimal example. Change its
 repository and required commands to your project. No empty code profile is allowed.
 
@@ -33,9 +34,9 @@ Both real adapters use an isolated CLI process with only staged subscription
 credentials and trusted settings, no inherited SSH agent or API-key environment.
 Claude uses `--safe-mode`, empty tools/settings sources and strict empty MCP
 configuration, not `--bare`. Codex disables shell, plugins and subagents, uses a
-new read-only thread and structured `turn/start`. Source and full base/head diff
-are supplied as data. No candidate hooks or model tools run. The initial reviewer
-supports source bundles up to 1 MiB; larger scopes stop explicitly for partitioning.
+new read-only thread and structured `turn/start`. Fixed requirements and partitioned base/head diffs are supplied as data. No candidate
+hooks or model tools run. Large diffs require every partition and an overall verdict;
+related snapshot code can be requested through a bounded structured read protocol.
 The CLI process needs its OAuth credentials; these are not supplied to model tools
 or prompts. Real model/tool enforcement remains subject to the recorded smoke status.
 
@@ -91,7 +92,8 @@ pinned accepted SHA inputs, skips commits already included, records order and
 start/end refs, and always validates/reviews the combined result. Conflicts use
 the dedicated integration Codex task, then submit a new full candidate. Successors
 start at the accepted integration SHA, not a newly resolved moving base branch.
-Report artifacts remain a different kind from code inputs. Manual/owner gates
+The optional merge-then-implement mode always runs integration implementation after
+merging, including conflict-free merges. Report artifacts remain a different kind from code inputs. Manual/owner gates
 remain blocking for that slice; independent slices continue.
 
 `publish_main` defaults false. If explicitly enabled, the final node must be an

@@ -10,6 +10,42 @@
   }
   function text(tag, value) { const n = document.createElement(tag); n.textContent = value; return n; }
   function showError(e) { el('ap-message').textContent = e.message; }
+  let imported = null, nodeEditors = [], documentEditors = [];
+  const invalidate = () => {preview = null; el('ap-start').disabled = true;};
+  el('ap-import').onclick = async () => {
+    try {
+      const form = new FormData(); for (const file of el('ap-files').files) form.append('files',file);
+      const response = await fetch('/api/autopilot/import',{method:'POST',body:form}); const data = await response.json();
+      if (!response.ok) throw new Error(data.detail?.message || JSON.stringify(data.detail));
+      imported = data; nodeEditors = []; documentEditors = []; invalidate();
+      el('ap-documents').replaceChildren(); el('ap-import-nodes').replaceChildren();
+      for (const [name,body] of Object.entries(data.inputs)) {
+        const area = document.createElement('textarea'); area.rows = 5; area.value = body; area.setAttribute('aria-label',name); area.oninput = invalidate;
+        el('ap-documents').append(text('h3',`${data.common.includes(name) ? 'COMMON' : '担当指示'}: ${name}`),area);
+        documentEditors.push({name,area});
+      }
+      for (const node of data.nodes) {
+        const card = document.createElement('fieldset'); card.append(text('legend',node.id)); const fields = {};
+        for (const key of ['id','depends_on','paths','validation','manual_gates','draft','envelope','integration_mode']) {
+          const input = document.createElement(key === 'validation' || key === 'envelope' ? 'textarea' : 'input');
+          input.value = ['id','integration_mode'].includes(key) ? (node[key] || 'merge-only') : JSON.stringify(node[key] ?? (key === 'envelope' ? {} : []));
+          input.setAttribute('aria-label',`${node.id} ${key}`); input.oninput = invalidate;
+          const label = text('label',key); label.append(input); card.append(label); fields[key] = input;
+        }
+        el('ap-import-nodes').append(card); nodeEditors.push({node,fields});
+      }
+      el('ap-convert').disabled = false; el('ap-message').textContent = '取込済み。本文・依存・編集範囲・検証・承認条件を確認してください。未実行です。';
+    } catch(e) {showError(e);}
+  };
+  el('ap-convert').onclick = async () => {
+    try {
+      const inputs = Object.fromEntries(documentEditors.map(({name,area}) => [name,area.value]));
+      const nodes = nodeEditors.map(({node,fields}) => ({...node,...Object.fromEntries(Object.entries(fields).map(([key,input]) => [key,['id','integration_mode'].includes(key) ? input.value : JSON.parse(input.value)]))}));
+      const result = await api('/api/autopilot/import/convert',{...imported,inputs,nodes,repository:el('ap-repository').value,base_ref:el('ap-base').value,permissions:{commit_owned_changes:el('ap-import-commit').checked,publish_main:false},policy:{extra_usage_disabled_confirmed:el('ap-import-billing').checked}});
+      el('ap-manifest').value = JSON.stringify(result.manifest,null,2); preview = result.preview;
+      el('ap-preview-result').textContent = JSON.stringify(preview,null,2); el('ap-start').disabled = false; el('ap-opt-in').checked = false;
+    } catch(e) {showError(e);}
+  };
   el('ap-manifest').addEventListener('input', () => {preview = null; el('ap-start').disabled = true;});
   el('ap-preview').onclick = async () => {
     try {preview = await api('/api/autopilot/dry-run',{manifest:el('ap-manifest').value}); el('ap-preview-result').textContent = JSON.stringify(preview,null,2); el('ap-start').disabled = false;} catch(e) {showError(e);}
@@ -32,11 +68,26 @@
       }
       if (selected) {
         const w = await api(`/api/autopilot/workflows/${selected}`); el('ap-graph').replaceChildren();
+        for (const revision of w.plan_revisions || []) {
+          const card = text('article',`計画revision: ${revision.state}`); card.append(text('pre',JSON.stringify(revision.payload,null,2)));
+          if (revision.state === 'awaiting_owner') for (const action of ['approve','reject']) {
+            const button = text('button',`Owner ${action} plan revision`); button.onclick = async () => {try {await api(`/api/autopilot/workflows/${selected}/revisions/${revision.id}/decision`,{owner_action:true,expected_target:revision.decision_target,action}); await refresh();} catch(e) {showError(e);}}; card.append(button);
+          }
+          el('ap-graph').append(card);
+        }
         for (const node of w.nodes) {
           const card = document.createElement('article'); card.className = 'ap-node';
           card.append(text('h3',`${node.name} (${node.spec.kind}) — ${node.state}`),text('p',node.reason),text('p',`依存: ${node.spec.depends_on.join(', ')} / 修正残: ${w.plan.policy.max_fix_rounds-node.fix_rounds}`));
+          if (node.state === 'blocked_decision') {
+            const note = document.createElement('input'); note.placeholder = '所有者判断の理由'; note.setAttribute('aria-label',`${node.name} owner rationale`); card.append(note,text('p',`判断対象版: ${node.decision_target}`));
+            for (const action of ['approve','reject','resume']) {
+              const button = text('button',`Owner ${action}`);
+              button.onclick = async () => {try {await api(`/api/autopilot/workflows/${selected}/nodes/${node.name}/decision`,{owner_action:true,expected_target:node.decision_target,action,note:note.value}); await refresh();} catch(e) {showError(e);}};
+              card.append(button);
+            }
+          }
           if (node.task_id) {const link = text('a','Task詳細'); link.href = `/tasks/${node.task_id}`; card.append(link);}
-          card.append(text('pre',JSON.stringify({pinned_inputs:node.inputs,candidates:node.candidates,operations:node.operations},null,2)));
+          card.append(text('pre',JSON.stringify({pinned_inputs:node.inputs,candidates:node.candidates,operations:node.operations,owner_decisions:node.decisions},null,2)));
           el('ap-graph').append(card);
         }
       }

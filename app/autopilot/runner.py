@@ -133,6 +133,9 @@ async def run_bounded(argv, *, cwd=None, env=None, timeout=300, stdin=None, on_s
 
 class Validator:
     async def validate(self, candidate, root, profile, log_dir, on_start=None):
+        from .environment import preflight, mounts, env
+
+        preflight_evidence = await preflight(root, profile)
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         began = time.time()
@@ -146,10 +149,14 @@ class Validator:
         with tempfile.TemporaryDirectory(prefix="ap-validator-") as scratch:
             for i, command in enumerate(profile["commands"]):
                 command_started = time.time()
-                argv = sandbox(root, scratch, profile["outputs"]) + ["--", *command]
+                argv = (
+                    sandbox(root, scratch, profile["outputs"])
+                    + mounts(profile.get("environment", {}))
+                    + ["--", *command]
+                )
                 rc, output, timeout = await run_bounded(
                     argv,
-                    env=minimal_env(),
+                    env=env(profile.get("environment", {})),
                     timeout=profile["timeout"],
                     on_start=on_start,
                     log_path=log_dir / f"{i}.log",
@@ -173,6 +180,7 @@ class Validator:
             scope=candidate["payload"]["scope"],
             profile_digest=digest(profile),
             environment="bwrap:allowlisted-runtime;network=off;source=read-only",
+            environment_preflight=preflight_evidence,
             started_at=began,
             finished_at=time.time(),
             checks=checks,

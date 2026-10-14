@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS ap_operations (
 CREATE TABLE IF NOT EXISTS ap_provider_availability (
  key TEXT PRIMARY KEY, provider TEXT NOT NULL, state TEXT NOT NULL, recheck_at REAL NOT NULL,
  probe_owner TEXT, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_decisions (
+ id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES ap_nodes(id), target TEXT NOT NULL,
+ state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(node_id,target));
+CREATE TABLE IF NOT EXISTS ap_plan_revisions (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ source_candidate TEXT NOT NULL UNIQUE, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
 
@@ -92,6 +98,8 @@ class Ledger:
             "acceptances",
             "operations",
             "provider_availability",
+            "decisions",
+            "plan_revisions",
         }:
             raise ValueError("unknown ledger table")
         with self.db._lock:
@@ -139,8 +147,16 @@ class Ledger:
             for n in plan["nodes"]:
                 nid = identity + ":" + n["id"]
                 c.execute(
-                    "INSERT INTO ap_nodes(id,workflow_id,name,spec,task_id,ready_at) VALUES(?,?,?,?,?,?)",
-                    (nid, identity, n["id"], canonical(n), n.get("task_id"), stamp),
+                    "INSERT INTO ap_nodes(id,workflow_id,name,spec,task_id,ready_at,state) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        nid,
+                        identity,
+                        n["id"],
+                        canonical(n),
+                        n.get("task_id"),
+                        stamp,
+                        "draft" if n.get("draft") else "pending",
+                    ),
                 )
                 for parent in n["depends_on"]:
                     c.execute("INSERT INTO ap_edges VALUES(?,?)", (nid, identity + ":" + parent))
@@ -273,6 +289,9 @@ class Ledger:
                 0
             ]
             prior_findings = set(p.get("unresolved", []))
+            from .decisions import gate_approved
+
+            manual_satisfied = gate_approved(self, n, w, c)
             for previous in c.execute(
                 "SELECT payload FROM ap_reviews WHERE candidate_id=? AND id!=?", (cid, review["id"])
             ):
@@ -306,9 +325,14 @@ class Ledger:
                     for e in evidence
                 )
                 or not w["plan"]["policy"]["automatic_acceptance"]
-                or n["spec"]["manual_gates"]
-                or n["spec"]["contract"].get("manual_approval")
-                or p["contract"].get("manual_approval")
+                or (
+                    (
+                        n["spec"]["manual_gates"]
+                        or n["spec"]["contract"].get("manual_approval")
+                        or p["contract"].get("manual_approval")
+                    )
+                    and not manual_satisfied
+                )
                 or not result
                 or result["status"] != "SUCCESS"
                 or task["status"] != "completed"
@@ -371,4 +395,11 @@ class Ledger:
                 cand["reviews"] = self.rows("reviews", "candidate_id=?", (cand["id"],))
                 cand["acceptances"] = self.rows("acceptances", "candidate_id=?", (cand["id"],))
             n["operations"] = self.rows("operations", "node_id=?", (n["id"],))
-        return dict(**w, nodes=nodes)
+            from .decisions import target
+
+            n["decision_target"] = target(n, w)
+            n["decisions"] = self.rows("decisions", "node_id=?", (n["id"],))
+        revisions = self.rows("plan_revisions", "workflow_id=?", (workflow_id,))
+        for revision in revisions:
+            revision["decision_target"] = digest(revision["payload"])
+        return dict(**w, nodes=nodes, plan_revisions=revisions)
