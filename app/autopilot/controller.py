@@ -145,6 +145,8 @@ class Autopilot:
                         node = unpack(row)
                         if not node["task_id"]:
                             next_state = "pending"
+                        elif not self.manager.db.get_task(node["task_id"]):
+                            next_state = "reconciling"
                         elif not node["candidate_id"]:
                             next_state = "implementing"
                         else:
@@ -517,13 +519,20 @@ class Autopilot:
         base = w["plan"]["base_sha"] if n["spec"]["kind"] == "integration" or not code else code[0]
         if n["task_id"]:
             task = self.manager.db.get_task(n["task_id"])
+            if not task:
+                raise ValueError("reserved source task is missing; reconcile the operation before retry")
+            bundle = await fixed_inputs.requirements(self, dict(n, inputs=inputs), w)
+            if (Path(task["worktree"]) / fixed_inputs.DIRECTORY).exists():
+                fixed_inputs.verify(task["worktree"], bundle)
+            else:
+                fixed_inputs.materialize(task["worktree"], bundle)
             self.ledger.transition(n["id"], "launching", "implementing", inputs=inputs)
             return
+        pinned_node = dict(n, inputs=inputs)
+        bundle = await fixed_inputs.requirements(self, pinned_node, w)
         task_id = make_task_id()
         # Persist the intended task before worktree/process side effects. Crash = reconcile, not a new task.
         self.ledger.transition(n["id"], "launching", "launching", task_id=task_id, inputs=inputs)
-        pinned_node = dict(n, inputs=inputs)
-        bundle = await fixed_inputs.requirements(self, pinned_node, w)
         prompt = (
             n["spec"]["prompt"]
             + "\nEdit ownership: "
@@ -664,11 +673,7 @@ class Autopilot:
                     "integration implementation turn has not completed; merge/conflict resolution alone is insufficient"
                 )
         bundle = await fixed_inputs.requirements(self, n, w)
-        if (Path(task["worktree"]) / fixed_inputs.DIRECTORY).exists():
-            fixed_inputs.verify(task["worktree"], bundle)
-        else:
-            # Legacy enrolled tasks get the same readable bundle before validation/review.
-            fixed_inputs.materialize(task["worktree"], bundle)
+        fixed_inputs.verify(task["worktree"], bundle)
         head = await git.submit_head(task, n["spec"], w["plan"]["permissions"]["commit_owned_changes"])
         s = await git.scope(task["worktree"], task["base_sha"], head)
         if n["spec"]["kind"] == "integration":
@@ -741,9 +746,11 @@ class Autopilot:
         root = await git.snapshot(
             p["repository"], p["scope"]["head_sha"], p["scope"]["base_sha"], self.root / "snapshots" / candidate["id"]
         )
-        fixed_inputs.materialize(
-            root, p.get("requirements", dict(version=1, instruction=p.get("acceptance", ""), documents=[]))
-        )
+        bundle = p.get("requirements", dict(version=1, instruction=p.get("acceptance", ""), documents=[]))
+        if (root / fixed_inputs.DIRECTORY).exists():
+            fixed_inputs.verify(root, bundle)
+        else:
+            fixed_inputs.materialize(root, bundle)
         _, dirty, _ = await git.git(root, "status", "--porcelain", "--", ".", ":(exclude).autopilot-inputs")
         if dirty or await git.scope(root, p["scope"]["base_sha"], p["scope"]["head_sha"]) != p["scope"]:
             raise ValueError("snapshot modified; fixed source evidence invalid")
@@ -944,6 +951,11 @@ class Autopilot:
                     if d["payload"].get("spec_digest") == digest(n["spec"])
                     and d["payload"].get("run_generation") == w["generation"]
                     and d["payload"].get("candidate_id") in (None, candidate["id"])
+                    and d["payload"].get("authorization") == decisions.authorization(w)
+                    and (
+                        d["payload"].get("purpose") == "manual_gates"
+                        or d["payload"].get("decision_epoch") == n["decision_epoch"]
+                    )
                 ],
             ),
         )

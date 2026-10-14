@@ -30,6 +30,7 @@ def safe_path(value):
         not isinstance(value, str)
         or not value
         or "\x00" in value
+        or any(ord(char) < 32 for char in value)
         or "\\" in value
         or PurePosixPath(value).is_absolute()
         or any(p in ("..", ".git") for p in value.split("/"))

@@ -49,13 +49,14 @@ async def partitions(candidate, root):
     p = candidate["payload"]
     pages = []
     for path in p["changed_paths"]:
-        decoder, pending, pieces = codecs.getincrementaldecoder("utf-8")("replace"), "", []
+        decoder, pending, pieces = codecs.getincrementaldecoder("utf-8")("strict"), "", []
 
         def consume(data):
             nonlocal pending
             pending += decoder.decode(data)
-            while len(pending) >= PAGE:
-                cut = pending.rfind("\n", 0, PAGE) + 1 or PAGE
+            while len(pending.encode()) >= PAGE:
+                boundary = len(pending.encode()[:PAGE].decode("utf-8", errors="ignore"))
+                cut = pending.rfind("\n", 0, boundary) + 1 or boundary
                 pieces.append(pending[:cut])
                 pending = pending[cut:]
                 if len(pieces) + len(pages) > MAX_PARTITIONS:

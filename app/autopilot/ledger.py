@@ -60,6 +60,9 @@ def migrate(db):
         have = {r["name"] for r in db._conn.execute("PRAGMA table_info(ap_workflows)")}
         if "request_key" not in have:
             db._conn.execute("ALTER TABLE ap_workflows ADD COLUMN request_key TEXT NOT NULL DEFAULT ''")
+        node_columns = {r["name"] for r in db._conn.execute("PRAGMA table_info(ap_nodes)")}
+        if "decision_epoch" not in node_columns:
+            db._conn.execute("ALTER TABLE ap_nodes ADD COLUMN decision_epoch INTEGER NOT NULL DEFAULT 0")
         db._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS ap_request_key ON ap_workflows(request_key) WHERE request_key!=''"
         )
@@ -181,6 +184,7 @@ class Ledger:
                 c.execute(
                     "UPDATE ap_nodes SET state=?"
                     + "".join(f", {k}=?" for k in fields)
+                    + (", decision_epoch=decision_epoch+1" if new == "blocked_decision" and old != new else "")
                     + " WHERE id=? AND state=? AND EXISTS(SELECT 1 FROM ap_workflows w WHERE w.id=ap_nodes.workflow_id AND w.state IN ('running','paused'))",
                     (new, *fields.values(), node_id, old),
                 ).rowcount

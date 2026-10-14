@@ -26,7 +26,7 @@ def documents(uploads):
         total += len(data)
         if len(data) > MAX_FILE or total > MAX_TOTAL or len(result) >= MAX_FILES:
             raise ValueError("Markdown import size/file limit exceeded")
-        text = data.decode("utf-8-sig")
+        text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
         if "\x00" in text:
             raise ValueError("binary Markdown is not accepted")
         result[name] = text

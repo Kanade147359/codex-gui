@@ -21,7 +21,9 @@ async def propose(ap, planner):
     )
     if not mode.startswith(("100644 ", "100755 ")):
         raise ValueError("planning artifact must be a regular accepted file")
-    _, text, _ = await git.git(w["plan"]["repository"], "show", candidate["payload"]["scope"]["head_sha"] + ":" + path)
+    from .inputs import accepted_text, bytes_digest
+
+    text = await accepted_text(w["plan"]["repository"], candidate["payload"]["scope"]["head_sha"], path)
     raw = json.loads(text)
     if not isinstance(raw, dict) or set(raw) != {"nodes"} or not isinstance(raw["nodes"], list) or not raw["nodes"]:
         raise ValueError("planning artifact must contain nonempty nodes revisions")
@@ -66,7 +68,9 @@ async def propose(ap, planner):
         plan=normalized,
         changed=changed,
         expansions=expansions,
-        artifact=dict(head_sha=candidate["payload"]["scope"]["head_sha"], path=path, digest=digest(raw)),
+        artifact=dict(
+            head_sha=candidate["payload"]["scope"]["head_sha"], path=path, digest=bytes_digest(text.encode())
+        ),
     )
     with ap.ledger.transaction() as c:
         if c.execute("SELECT 1 FROM ap_plan_revisions WHERE source_candidate=?", (candidate["id"],)).fetchone():
@@ -110,6 +114,9 @@ def apply(ap, revision, *, expected=None, approve=False, reject=False):
         r = unpack(c.execute("SELECT * FROM ap_plan_revisions WHERE id=?", (revision["id"],)).fetchone())
         w = unpack(c.execute("SELECT * FROM ap_workflows WHERE id=?", (r["workflow_id"],)).fetchone())
         if r["state"] == "applied":
+            if approve or reject:
+                if reject or expected != r["payload"].get("owner_decision_target"):
+                    raise ValueError("plan decision target changed or was already applied")
             return
         if w["state"] not in ("running", "paused") or digest(w["plan"]) != r["payload"]["expected_plan"]:
             raise ValueError("plan revision is stale or workflow stopped")
@@ -143,5 +150,5 @@ def apply(ap, revision, *, expected=None, approve=False, reject=False):
                     (canonical(spec), w["id"], spec["id"]),
                 )
         c.execute("UPDATE ap_workflows SET plan=? WHERE id=?", (canonical(r["payload"]["plan"]), w["id"]))
-        audit = dict(r["payload"], owner_approved=approve)
+        audit = dict(r["payload"], owner_approved=approve, owner_decision_target=expected if approve else None)
         c.execute("UPDATE ap_plan_revisions SET state='applied',payload=? WHERE id=?", (canonical(audit), r["id"]))

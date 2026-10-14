@@ -540,3 +540,94 @@ def test_conflict_resolution_still_runs_separate_integration_implementation(make
         await manager.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_repeated_human_decision_has_new_epoch_and_old_resume_cannot_replay(settings, git_repo):
+    class HumanReviewer(FixtureProvider):
+        async def start_review(self, candidate, policy, root, attempt, on_identity):
+            result = await super().start_review(candidate, policy, root, attempt, on_identity)
+            return dict(result, verdict="NEEDS_HUMAN")
+
+    app = create_app(settings, FakeRunner())
+    ap = install(app.state.manager, claude=HumanReviewer("claude"))
+    with TestClient(app) as client:
+        wid = api_register(client, plan(git_repo))
+        before = api_wait(client, wid, lambda v: v["nodes"][0]["state"] == "blocked_decision")
+        n = before["nodes"][0]
+        url = f"/api/autopilot/workflows/{wid}/nodes/C/decision"
+        body = dict(
+            owner_action=True, expected_target=n["decision_target"], note="Owner decision for first review question"
+        )
+        assert client.post(url, json=dict(body, action="approve")).status_code == 200
+    app2 = create_app(settings, FakeRunner())
+    ap2 = install(app2.state.manager, claude=HumanReviewer("claude"))
+    with TestClient(app2) as client:
+        # Approval survived a real connection/controller restart without becoming task success.
+        assert client.get(f"/api/autopilot/workflows/{wid}").json()["nodes"][0]["state"] == "blocked_decision"
+        assert client.post(url, json=dict(body, action="resume")).status_code == 200
+        after = api_wait(client, wid, lambda v: v["nodes"][0]["state"] == "blocked_decision")
+        current = after["nodes"][0]
+        assert current["candidate_id"] == n["candidate_id"]
+        assert current["decision_epoch"] == n["decision_epoch"] + 1
+        assert current["decision_target"] != n["decision_target"]
+        assert client.post(url, json=dict(body, action="resume")).status_code == 400
+        assert not ap2.ledger.rows("acceptances")
+        calls = ap2.providers["claude"].calls
+        assert calls[-1]["received"]["owner_decisions"][0]["note"] == body["note"]
+
+
+def test_crlf_import_and_original_requirement_bytes_are_preserved(make_manager, git_repo):
+    from app.autopilot.importer import documents, prepare
+
+    imported = prepare(
+        documents([("COMMON.md", b"# COMMON\r\nrequirement\r\n"), ("C.md", b"---\r\nid: C\r\n---\r\nassigned\r\n")])
+    )
+    assert imported["nodes"][0]["id"] == "C"
+    assert imported["inputs"]["COMMON.md"] == "# COMMON\nrequirement\n"
+
+    async def scenario():
+        manager = make_manager()
+        ap = install(manager)
+        raw = plan(git_repo)
+        raw["inputs"] = {"COMMON.md": "Original JSON input\r\nrequired bytes\r\n"}
+        wid = await register(ap, raw)
+        await drive(manager, lambda: ap.ledger.view(wid)["state"] == "completed")
+        doc = ap.ledger.view(wid)["nodes"][0]["candidates"][0]["payload"]["requirements"]["documents"][0]
+        task = manager.db.get_task(ap.ledger.view(wid)["nodes"][0]["task_id"])
+        assert (Path(task["worktree"]) / ".autopilot-inputs" / doc["name"]).read_bytes() == raw["inputs"][
+            "COMMON.md"
+        ].encode()
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_multibyte_diff_partitioning_preserves_every_byte(git_repo):
+    async def scenario():
+        base = await sha(git_repo)
+        (git_repo / "日本語.txt").write_text("".join(f"必要条件の確認 {i}\n" for i in range(12000)))
+        await git(git_repo, "add", ".")
+        await git(git_repo, "commit", "-m", "Japanese change")
+        from app.autopilot.git import scope
+
+        fixed = await scope(git_repo, base, await sha(git_repo))
+        candidate = dict(payload=dict(scope=fixed, changed_paths=["日本語.txt"]))
+        pages, _ = await partitions(candidate, git_repo)
+        actual = bytearray()
+        await git(
+            git_repo,
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            base,
+            fixed["head_sha"],
+            "--",
+            "日本語.txt",
+            _stdout_consumer=actual.extend,
+        )
+        assert b"".join(page["diff"].encode() for page in pages) == actual
+        assert len(pages) > 1 and all(len(page["diff"].encode()) <= 65536 for page in pages)
+
+    asyncio.run(scenario())

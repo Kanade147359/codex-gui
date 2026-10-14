@@ -6,6 +6,10 @@ from app.models import now_iso
 from .policy import canonical, digest
 
 
+def authorization(workflow):
+    return digest({key: workflow["plan"].get(key, {}) for key in ("policy", "permissions", "inputs", "rules")})
+
+
 def target(node, workflow):
     return digest(
         dict(
@@ -13,6 +17,8 @@ def target(node, workflow):
             spec=node["spec"],
             candidate=node["candidate_id"],
             generation=node["generation"],
+            decision_epoch=node.get("decision_epoch", 0),
+            authorization=authorization(workflow),
             run_generation=workflow["generation"],
             reason=node["reason"],
         )
@@ -32,6 +38,7 @@ def gate_approved(ledger, node, workflow, connection=None):
         and r["payload"].get("purpose") == "manual_gates"
         and r["payload"].get("spec_digest") == digest(node["spec"])
         and r["payload"].get("run_generation") == workflow["generation"]
+        and r["payload"].get("authorization") == authorization(workflow)
         for r in rows
     )
 
@@ -66,6 +73,8 @@ def decide(ap, nid, expected, action, note):
                     run_generation=w["generation"],
                     spec_digest=digest(n["spec"]),
                     candidate_id=n["candidate_id"],
+                    decision_epoch=n["decision_epoch"],
+                    authorization=authorization(w),
                     purpose="manual_gates" if not n["candidate_id"] else "review_decision",
                 )
                 c.execute(

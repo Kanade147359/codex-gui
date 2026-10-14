@@ -2,6 +2,7 @@
   const el = id => document.getElementById(id);
   let preview = null, selected = null;
   let backlogSelections = [];
+  const ownerNotes = new Map();
   async function api(url, body) {
     const r = await fetch(url, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {});
     const data = await r.json();
@@ -79,7 +80,9 @@
           const card = document.createElement('article'); card.className = 'ap-node';
           card.append(text('h3',`${node.name} (${node.spec.kind}) — ${node.state}`),text('p',node.reason),text('p',`依存: ${node.spec.depends_on.join(', ')} / 修正残: ${w.plan.policy.max_fix_rounds-node.fix_rounds}`));
           if (node.state === 'blocked_decision') {
-            const note = document.createElement('input'); note.placeholder = '所有者判断の理由'; note.setAttribute('aria-label',`${node.name} owner rationale`); card.append(note,text('p',`判断対象版: ${node.decision_target}`));
+            const note = document.createElement('input'); note.placeholder = '所有者判断の理由'; note.setAttribute('aria-label',`${node.name} owner rationale`);
+            const noteKey = `${node.id}:${node.decision_target}`; note.value = ownerNotes.get(noteKey) || ''; note.oninput = () => ownerNotes.set(noteKey,note.value);
+            card.append(note,text('p',`判断対象版: ${node.decision_target}`));
             for (const action of ['approve','reject','resume']) {
               const button = text('button',`Owner ${action}`);
               button.onclick = async () => {try {await api(`/api/autopilot/workflows/${selected}/nodes/${node.name}/decision`,{owner_action:true,expected_target:node.decision_target,action,note:note.value}); await refresh();} catch(e) {showError(e);}};

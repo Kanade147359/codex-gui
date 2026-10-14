@@ -35,6 +35,8 @@ def normalize(raw):
         for key, value in raw["env"].items()
     ):
         raise ValueError("unregistered validation environment variable")
+    if any(raw["env"].get(key, "true").lower() != "true" for key in ("CARGO_NET_OFFLINE", "npm_config_offline")):
+        raise ValueError("offline validation flags cannot be disabled")
     if not isinstance(raw["mounts"], list) or len(raw["mounts"]) > 12:
         raise ValueError("too many environment mounts")
     destinations = set()
@@ -62,7 +64,7 @@ def normalize(raw):
             or set(probe) - {"command", "contains"}
             or not isinstance(probe.get("command"), list)
             or not probe["command"]
-            or any(not isinstance(a, str) or not a for a in probe["command"])
+            or any(not isinstance(a, str) or not a or "\x00" in a for a in probe["command"])
         ):
             raise ValueError("toolchain probes require explicit argv")
         if not isinstance(probe.get("contains", ""), str):
@@ -104,6 +106,8 @@ async def preflight(root, profile):
         probes = list(environment.get("toolchains", []))
         # Check command executables even when no explicit version requirement was supplied.
         for command in profile["commands"]:
+            if "/" in command[0] and not command[0].startswith(("/usr/", "/bin/", "/opt/validation/")):
+                continue  # Repository/scratch executables may be produced by implementation or an earlier build.
             probes.append(dict(command=["/bin/sh", "-c", 'command -v "$1" >/dev/null', "preflight", command[0]]))
             if command[0] in {"cargo", "rustc", "node", "npm", "python", "python3"}:
                 probes.append(dict(command=[command[0], "--version"]))

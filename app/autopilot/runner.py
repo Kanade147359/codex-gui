@@ -66,7 +66,14 @@ def sandbox(root, scratch, outputs=(), network=False, cwd="/source"):
         if target.exists() and (target.is_symlink() or target.is_file() or any(target.iterdir())):
             raise InfrastructureUnavailable("build output must be an absent or empty directory: " + output)
         target.mkdir(parents=True, exist_ok=True)  # Empty mountpoints do not change the Git source tree.
-        args += ["--dir", "/source/" + output, "--tmpfs", "/source/" + output]
+        private = Path(scratch) / "outputs" / output
+        if not private.resolve().is_relative_to(Path(scratch).resolve()) or any(
+            p.is_symlink() for p in [private, *private.parents] if p.is_relative_to(Path(scratch))
+        ):
+            raise InfrastructureUnavailable("build scratch output traverses a symlink")
+        private.mkdir(parents=True, exist_ok=True)
+        # Preserve outputs between required commands, without writing the source tree.
+        args += ["--dir", "/source/" + output, "--bind", str(private), "/source/" + output]
     return args
 
 

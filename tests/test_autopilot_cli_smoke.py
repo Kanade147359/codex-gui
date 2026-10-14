@@ -22,7 +22,11 @@ pytestmark = pytest.mark.skipif(
 def test_installed_appserver_independent_session_structured_output_and_sandbox(tmp_path, monkeypatch):
     async def scenario():
         scope = dict(base_sha="a" * 40, head_sha="b" * 40, tree_sha="c" * 40, diff_digest="d" * 64)
-        candidate = dict(id="candidate-smoke", run_generation=1, payload=dict(scope=scope))
+        candidate = dict(
+            id="candidate-smoke",
+            run_generation=1,
+            payload=dict(scope=scope, changed_paths=["fixture.txt"], read_protocol=True),
+        )
         result = dict(
             candidate_id=candidate["id"],
             run_generation=1,
@@ -33,6 +37,7 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
             resolved=[],
             coverage=["fixture.txt"],
             unverified=[],
+            requested_reads=[],
         )
         mock = MockResponses([("text", json.dumps(result))]).start()
         root = tmp_path / "source"
@@ -79,12 +84,14 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
             assert first["thread"]["id"] != second["thread"]["id"]
             tid = first["thread"]["id"]
             queue = client.subscribe(tid)
-            from app.autopilot.providers import REVIEW_SCHEMA
+            from app.autopilot.providers import review_schema
 
             turn = await client.request(
                 "turn/start",
                 dict(
-                    threadId=tid, input=[dict(type="text", text="offline structured smoke")], outputSchema=REVIEW_SCHEMA
+                    threadId=tid,
+                    input=[dict(type="text", text="offline structured smoke")],
+                    outputSchema=review_schema(candidate),
                 ),
             )
             value = await asyncio.wait_for(CodexProvider().consume_events(queue, candidate, turn["turn"]["id"]), 20)

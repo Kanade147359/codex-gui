@@ -19,7 +19,7 @@ bundle_path = Path.cwd() / ".autopilot-inputs/requirements.json"
 bundle = json.loads(bundle_path.read_text()) if bundle_path.exists() else None
 if bundle:
     for doc in bundle["documents"]:
-        actual = (bundle_path.parent / doc["name"]).read_text()
+        actual = (bundle_path.parent / doc["name"]).read_bytes().decode()
         assert actual == doc["body"] and hashlib.sha256(actual.encode()).hexdigest() == doc["digest"]
 if resume:
     node = json.loads(metadata.read_text())["node"]
