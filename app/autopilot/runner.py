@@ -66,7 +66,14 @@ def sandbox(root, scratch, outputs=(), network=False, cwd="/source"):
         if target.exists() and (target.is_symlink() or target.is_file() or any(target.iterdir())):
             raise InfrastructureUnavailable("build output must be an absent or empty directory: " + output)
         target.mkdir(parents=True, exist_ok=True)  # Empty mountpoints do not change the Git source tree.
-        args += ["--dir", "/source/" + output, "--tmpfs", "/source/" + output]
+        private = Path(scratch) / "outputs" / output
+        if not private.resolve().is_relative_to(Path(scratch).resolve()) or any(
+            p.is_symlink() for p in [private, *private.parents] if p.is_relative_to(Path(scratch))
+        ):
+            raise InfrastructureUnavailable("build scratch output traverses a symlink")
+        private.mkdir(parents=True, exist_ok=True)
+        # Preserve outputs between required commands, without writing the source tree.
+        args += ["--dir", "/source/" + output, "--bind", str(private), "/source/" + output]
     return args
 
 
@@ -133,6 +140,9 @@ async def run_bounded(argv, *, cwd=None, env=None, timeout=300, stdin=None, on_s
 
 class Validator:
     async def validate(self, candidate, root, profile, log_dir, on_start=None):
+        from .environment import preflight, mounts, env
+
+        preflight_evidence = await preflight(root, profile)
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         began = time.time()
@@ -146,10 +156,14 @@ class Validator:
         with tempfile.TemporaryDirectory(prefix="ap-validator-") as scratch:
             for i, command in enumerate(profile["commands"]):
                 command_started = time.time()
-                argv = sandbox(root, scratch, profile["outputs"]) + ["--", *command]
+                argv = (
+                    sandbox(root, scratch, profile["outputs"])
+                    + mounts(profile.get("environment", {}))
+                    + ["--", *command]
+                )
                 rc, output, timeout = await run_bounded(
                     argv,
-                    env=minimal_env(),
+                    env=env(profile.get("environment", {})),
                     timeout=profile["timeout"],
                     on_start=on_start,
                     log_path=log_dir / f"{i}.log",
@@ -173,6 +187,7 @@ class Validator:
             scope=candidate["payload"]["scope"],
             profile_digest=digest(profile),
             environment="bwrap:allowlisted-runtime;network=off;source=read-only",
+            environment_preflight=preflight_evidence,
             started_at=began,
             finished_at=time.time(),
             checks=checks,

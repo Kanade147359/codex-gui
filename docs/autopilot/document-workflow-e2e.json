@@ -1,0 +1,829 @@
+{
+  "code_sha": "a5a9daad8dc4c99b00a6655e68044fdd52cba6bc",
+  "provider_mode": "independent subprocess fixtures; not real models",
+  "state": "completed",
+  "workflow_id": "3c171efd243b430dbeeafc991f930a7c",
+  "start_count": 1,
+  "manual_send_approve_merge_count": 0,
+  "restart": "accepted 00 before plan revision reservation; reopened actual SQLite/controller",
+  "unchanged_reference_bytes": 1400000,
+  "plan_revisions": [
+    {
+      "id": "491678f356d9458694f16ee992d47c99",
+      "source_candidate": "51b6af2f498f49538d1b2194bfb13a7d",
+      "state": "applied",
+      "payload": {
+        "expected_plan": "dd5ed89f0ca7cf565e4b7fa33de385a39b7fc90c795884aeb4429df9b50bad7c",
+        "changed": [
+          "A",
+          "B",
+          "C"
+        ],
+        "expansions": [],
+        "artifact": {
+          "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+          "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+          "path": "plan.json"
+        },
+        "owner_approved": false
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "name": "00",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [],
+      "candidates": [
+        {
+          "id": "51b6af2f498f49538d1b2194bfb13a7d",
+          "generation": 1,
+          "scope": {
+            "base_sha": "540e1f8cc3b439bcaf3265b6cad8ade978bfbecd",
+            "diff_digest": "b827613e69a2e97fefb3010c6636565635affa629013ba4583709acc7f9fed5c",
+            "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+            "tree_sha": "cc3d2d2b6244b2e768a7876dabcd0ce895869287"
+          },
+          "recorded_completion": {
+            "origin": "strict_final_assistant_json",
+            "parsed_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            }
+          },
+          "requirements_digest": "b039c82e08aaf7fdf585b7d48bf68b0ca48ef8b38dcaa228657d1bcb9853dabe",
+          "documents": [
+            {
+              "name": "documents/00.md",
+              "digest": "45904fb11116c3224c3bf2e7b3682299caf7391dbf487decc479f9c93d5a25fa",
+              "origin": "owner input"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+              "origin": "owner input"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "8c5309fd7a4ec858a9769941dd6b52807698c3e6b5931846757711fd8ebc269f",
+              "checks": [
+                {
+                  "command_digest": null,
+                  "artifact": "plan.json",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": null,
+                  "artifact": "HANDOFF.md",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "182757dfc939773db615f5b0160e469524790d8e221bb5383280f9f6f31d5d61",
+                  "artifact": null,
+                  "exit_status": 0
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "claude",
+              "state": "completed",
+              "generation": 1,
+              "session": "review-9677ca3ce5a54014a11e220e51408710",
+              "fallback_reason": "",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "blocking": [],
+              "coverage": [
+                "HANDOFF.md",
+                "plan.json"
+              ],
+              "partitions": [
+                {
+                  "digest": "a0633777891bca24685f51fb72efca0de4aeafa3dbf3b877c4f5c05d420dac47",
+                  "index": 1,
+                  "path": "HANDOFF.md",
+                  "segment": 1,
+                  "session": "review-dcc0349c31164175b37a6f17af983de3",
+                  "verdict": "APPROVE"
+                },
+                {
+                  "digest": "ee0cc490d079a1108fa77175b4acca65a335d6a326287df0067c648577e894f6",
+                  "index": 2,
+                  "path": "plan.json",
+                  "segment": 1,
+                  "session": "review-77413dcfbc7141a4a933faea04e331c0",
+                  "verdict": "APPROVE"
+                }
+              ]
+            }
+          ],
+          "acceptances": 1
+        }
+      ],
+      "operations": []
+    },
+    {
+      "name": "A",
+      "state": "accepted",
+      "fix_rounds": 1,
+      "inputs": [
+        {
+          "candidate_id": "51b6af2f498f49538d1b2194bfb13a7d",
+          "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+          "kind": "report",
+          "node": "00"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "ff27f4e3f8614aada90fd24a67b12fce",
+          "generation": 1,
+          "scope": {
+            "base_sha": "540e1f8cc3b439bcaf3265b6cad8ade978bfbecd",
+            "diff_digest": "ea39b8c75eefba25aaf89aaa31af4252a5f1d701a0af090ca06db05ee3fe3be6",
+            "head_sha": "2fbaebd2b09235ad6257670a90f8ecdd7a4ff689",
+            "tree_sha": "caf8769c40b289608292a032b848e24adb377086"
+          },
+          "recorded_completion": {
+            "origin": "strict_final_assistant_json",
+            "parsed_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            }
+          },
+          "requirements_digest": "baab92ed8d7fd2e7b38f765f2df842d2fadb2da0150576a25e5954d595423a24",
+          "documents": [
+            {
+              "name": "documents/A.md",
+              "digest": "4cf5385d9f8b942c72be2a57292afef8b3c8e0f10bd1e9f91e1be01d0caca303",
+              "origin": "owner input"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+              "origin": "owner input"
+            },
+            {
+              "name": "handoff/00/HANDOFF.md",
+              "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "HANDOFF.md"
+            },
+            {
+              "name": "handoff/00/plan.json",
+              "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "plan.json"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "4090e474a8c56b623ef56148b7ed1a390267d59de35fabfe78f9d0023a77267e",
+              "checks": [
+                {
+                  "command_digest": null,
+                  "artifact": "A.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "2316289a2bf296177bcee7bf4043893b859621c052e700f9d6aa87bb50e5f6dc",
+                  "artifact": null,
+                  "exit_status": 0
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "claude",
+              "state": "completed",
+              "generation": 1,
+              "session": "review-937f50328f9541819289f0770daee546",
+              "fallback_reason": "",
+              "verdict": "CHANGES_REQUESTED",
+              "error_kind": null,
+              "blocking": [
+                {
+                  "id": "COMMON-required",
+                  "line": 1,
+                  "path": "A.txt",
+                  "reason": "COMMON.md alone requires COMMON-OK; implementation omitted it"
+                }
+              ],
+              "coverage": [
+                "A.txt"
+              ],
+              "partitions": []
+            }
+          ],
+          "acceptances": 0
+        },
+        {
+          "id": "f438c7150aeb4310b7c838a355b4f4d8",
+          "generation": 2,
+          "scope": {
+            "base_sha": "540e1f8cc3b439bcaf3265b6cad8ade978bfbecd",
+            "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+            "head_sha": "5f23deb3dd9e7fcead379d1a76b4a9bcd0e1fc08",
+            "tree_sha": "81c00d53390771af15cf4a5c498db238c05a0955"
+          },
+          "recorded_completion": {
+            "origin": "strict_final_assistant_json",
+            "parsed_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            }
+          },
+          "requirements_digest": "baab92ed8d7fd2e7b38f765f2df842d2fadb2da0150576a25e5954d595423a24",
+          "documents": [
+            {
+              "name": "documents/A.md",
+              "digest": "4cf5385d9f8b942c72be2a57292afef8b3c8e0f10bd1e9f91e1be01d0caca303",
+              "origin": "owner input"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+              "origin": "owner input"
+            },
+            {
+              "name": "handoff/00/HANDOFF.md",
+              "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "HANDOFF.md"
+            },
+            {
+              "name": "handoff/00/plan.json",
+              "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "plan.json"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "4090e474a8c56b623ef56148b7ed1a390267d59de35fabfe78f9d0023a77267e",
+              "checks": [
+                {
+                  "command_digest": null,
+                  "artifact": "A.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "2316289a2bf296177bcee7bf4043893b859621c052e700f9d6aa87bb50e5f6dc",
+                  "artifact": null,
+                  "exit_status": 0
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "generation": 1,
+              "session": "review-aee9b4c6dc9e4691ba5f1b7a473188d2",
+              "fallback_reason": "confirmed Claude included quota",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "blocking": [],
+              "coverage": [
+                "A.txt"
+              ],
+              "partitions": []
+            }
+          ],
+          "acceptances": 1
+        }
+      ],
+      "operations": [
+        {
+          "kind": "fix",
+          "state": "completed",
+          "generation": 1,
+          "merged_head_sha": null,
+          "accepted_head_sha": null,
+          "steps": []
+        }
+      ]
+    },
+    {
+      "name": "B",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [
+        {
+          "candidate_id": "51b6af2f498f49538d1b2194bfb13a7d",
+          "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+          "kind": "report",
+          "node": "00"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "51da761119734a2b83eb0c0c9ef95e83",
+          "generation": 1,
+          "scope": {
+            "base_sha": "540e1f8cc3b439bcaf3265b6cad8ade978bfbecd",
+            "diff_digest": "185dff3596e45754255fbd1b80e46029d8f91536982bdbf64e4af86feb5f6a3d",
+            "head_sha": "c4873beb98d20e39db2608d107232d47883ff554",
+            "tree_sha": "557bb0fff8eb7cf7173b30b4cf1e372aab41b1c3"
+          },
+          "recorded_completion": {
+            "origin": "strict_final_assistant_json",
+            "parsed_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            }
+          },
+          "requirements_digest": "9dbd0e65fdc084b9e5b69715dd48073e8a646132bd09b8d32524deca33e35238",
+          "documents": [
+            {
+              "name": "documents/B.md",
+              "digest": "b8da5490cf2388fa02b954a5026bef3c8b0913c5a06941792d8a4202bd305790",
+              "origin": "owner input"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+              "origin": "owner input"
+            },
+            {
+              "name": "handoff/00/HANDOFF.md",
+              "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "HANDOFF.md"
+            },
+            {
+              "name": "handoff/00/plan.json",
+              "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "plan.json"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "06828774a88ec1f2d35aac14c978ff380588c03e0484ee7d2e9d00dfac9fac46",
+              "checks": [
+                {
+                  "command_digest": null,
+                  "artifact": "B.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "caf4e6e77d9b086df0548421da78fb0dbce551a8d11c4daff95daa1253a83f35",
+                  "artifact": null,
+                  "exit_status": 0
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "claude",
+              "state": "incomplete",
+              "generation": 1,
+              "session": null,
+              "fallback_reason": "",
+              "verdict": null,
+              "error_kind": "included_quota",
+              "blocking": [],
+              "coverage": [],
+              "partitions": []
+            },
+            {
+              "provider": "codex",
+              "state": "completed",
+              "generation": 2,
+              "session": "review-ae8d2a81a7884a11bbf636b26d9510f1",
+              "fallback_reason": "confirmed Claude included quota",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "blocking": [],
+              "coverage": [
+                "B.txt"
+              ],
+              "partitions": []
+            }
+          ],
+          "acceptances": 1
+        }
+      ],
+      "operations": []
+    },
+    {
+      "name": "C",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [
+        {
+          "candidate_id": "51b6af2f498f49538d1b2194bfb13a7d",
+          "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+          "kind": "report",
+          "node": "00"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "55d0c4896bdf4229b16ecb4ad701058e",
+          "generation": 1,
+          "scope": {
+            "base_sha": "540e1f8cc3b439bcaf3265b6cad8ade978bfbecd",
+            "diff_digest": "13c5a1b9683751fb10d3e3aebc434f33cea723d8ec1c222d985df2e9ccc90702",
+            "head_sha": "950b585c0ebee1be1bda5e13422ec6bc0c477607",
+            "tree_sha": "6113813be211089dae4b84b89f0649c543113df0"
+          },
+          "recorded_completion": {
+            "origin": "strict_final_assistant_json",
+            "parsed_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            }
+          },
+          "requirements_digest": "00d7f5693fa318c4175b6c7252572093e907f877f5153e4fa2f2a0745455e9aa",
+          "documents": [
+            {
+              "name": "documents/C.md",
+              "digest": "02b6705abb2069904202f0632eedf0b3129a46c16979911cf1c15241e9428584",
+              "origin": "owner input"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+              "origin": "owner input"
+            },
+            {
+              "name": "handoff/00/HANDOFF.md",
+              "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "HANDOFF.md"
+            },
+            {
+              "name": "handoff/00/plan.json",
+              "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "plan.json"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "0aee6db12dc1b148d64806989deb24246f196c631fc91c0e3a55e684e9f6caad",
+              "checks": [
+                {
+                  "command_digest": null,
+                  "artifact": "C.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "4da7882e1e465319a6a0d5d95b9cc4f3cab3721703d1ac1f8c6468f320bfda86",
+                  "artifact": null,
+                  "exit_status": 0
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "generation": 1,
+              "session": "review-b4270049fb8a4f41a14d215fdcf45b4d",
+              "fallback_reason": "confirmed Claude included quota",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "blocking": [],
+              "coverage": [
+                "C.txt"
+              ],
+              "partitions": []
+            }
+          ],
+          "acceptances": 1
+        }
+      ],
+      "operations": []
+    },
+    {
+      "name": "I1",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [
+        {
+          "candidate_id": "51b6af2f498f49538d1b2194bfb13a7d",
+          "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+          "kind": "report",
+          "node": "00"
+        },
+        {
+          "candidate_id": "f438c7150aeb4310b7c838a355b4f4d8",
+          "head_sha": "5f23deb3dd9e7fcead379d1a76b4a9bcd0e1fc08",
+          "kind": "code",
+          "node": "A"
+        },
+        {
+          "candidate_id": "51da761119734a2b83eb0c0c9ef95e83",
+          "head_sha": "c4873beb98d20e39db2608d107232d47883ff554",
+          "kind": "code",
+          "node": "B"
+        },
+        {
+          "candidate_id": "55d0c4896bdf4229b16ecb4ad701058e",
+          "head_sha": "950b585c0ebee1be1bda5e13422ec6bc0c477607",
+          "kind": "code",
+          "node": "C"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "57fea700e5a1429a871458dbe2d4d3cc",
+          "generation": 1,
+          "scope": {
+            "base_sha": "540e1f8cc3b439bcaf3265b6cad8ade978bfbecd",
+            "diff_digest": "d49e99beed846d5779148dce0ad0a0925dd327118380245d0d5ae6f7b3471848",
+            "head_sha": "da7b09947e1eb74fc677a6a31d1dbda859dce438",
+            "tree_sha": "e1a2795002065135aeb9b8610bb2a3cdea8bafc0"
+          },
+          "recorded_completion": {
+            "origin": "strict_final_assistant_json",
+            "parsed_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            }
+          },
+          "requirements_digest": "7a99dbd52f7b33bab194eb32afedf02a913d25be1d19e329632a0395670cb099",
+          "documents": [
+            {
+              "name": "documents/COMMON.md",
+              "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+              "origin": "owner input"
+            },
+            {
+              "name": "documents/I1.md",
+              "digest": "1e21c22cc49c75db53e0c125edc5cc3d4b2e405e052df04621669b76d4c53407",
+              "origin": "owner input"
+            },
+            {
+              "name": "handoff/00/HANDOFF.md",
+              "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "HANDOFF.md"
+            },
+            {
+              "name": "handoff/00/plan.json",
+              "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "plan.json"
+            },
+            {
+              "name": "handoff/A/A.txt",
+              "digest": "47c327e006045cbbd6bf8b47c71dc2827be1618b878b6caea5973790119a5a52",
+              "origin": "accepted artifact",
+              "head_sha": "5f23deb3dd9e7fcead379d1a76b4a9bcd0e1fc08",
+              "relative_path": "A.txt"
+            },
+            {
+              "name": "handoff/B/B.txt",
+              "digest": "47c327e006045cbbd6bf8b47c71dc2827be1618b878b6caea5973790119a5a52",
+              "origin": "accepted artifact",
+              "head_sha": "c4873beb98d20e39db2608d107232d47883ff554",
+              "relative_path": "B.txt"
+            },
+            {
+              "name": "handoff/C/C.txt",
+              "digest": "47c327e006045cbbd6bf8b47c71dc2827be1618b878b6caea5973790119a5a52",
+              "origin": "accepted artifact",
+              "head_sha": "950b585c0ebee1be1bda5e13422ec6bc0c477607",
+              "relative_path": "C.txt"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "dfba4966f3168569bf68fc49d73e9eee41e9dafa4597f426de936b51353b9554",
+              "checks": [
+                {
+                  "command_digest": null,
+                  "artifact": "wiring.py",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "4c8c8c2420e1afb1e3e768b09386a7a57d582be48813a0369e6b73b14cd599ff",
+                  "artifact": null,
+                  "exit_status": 0
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "generation": 1,
+              "session": "review-d15956b973da4e449b1fe4b080534215",
+              "fallback_reason": "confirmed Claude included quota",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "blocking": [],
+              "coverage": [
+                "A.txt",
+                "B.txt",
+                "C.txt",
+                "wiring.py"
+              ],
+              "partitions": [
+                {
+                  "digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+                  "index": 1,
+                  "path": "A.txt",
+                  "segment": 1,
+                  "session": "review-d7594b2a349e4327b3431836cd491d06",
+                  "verdict": "APPROVE"
+                },
+                {
+                  "digest": "185dff3596e45754255fbd1b80e46029d8f91536982bdbf64e4af86feb5f6a3d",
+                  "index": 2,
+                  "path": "B.txt",
+                  "segment": 1,
+                  "session": "review-04be6ac00e81444cac673839647a7dbe",
+                  "verdict": "APPROVE"
+                },
+                {
+                  "digest": "13c5a1b9683751fb10d3e3aebc434f33cea723d8ec1c222d985df2e9ccc90702",
+                  "index": 3,
+                  "path": "C.txt",
+                  "segment": 1,
+                  "session": "review-437910687f704dcba8b5ffac9106a945",
+                  "verdict": "APPROVE"
+                },
+                {
+                  "digest": "16866ad61a87506761c2a4c8dba9fdd35348dc76ef1d2692175e353a7971c208",
+                  "index": 4,
+                  "path": "wiring.py",
+                  "segment": 1,
+                  "session": "review-8f411db082764a38b5b05e8ac97eb8ee",
+                  "verdict": "APPROVE"
+                }
+              ]
+            }
+          ],
+          "acceptances": 1
+        }
+      ],
+      "operations": [
+        {
+          "kind": "integration",
+          "state": "merged",
+          "generation": 0,
+          "merged_head_sha": "8304a656f2a39c5bc3ffd4c01202f2d7c732d64c",
+          "accepted_head_sha": "da7b09947e1eb74fc677a6a31d1dbda859dce438",
+          "steps": [
+            {
+              "action": "merge",
+              "exit_status": 0,
+              "head": "5f23deb3dd9e7fcead379d1a76b4a9bcd0e1fc08",
+              "start_sha": "540e1f8cc3b439bcaf3265b6cad8ade978bfbecd"
+            },
+            {
+              "action": "merge",
+              "exit_status": 0,
+              "head": "c4873beb98d20e39db2608d107232d47883ff554",
+              "start_sha": "3b9157883d727e51a75912fcad5572acc70a8d61"
+            },
+            {
+              "action": "merge",
+              "exit_status": 0,
+              "head": "950b585c0ebee1be1bda5e13422ec6bc0c477607",
+              "start_sha": "ebc95dae29a283a199f22342de268ebf6be8e9f8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "D",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [
+        {
+          "candidate_id": "51b6af2f498f49538d1b2194bfb13a7d",
+          "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+          "kind": "report",
+          "node": "00"
+        },
+        {
+          "candidate_id": "57fea700e5a1429a871458dbe2d4d3cc",
+          "head_sha": "da7b09947e1eb74fc677a6a31d1dbda859dce438",
+          "kind": "integration",
+          "node": "I1"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "e29f78a6a921426a95f92e331d0f04d9",
+          "generation": 1,
+          "scope": {
+            "base_sha": "da7b09947e1eb74fc677a6a31d1dbda859dce438",
+            "diff_digest": "c83b6eb942fd148aa5092aeee91bb720b97b4eab262d9420134f596fe6159855",
+            "head_sha": "254af64db1cd3ba8a4f401b60cd10dad93b274e6",
+            "tree_sha": "bc00d11449bddd48064dc218a8fc54f7df5132ef"
+          },
+          "recorded_completion": {
+            "origin": "strict_final_assistant_json",
+            "parsed_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            }
+          },
+          "requirements_digest": "ad630bd8b36ca6c6671d3d4e6aa7167ec5e544cb3b2a5349e92ef06402d46a00",
+          "documents": [
+            {
+              "name": "documents/COMMON.md",
+              "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+              "origin": "owner input"
+            },
+            {
+              "name": "documents/D.md",
+              "digest": "903edc82087883998dae161dc104063055528c76302d73d4da44f3149bd0aac6",
+              "origin": "owner input"
+            },
+            {
+              "name": "handoff/00/HANDOFF.md",
+              "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "HANDOFF.md"
+            },
+            {
+              "name": "handoff/00/plan.json",
+              "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+              "origin": "accepted artifact",
+              "head_sha": "c912b462d54f2526bb6755dc371b421223f5a2ee",
+              "relative_path": "plan.json"
+            },
+            {
+              "name": "handoff/I1/wiring.py",
+              "digest": "56042aa4a8c7ae41bf4ef1cbb370132b8797d747a615a3e2008946fafa77aa49",
+              "origin": "accepted artifact",
+              "head_sha": "da7b09947e1eb74fc677a6a31d1dbda859dce438",
+              "relative_path": "wiring.py"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "profile_digest": "50cbafe0167b334643a852c72fb03b8f4ef8f956598afd28c96b1b4c01a2ed29",
+              "checks": [
+                {
+                  "command_digest": null,
+                  "artifact": "D.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "d8bf7a84e1dc327c4f17ef3d2d2c820c91ffc5f4870a37c62b128a5d82278f9b",
+                  "artifact": null,
+                  "exit_status": 0
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "provider": "codex",
+              "state": "completed",
+              "generation": 1,
+              "session": "review-1d97625477c64cffa0c57d62533bbf98",
+              "fallback_reason": "confirmed Claude included quota",
+              "verdict": "APPROVE",
+              "error_kind": null,
+              "blocking": [],
+              "coverage": [
+                "D.txt"
+              ],
+              "partitions": []
+            }
+          ],
+          "acceptances": 1
+        }
+      ],
+      "operations": []
+    }
+  ]
+}

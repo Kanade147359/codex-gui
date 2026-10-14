@@ -11,7 +11,7 @@ import uuid
 from app import completion
 from app.models import now_iso, make_task_id, ACTIVE_STATUSES, WAITING_STATUSES
 from app.procinfo import process_identity, same_process
-from . import git
+from . import git, inputs as fixed_inputs, decisions, planning
 from .ledger import Ledger, unpack
 from .policy import canonical, digest, manifest, input_digest
 from .providers import ClaudeProvider, CodexProvider, ProviderFailure, validate_result, validate_codex_route
@@ -55,6 +55,7 @@ class Autopilot:
             raise ValueError("workflow repository must be its Git root")
         plan["repository"] = str(repo)
         plan["base_sha"] = await git.sha(repo, plan["base_ref"])
+        plan["rules"] = await fixed_inputs.freeze_rules(repo, plan["base_sha"])
         for n in plan["nodes"]:
             if n.get("task_id"):
                 task = self.manager.db.get_task(n["task_id"])
@@ -70,7 +71,15 @@ class Autopilot:
                     raise ValueError("backlog task is not idle needs_review")
                 if await git.changed_paths(task["worktree"], task["base_sha"]):
                     # Existing dirty worktrees may include unrelated owner edits. Only precommitted backlogs are safe.
-                    _, status, _ = await git.git(task["worktree"], "status", "--porcelain")
+                    _, status, _ = await git.git(
+                        task["worktree"],
+                        "status",
+                        "--porcelain",
+                        "--",
+                        ".",
+                        ":(exclude).autopilot-inputs",
+                        ":(exclude).autopilot-fix",
+                    )
                     if status:
                         raise ValueError("commit and inspect backlog changes before opt-in")
         warnings = []
@@ -136,6 +145,8 @@ class Autopilot:
                         node = unpack(row)
                         if not node["task_id"]:
                             next_state = "pending"
+                        elif not self.manager.db.get_task(node["task_id"]):
+                            next_state = "reconciling"
                         elif not node["candidate_id"]:
                             next_state = "implementing"
                         else:
@@ -199,6 +210,9 @@ class Autopilot:
         if not node:
             return
         workflow = self.ledger.get("workflows", node["workflow_id"])
+        from .environment import preflight
+
+        await preflight(task["worktree"], node["spec"]["validation"])
         capability = await self.providers["codex"].probe_capabilities_and_auth(workflow["plan"]["policy"])
         if capability.get("fixture") is True:
             return
@@ -351,6 +365,24 @@ class Autopilot:
         for w in self.ledger.rows("workflows", "state='running'"):
             nodes = self.ledger.rows("nodes", "workflow_id=?", (w["id"],))
             policy = w["plan"]["policy"]
+            for planner in nodes:
+                if (
+                    planner["state"] == "accepted"
+                    and planner["spec"].get("plan_artifact")
+                    and planner["id"] not in self.jobs
+                ):
+                    existing = self.ledger.rows("plan_revisions", "source_candidate=?", (planner["candidate_id"],))
+                    if not existing:
+                        self._spawn(planner, "accepted", "accepted", self._plan_revision)
+            for revision in self.ledger.rows("plan_revisions", "workflow_id=? AND state='ready'", (w["id"],)):
+                try:
+                    planning.apply(self, revision)
+                except ValueError as error:
+                    with self.ledger.transaction() as c:
+                        c.execute(
+                            "UPDATE ap_plan_revisions SET state='stale',payload=? WHERE id=? AND state='ready'",
+                            (canonical(dict(revision["payload"], reason=redact(str(error)))), revision["id"]),
+                        )
             if all(n["state"] == "accepted" for n in nodes):
                 if w["plan"]["permissions"]["publish_main"]:
                     if not any(n["id"] in self.jobs for n in nodes):
@@ -371,6 +403,15 @@ class Autopilot:
                 n["state"] in ("launching", "integrating") and n["spec"]["kind"] == "integration" for n in all_nodes
             )
             for n in nodes:
+                if (
+                    n["state"] == "blocked_dependencies"
+                    and n["spec"]["depends_on"]
+                    and all(by_name[p]["state"] == "accepted" for p in n["spec"]["depends_on"])
+                ):
+                    if self.ledger.transition(
+                        n["id"], "blocked_dependencies", "pending", reason="Pinned parent gates resolved"
+                    ):
+                        n = self.ledger.get("nodes", n["id"])
                 if n["id"] in self.jobs or n["state"] in BLOCKED:
                     continue
                 state = n["state"]
@@ -383,7 +424,7 @@ class Autopilot:
                         continue
                     if not all(p["state"] == "accepted" for p in parents):
                         continue
-                    if n["spec"]["manual_gates"] or n["spec"]["contract"].get("manual_approval"):
+                    if n["spec"]["manual_gates"] and not decisions.gate_approved(self.ledger, n, w):
                         self.ledger.transition(
                             n["id"],
                             state,
@@ -442,6 +483,12 @@ class Autopilot:
                     self._spawn(n, state, "probing_implementation", self._probe_implementation)
             # Waiting provider rows occupy no implementation, CPU or validator slot.
 
+    async def _plan_revision(self, node):
+        await planning.propose(self, node)
+
+    def owner_decision(self, node_id, expected_target, action, note):
+        return decisions.decide(self, node_id, expected_target, action, note)
+
     def _inputs(self, n):
         result = []
         for edge in self.ledger.rows("edges", "node_id=?", (n["id"],)):
@@ -479,28 +526,30 @@ class Autopilot:
         base = w["plan"]["base_sha"] if n["spec"]["kind"] == "integration" or not code else code[0]
         if n["task_id"]:
             task = self.manager.db.get_task(n["task_id"])
+            if not task:
+                raise ValueError("reserved source task is missing; reconcile the operation before retry")
+            bundle = await fixed_inputs.requirements(self, dict(n, inputs=inputs), w)
+            if (Path(task["worktree"]) / fixed_inputs.DIRECTORY).exists():
+                fixed_inputs.verify(task["worktree"], bundle)
+            else:
+                fixed_inputs.materialize(task["worktree"], bundle)
             self.ledger.transition(n["id"], "launching", "implementing", inputs=inputs)
             return
+        pinned_node = dict(n, inputs=inputs)
+        bundle = await fixed_inputs.requirements(self, pinned_node, w)
         task_id = make_task_id()
         # Persist the intended task before worktree/process side effects. Crash = reconcile, not a new task.
         self.ledger.transition(n["id"], "launching", "launching", task_id=task_id, inputs=inputs)
-        bundle = self.root / w["id"] / "inputs"
-        bundle.mkdir(parents=True, exist_ok=True)
-        for name, text in w["plan"]["inputs"].items():
-            p = bundle / name
-            p.parent.mkdir(parents=True, exist_ok=True)
-            if not p.exists():
-                p.write_text(text)
-                p.chmod(0o444)
         prompt = (
             n["spec"]["prompt"]
             + "\nEdit ownership: "
             + canonical(n["spec"]["paths"])
             + "\nPinned accepted inputs: "
             + canonical(inputs)
+            + "\nRead ALL fixed requirement documents (including COMMON, rules and handoffs) listed in "
+            + fixed_inputs.DIRECTORY
+            + "/requirements.json before implementation. These versioned requirements remain binding during fixes."
         )
-        if n["spec"]["input_files"]:
-            prompt += "\nRead immutable input bundle: " + canonical([str(bundle / p) for p in n["spec"]["input_files"]])
         task = await self.manager.create_task(
             repository=w["plan"]["repository"],
             base_ref=base,
@@ -514,6 +563,10 @@ class Autopilot:
             _task_id=task_id,
             _branch=f"autopilot/{w['id']}/integration/{n['name']}" if n["spec"]["kind"] == "integration" else None,
         )
+        fixed_inputs.materialize(task["worktree"], bundle)
+        from .environment import preflight
+
+        await preflight(task["worktree"], n["spec"]["validation"])
         if n["spec"]["kind"] == "integration":
             op = self.ledger.record(
                 "operations",
@@ -522,7 +575,12 @@ class Autopilot:
                 generation=n["generation"],
                 state="running",
                 payload=dict(
-                    inputs=inputs, start_sha=base, task_id=task_id, expected_ref="refs/heads/" + task["branch"]
+                    inputs=inputs,
+                    start_sha=base,
+                    task_id=task_id,
+                    expected_ref="refs/heads/" + task["branch"],
+                    initial_implementation_prompt=digest(prompt),
+                    integration_mode=n["spec"].get("integration_mode", "merge-only"),
                 ),
             )
             result = await git.integrate(task["worktree"], code, op["id"])
@@ -541,6 +599,10 @@ class Autopilot:
                     last_prompt=conflict_prompt,
                 )
                 self.ledger.transition(n["id"], "launching", "conflict", reason=canonical(result["conflicts"]))
+                self.manager._dispatch(task_id)
+                return
+            if n["spec"].get("integration_mode") == "merge-then-implement":
+                self.ledger.transition(n["id"], "launching", "implementing")
                 self.manager._dispatch(task_id)
                 return
             # A mechanical merge is only a submission, never acceptance.
@@ -604,6 +666,21 @@ class Autopilot:
                 reason=f"Implementation reported {result['status']}: {result['reason']}",
             )
             return
+        if n["spec"].get("integration_mode") == "merge-then-implement":
+            integration = self.ledger.rows("operations", "node_id=? AND kind='integration'", (n["id"],))[-1]
+            allowed_prompts = {integration["payload"].get("initial_implementation_prompt")}
+            allowed_prompts.update(
+                op["payload"].get("prompt_digest")
+                for op in self.ledger.rows(
+                    "operations", "node_id=? AND kind IN ('integration_implementation','fix','owner_turn')", (n["id"],)
+                )
+            )
+            if not task["codex_thread_id"] or digest(task["last_prompt"]) not in allowed_prompts:
+                raise ValueError(
+                    "integration implementation turn has not completed; merge/conflict resolution alone is insufficient"
+                )
+        bundle = await fixed_inputs.requirements(self, n, w)
+        fixed_inputs.verify(task["worktree"], bundle)
         head = await git.submit_head(task, n["spec"], w["plan"]["permissions"]["commit_owned_changes"])
         s = await git.scope(task["worktree"], task["base_sha"], head)
         if n["spec"]["kind"] == "integration":
@@ -633,6 +710,9 @@ class Autopilot:
         ]
         payload = dict(
             scope=s,
+            requirements=bundle,
+            requirements_digest=bundle["digest"],
+            review_files=n["spec"].get("review_files", []),
             task_id=task["id"],
             turn=len(self.manager.db.list_turns(task["id"])),
             execution_key=digest([task["last_turn_at"], task["semantic_result"]]),
@@ -673,7 +753,12 @@ class Autopilot:
         root = await git.snapshot(
             p["repository"], p["scope"]["head_sha"], p["scope"]["base_sha"], self.root / "snapshots" / candidate["id"]
         )
-        _, dirty, _ = await git.git(root, "status", "--porcelain")
+        bundle = p.get("requirements", dict(version=1, instruction=p.get("acceptance", ""), documents=[]))
+        if (root / fixed_inputs.DIRECTORY).exists():
+            fixed_inputs.verify(root, bundle)
+        else:
+            fixed_inputs.materialize(root, bundle)
+        _, dirty, _ = await git.git(root, "status", "--porcelain", "--", ".", ":(exclude).autopilot-inputs")
         if dirty or await git.scope(root, p["scope"]["base_sha"], p["scope"]["head_sha"]) != p["scope"]:
             raise ValueError("snapshot modified; fixed source evidence invalid")
         return root
@@ -867,6 +952,18 @@ class Autopilot:
                 validation=evidence[-1]["payload"] if evidence else {},
                 unresolved=[f["id"] for f in findings],
                 findings=findings,
+                owner_decisions=[
+                    d["payload"]
+                    for d in self.ledger.rows("decisions", "node_id=? AND state='approved'", (n["id"],))
+                    if d["payload"].get("spec_digest") == digest(n["spec"])
+                    and d["payload"].get("run_generation") == w["generation"]
+                    and d["payload"].get("candidate_id") in (None, candidate["id"])
+                    and d["payload"].get("authorization") == decisions.authorization(w)
+                    and (
+                        d["payload"].get("purpose") == "manual_gates"
+                        or d["payload"].get("decision_epoch") == n["decision_epoch"]
+                    )
+                ],
             ),
         )
         try:
@@ -877,7 +974,10 @@ class Autopilot:
             if slots:
                 await slots.acquire()
             try:
-                result = await self.providers[provider].start_review(
+                from .review_context import review_all
+
+                result = await review_all(
+                    self.providers[provider],
                     review_candidate,
                     w["plan"]["policy"],
                     root,
@@ -905,7 +1005,9 @@ class Autopilot:
                     },
                     candidate,
                 ) | {
-                    k: v for k, v in result.items() if k in ("provider", "model", "version", "session", "independence")
+                    k: v
+                    for k, v in result.items()
+                    if k in ("provider", "model", "version", "session", "independence", "partition_evidence")
                 }
             except (ValueError, KeyError, TypeError):
                 raise ProviderFailure(
@@ -1005,8 +1107,18 @@ class Autopilot:
 
     async def _accept(self, n, candidate, review):
         task = self.manager.db.get_task(n["task_id"])
+        if candidate["payload"].get("requirements"):
+            fixed_inputs.verify(task["worktree"], candidate["payload"]["requirements"])
         current = await git.scope(task["worktree"], task["base_sha"], await git.sha(task["worktree"]))
-        _, dirty, _ = await git.git(task["worktree"], "status", "--porcelain")
+        _, dirty, _ = await git.git(
+            task["worktree"],
+            "status",
+            "--porcelain",
+            "--",
+            ".",
+            ":(exclude).autopilot-inputs",
+            ":(exclude).autopilot-fix",
+        )
         w = self.ledger.get("workflows", n["workflow_id"])
         if (
             dirty
@@ -1024,9 +1136,17 @@ class Autopilot:
             with self.ledger.transaction() as c:
                 c.execute("UPDATE ap_nodes SET state='review_complete' WHERE id=? AND state='reviewing'", (n["id"],))
             return
-        if not w["plan"]["policy"]["automatic_acceptance"]:
+        final_owner_required = (
+            not w["plan"]["policy"]["automatic_acceptance"]
+            or n["spec"]["contract"].get("manual_approval")
+            or candidate["payload"]["contract"].get("manual_approval")
+        )
+        if final_owner_required and not decisions.candidate_approved(self.ledger, n, w):
             self.ledger.transition(
-                n["id"], "reviewing", "blocked_decision", reason="Workflow policy disables automatic acceptance"
+                n["id"],
+                "reviewing",
+                "blocked_decision",
+                reason="Candidate owner acceptance required after validation and independent review",
             )
             return
         if not self.ledger.accept(candidate, review, current):
@@ -1076,12 +1196,16 @@ class Autopilot:
         from app.task_manager import _Turn
 
         task = self.manager.db.get_task(n["task_id"])
+        from .environment import preflight
+
+        await preflight(task["worktree"], n["spec"]["validation"])
         prompt = (
             "Autopilot correction for the existing work. Keep the existing worktree/thread. Resolve findings with evidence; retain the original acceptance contract.\n"
             + n["reason"]
+            + "\nRe-read the unchanged fixed requirements and handoffs in .autopilot-inputs/requirements.json.\n"
         )
         if not task["codex_thread_id"]:
-            reference = self.root / n["workflow_id"] / "fix-inputs" / f"{n['name']}-{n['fix_rounds'] + 1}.md"
+            reference = Path(task["worktree"]) / ".autopilot-fix" / f"{n['name']}-{n['fix_rounds'] + 1}.md"
             reference.parent.mkdir(parents=True, exist_ok=True)
             reference.write_text(
                 n["spec"]["prompt"]
@@ -1216,9 +1340,55 @@ class Autopilot:
             self._request_fix(
                 n, "integration-conflict", [dict(id="integration-conflict", path="", line=0, reason=canonical(result))]
             )
+        elif n["spec"].get("integration_mode") == "merge-then-implement":
+            self._integration_turn(n, task, "integrating")
         else:
             self.ledger.transition(n["id"], "integrating", "submitting")
             await self._submit(self.ledger.get("nodes", n["id"]))
+
+    def _integration_turn(self, n, task, old_state):
+        from app.task_manager import _Turn
+
+        prompt = (
+            "All pinned inputs are now merged. Perform the requested integration implementation, including wiring and additional code. Read all fixed documents in .autopilot-inputs/requirements.json. "
+            + n["spec"]["prompt"]
+        )
+        turn = _Turn(
+            prompt, resume_thread=task["codex_thread_id"], service_tier="default", trigger="autopilot_integration"
+        )
+        fields = self.manager._queue_fields(turn)
+        with self.ledger.transaction() as c:
+            workflow = c.execute("SELECT state FROM ap_workflows WHERE id=?", (n["workflow_id"],)).fetchone()
+            if workflow["state"] != "running":
+                raise ValueError("integration implementation waits for an active workflow")
+            c.execute(
+                "INSERT INTO ap_operations VALUES(?,?,'integration_implementation',?,'reserved',?,?)",
+                (
+                    uuid.uuid4().hex,
+                    n["id"],
+                    n["generation"],
+                    canonical(dict(thread=task["codex_thread_id"], prompt_digest=digest(prompt))),
+                    now_iso(),
+                ),
+            )
+            if (
+                c.execute(
+                    "UPDATE tasks SET status='queued',"
+                    + ",".join(f"{k}=?" for k in fields)
+                    + " WHERE id=? AND status='completed'",
+                    (*fields.values(), task["id"]),
+                ).rowcount
+                != 1
+            ):
+                raise ValueError("integration implementation task is no longer idle")
+            if (
+                c.execute(
+                    "UPDATE ap_nodes SET state='implementing' WHERE id=? AND state=?", (n["id"], old_state)
+                ).rowcount
+                != 1
+            ):
+                raise ValueError("integration generation changed")
+        self.manager._dispatch(task["id"])
 
     async def _publish(self, n):
         w = self.ledger.get("workflows", n["workflow_id"])
@@ -1356,7 +1526,15 @@ class Autopilot:
             return
         _, branch, _ = await git.git(task["worktree"], "symbolic-ref", "-q", "HEAD", check=False)
         head = await git.sha(task["worktree"])
-        _, dirty, _ = await git.git(task["worktree"], "status", "--porcelain")
+        _, dirty, _ = await git.git(
+            task["worktree"],
+            "status",
+            "--porcelain",
+            "--",
+            ".",
+            ":(exclude).autopilot-inputs",
+            ":(exclude).autopilot-fix",
+        )
         merge_pending, _, _ = await git.git(task["worktree"], "rev-parse", "--verify", "MERGE_HEAD", check=False)
         contained = True
         for item in payload["inputs"]:
@@ -1394,6 +1572,29 @@ class Autopilot:
             "merged",
             dict(payload, head_sha=head, reconciliation="refs_and_all_pinned_inputs_confirmed"),
         )
+        if node["spec"].get("integration_mode") == "merge-then-implement":
+            if task["status"] == "queued" and not task["codex_thread_id"] and not task["started_at"]:
+                self.ledger.transition(
+                    node["id"],
+                    "reconciling_git",
+                    "implementing",
+                    reason="Durable merge reconciled; initial integration implementation still required",
+                )
+                self.manager._dispatch(task["id"])
+            elif task["status"] == "completed" and result and result["status"] == "SUCCESS":
+                turns = self.ledger.rows("operations", "node_id=? AND kind='integration_implementation'", (node["id"],))
+                if digest(task["last_prompt"]) == payload.get("initial_implementation_prompt") or turns:
+                    self.ledger.transition(node["id"], "reconciling_git", "implementing")
+                else:
+                    self._integration_turn(node, task, "reconciling_git")
+            else:
+                self.ledger.transition(
+                    node["id"],
+                    "reconciling_git",
+                    "reconciling",
+                    reason="Integration implementation outcome uncertain; merge cannot substitute for the turn",
+                )
+            return
         with self.ledger.transaction() as c:
             state = c.execute("SELECT state,generation FROM ap_workflows WHERE id=?", (workflow["id"],)).fetchone()
             if state["state"] not in ("running", "paused") or state["generation"] != workflow["generation"]:

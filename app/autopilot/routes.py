@@ -7,6 +7,78 @@ from .runner import redact
 router = APIRouter()
 
 
+@router.post("/api/autopilot/import")
+async def import_markdown(request: Request):
+    from .importer import MAX_TOTAL, documents, prepare
+
+    try:
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_TOTAL + 128 * 1024:
+                raise ValueError("total upload size limit exceeded")
+            chunks.append(chunk)
+        request._body = b"".join(chunks)  # Bound the body before the multipart parser allocates files.
+        async with request.form(max_files=200, max_fields=10) as form:
+            uploads = []
+            for key, item in form.multi_items():
+                if key != "files" or not hasattr(item, "filename"):
+                    raise ValueError("upload only files under the files field")
+                uploads.append((item.filename, await item.read(MAX_TOTAL + 1)))
+        return prepare(documents(uploads))
+    except (ValueError, TypeError, UnicodeError, KeyError) as e:
+        raise error(e)
+
+
+@router.post("/api/autopilot/import/convert")
+async def convert_markdown(request: Request, body: dict):
+    from .importer import convert
+
+    try:
+        raw = convert(body)
+        return dict(manifest=raw, preview=await controller(request).dry_run(raw))
+    except (ValueError, TypeError, KeyError) as e:
+        raise error(e)
+
+
+@router.post("/api/autopilot/workflows/{identity}/nodes/{name}/decision")
+async def owner_decision(request: Request, identity: str, name: str, body: dict):
+    try:
+        if body.get("owner_action") is not True:
+            raise ValueError("explicit owner action is required")
+        return controller(request).owner_decision(
+            identity + ":" + name, body["expected_target"], body["action"], body.get("note", "")
+        )
+    except (ValueError, TypeError, KeyError) as e:
+        raise error(e)
+
+
+@router.post("/api/autopilot/workflows/{identity}/revisions/{revision_id}/decision")
+async def revision_decision(request: Request, identity: str, revision_id: str, body: dict):
+    from . import planning
+
+    ap = controller(request)
+    try:
+        r = ap.ledger.get("plan_revisions", revision_id)
+        if (
+            not r
+            or r["workflow_id"] != identity
+            or body.get("owner_action") is not True
+            or body.get("action") not in ("approve", "reject")
+        ):
+            raise ValueError("explicit owner decision for this workflow revision is required")
+        planning.apply(
+            ap,
+            r,
+            expected=body["expected_target"],
+            approve=body["action"] == "approve",
+            reject=body["action"] == "reject",
+        )
+        return ap.ledger.view(identity)
+    except (ValueError, TypeError, KeyError) as e:
+        raise error(e)
+
+
 def controller(request):
     return request.app.state.manager.autopilot
 

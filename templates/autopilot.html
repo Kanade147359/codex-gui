@@ -5,6 +5,16 @@
 <section class="panel ap-panel">
   <h1>Autopilot</h1>
   <p>固定した候補を検証し、Claude Codeで独立レビューします。確認済みの利用枠不足時だけ独立Codexへ切り替えます。</p>
+  <fieldset><legend>Markdown一括入力（取込だけでは実行しません）</legend>
+    <label for="ap-files">COMMON・担当指示書 / ZIP</label><input id="ap-files" type="file" multiple accept=".md,.zip">
+    <button id="ap-import">取込・一覧編集</button>
+    <label for="ap-repository">Repository</label><input id="ap-repository" placeholder="/absolute/repository">
+    <label for="ap-base">Base ref</label><input id="ap-base" value="main">
+    <label><input id="ap-import-commit" type="checkbox"> 担当範囲内の変更をcontrollerがcommitすることを許可</label>
+    <label><input id="ap-import-billing" type="checkbox"> 所有者が両subscriptionの追加従量利用無効化を確認済み（自動検証不可）</label>
+    <div id="ap-documents"></div><div id="ap-import-nodes"></div>
+    <button id="ap-convert" disabled>編集内容をmanifestへ変換・Dry-run</button>
+  </fieldset>
   <label for="ap-manifest">Workflow manifest（JSON / YAML）</label>
   <textarea id="ap-manifest" rows="15" spellcheck="false" placeholder="version: 1"></textarea>
   <p><label><input id="ap-opt-in" type="checkbox"> このmanifestの編集範囲・検証・予算・開始時権限にopt-inする</label></p>
