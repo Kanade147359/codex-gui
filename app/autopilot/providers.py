@@ -78,7 +78,7 @@ Check weakened tests, skips, missing artifacts and validation evidence. Retain p
 The supplied changed_paths are the exact file paths to review. The coverage array MUST contain only those literal relative paths,
 e.g. ["src/a.py", "src/b.py"]. Include each reviewed changed path exactly, without descriptions, explanations, quotes, or test results.
 Do not put review observations or validator statements in coverage. Missing/uninspected paths belong in unverified, not coverage.
-APPROVE requires exact coverage of EVERY changed path with no unresolved blocking finding or unverified required scope.
+The review input includes recorded_completion.parsed_result, a controller-captured and strictly parsed final implementation result.\nFor mechanical integration the origin is controller_mechanical_integration; it is not a model-authored response.\nUse this record to verify the final JSON status/reason clause; the acceptance gate independently checks the saved task and execution identity.\nDo not mark the final JSON format unverified merely because the implementation chat transcript is not supplied.\nIf the recorded result is missing, invalid, or inconsistent with the acceptance contract, report it as unverified.\nAPPROVE requires exact coverage of EVERY changed path with no unresolved blocking finding or unverified required scope.
 Style preferences are nonblocking.
 Never promote an implementation's BLOCKED/PARTIAL/NEEDS_INPUT claim to SUCCESS. Same-model independent threads are not cross-model verification.
 """
@@ -266,6 +266,7 @@ async def review_prompt(candidate, root):
             contract=p["contract"],
             acceptance=p["acceptance"],
             changed_paths=p.get("changed_paths", []),
+            recorded_completion=p.get("recorded_completion"),
             validation=p.get("validation", {}),
             unresolved=p.get("unresolved", []),
             prior_findings=p.get("findings", []),
