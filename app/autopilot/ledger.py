@@ -187,6 +187,14 @@ class Ledger:
     def claim(self, node_id, old, new, limit=None):
         """Resource caps and state claim commit together, including concurrent scheduler callers."""
         with self.transaction() as c:
+            if (
+                new == "launching"
+                and c.execute(
+                    "SELECT 1 FROM ap_edges e JOIN ap_nodes p ON p.id=e.parent_id WHERE e.node_id=? AND p.state!='accepted'",
+                    (node_id,),
+                ).fetchone()
+            ):
+                return False
             if limit is not None:
                 if new == "launching":
                     count = c.execute(
@@ -248,6 +256,13 @@ class Ledger:
 
             result = parse_result(task["semantic_result"]) if task else None
             p = cand["payload"]
+            owner_instructions = [
+                dict(prompt=row["prompt"], kind=row["kind"])
+                for row in c.execute(
+                    "SELECT prompt,kind FROM task_messages WHERE task_id=? AND kind IN ('instruction','steer','scheduled_instruction') ORDER BY id",
+                    (task["id"],),
+                )
+            ]
             approved = (
                 r
                 and r["candidate_id"] == cid
@@ -293,11 +308,15 @@ class Ledger:
                 or not w["plan"]["policy"]["automatic_acceptance"]
                 or n["spec"]["manual_gates"]
                 or n["spec"]["contract"].get("manual_approval")
+                or p["contract"].get("manual_approval")
                 or not result
                 or result["status"] != "SUCCESS"
                 or task["status"] != "completed"
                 or task["completion_pending"]
                 or digest([task["last_turn_at"], task["semantic_result"]]) != p["execution_key"]
+                or digest(task["last_prompt"]) != p["prompt_digest"]
+                or digest(owner_instructions) != p["instructions_digest"]
+                or c.execute("SELECT count(*) FROM turns WHERE task_id=?", (task["id"],)).fetchone()[0] != p["turn"]
                 or digest(w["plan"]["policy"]) != p["policy_digest"]
                 or input_digest(n, w) != p["input_digest"]
                 or digest(json.loads(task["completion_contract"])) != p["contract_digest"]
@@ -321,6 +340,17 @@ class Ledger:
             )
             c.execute("UPDATE ap_candidates SET state='accepted' WHERE id=?", (cid,))
             c.execute("UPDATE ap_nodes SET state='accepted',reason='' WHERE id=?", (n["id"],))
+            for operation in c.execute(
+                "SELECT * FROM ap_operations WHERE node_id=? AND kind='integration'", (n["id"],)
+            ).fetchall():
+                data = json.loads(operation["payload"])
+                data.update(
+                    accepted_candidate_id=cid,
+                    accepted_head_sha=current_scope["head_sha"],
+                    accepted_review_id=r["id"],
+                    validation_ids=[e["id"] for e in evidence if e["state"] == "PASS"],
+                )
+                c.execute("UPDATE ap_operations SET payload=? WHERE id=?", (canonical(data), operation["id"]))
             c.execute(
                 "UPDATE tasks SET task_outcome='success',outcome_source='autopilot',approval_source='ai_review',approved_at=?,outcome_reason='AI review accepted',completion_pending=0 WHERE id=?",
                 (now_iso(), n["task_id"]),

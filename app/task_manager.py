@@ -568,6 +568,8 @@ class TaskManager:
 
     def _begin_turn(self, task: dict, turn: _Turn, **fields) -> dict:
         """A new unit of work for an idle task: queued with its turn recorded, then claimed and started at once."""
+        if self.autopilot.queue_owner_turn(task,turn,fields):
+            return self.get(task["id"])
         # No await between the status checks of the caller and this transition, so two requests cannot both pass.
         try:
             updated = self.db.set_status(task["id"], "queued", message=turn.message() if turn.kind == "turn" else None,
@@ -1291,8 +1293,10 @@ class TaskManager:
             fields = await completion.check(self.get(task_id), text, self.settings.home)
             if self.autopilot.ledger.node_for_task(task_id):
                 # Existing evidence PASS is not execution of the Autopilot validation profile.
-                fields.update(task_outcome="needs_review", approval_source="", approved_at=None,
-                              outcome_reason="Autopilot candidate validation and independent review pending")
+                result=completion.parse_result(text)
+                if result and result["status"]=="SUCCESS":
+                    fields.update(task_outcome="needs_review", approval_source="", approved_at=None,
+                                  outcome_reason="Autopilot candidate validation and independent review pending")
                 return fields
             return completion.approve_verified(fields, self.completion_approval_settings()["auto_approve_verified_success"])
         except Exception as e:
@@ -1842,7 +1846,12 @@ class TaskManager:
             return False
         turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"],
                      attachment_ids=json.loads(row["attachment_ids"]))
-        if not self.db.claim_scheduled(row["id"], self._queue_fields(turn), thread):
+        try:
+            if not self.db.claim_scheduled(row["id"], self._queue_fields(turn), thread,
+                    on_claim=lambda connection:self.autopilot.queue_owner_turn(task,turn,{},_connection=connection,_scheduled=True)):
+                return False
+        except TaskError as e:
+            self.db.block_scheduled(row["id"],str(e))
             return False
         TaskLog.note(self.log_path(task["id"]), f"scheduled instruction #{row['id']} sent to Codex thread {thread} "
                      f"({'Fast' if row['service_tier'] == 'priority' else 'Standard' if row['service_tier'] == 'default' else row['service_tier']})")
@@ -1853,6 +1862,9 @@ class TaskManager:
         (retry_wait -> the same thread and worktree): the instruction stays running and is never sent again. A paused task
         (interrupted, waiting-for-quota) keeps it running too: resuming it continues this same turn."""
         task = self.db.get_task(row["task_id"])
+        node=self.autopilot.ledger.node_for_task(row["task_id"])
+        if task and task["status"]=="completed" and task["task_outcome"]=="needs_review" and node and node["state"] not in ("blocked_budget","blocked_no_progress","blocked_result","blocked_scope","stopped"):
+            return  # The turn finished; its managed validation/independent acceptance is still pending.
         if task is None:
             self.db.finish_scheduled(row["id"], "failed", "the target task no longer exists")
         elif task["status"] == "completed":

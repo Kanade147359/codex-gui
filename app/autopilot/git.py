@@ -11,7 +11,24 @@ from app.ssh_agent import child_env
 from .policy import owns
 
 
-async def git(root, *args, check=True):
+async def git(root, *args, check=True, _filter_probe=True):
+    filters = []
+    if _filter_probe:
+        rc, keys, _ = await git(
+            root,
+            "config",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            r"^filter\..*\.(clean|smudge|process)$",
+            check=False,
+            _filter_probe=False,
+        )
+        if rc not in (0, 1):
+            raise GitError("Cannot safely inspect configured Git filters")
+        for section in sorted({key.rsplit(".", 1)[0] for key in keys.split("\0") if key}):
+            for suffix, value in (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false")):
+                filters += ["-c", section + "." + suffix + "=" + value]
     proc = await asyncio.create_subprocess_exec(
         "git",
         "-C",
@@ -20,6 +37,11 @@ async def git(root, *args, check=True):
         "core.hooksPath=/dev/null",
         "-c",
         "commit.gpgsign=false",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.attributesFile=/dev/null",
+        *filters,
         *args,
         env=child_env({"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}),
         stdin=asyncio.subprocess.DEVNULL,
@@ -124,6 +146,8 @@ async def integrate(root, heads, operation):
         steps.append(dict(head=head, action="merge", start_sha=start, exit_status=rc))
         if rc:
             _, conflicts, _ = await git(root, "diff", "--name-only", "--diff-filter=U")
+            if not conflicts.strip():
+                raise GitError("Integration merge failed without resolvable index conflicts: " + err[-1000:])
             return dict(
                 state="conflict",
                 steps=steps,

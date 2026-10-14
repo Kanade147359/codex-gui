@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 import time
 import uuid
@@ -205,6 +206,96 @@ class Autopilot:
         await self.manager._require_subscription(client)
         response = await client.request("config/read", dict(cwd=task["worktree"], includeLayers=False))
         validate_codex_route(response.get("config") if isinstance(response, dict) else None)
+
+    def queue_owner_turn(self, task, turn, fields, _connection=None, _scheduled=False):
+        node = self.ledger.node_for_task(task["id"])
+        if not node:
+            return False
+        from app.task_manager import TaskError
+
+        workflow = self.ledger.get("workflows", node["workflow_id"])
+        queued = self.manager._queue_fields(turn, **fields)
+        from contextlib import nullcontext
+
+        with nullcontext(_connection) if _connection is not None else self.ledger.transaction() as c:
+            current = unpack(c.execute("SELECT * FROM ap_nodes WHERE id=?", (node["id"],)).fetchone())
+            run = c.execute("SELECT state,generation FROM ap_workflows WHERE id=?", (workflow["id"],)).fetchone()
+            if (
+                run["state"] not in ("running", "paused", "completed")
+                or run["generation"] != workflow["generation"]
+                or current["state"] in ("reconciling", "reconciling_git", "publishing", "stopped")
+            ):
+                raise TaskError(
+                    "Stopped/uncertain workflow requires an inspected recovery plan", 409, "autopilot_stopped"
+                )
+            if (
+                node["spec"]["manual_gates"]
+                or node["spec"]["contract"].get("manual_approval")
+                or json.loads(task["completion_contract"]).get("manual_approval")
+            ):
+                raise TaskError(
+                    "An instruction cannot clear required owner/design approval", 409, "autopilot_manual_gate"
+                )
+            children = c.execute(
+                "SELECT n.state FROM ap_nodes n JOIN ap_edges e ON e.node_id=n.id WHERE e.parent_id=?", (node["id"],)
+            ).fetchall()
+            if any(child["state"] not in ("pending", "blocked_dependencies") for child in children):
+                raise TaskError(
+                    "Pinned inputs were already consumed; use a revised workflow plan", 409, "autopilot_input_consumed"
+                )
+            if not _scheduled and (
+                c.execute(
+                    "UPDATE tasks SET status='queued',"
+                    + ",".join(f"{key}=?" for key in queued)
+                    + " WHERE id=? AND status=? AND completion_pending=0 AND codex_thread_id IS ?",
+                    (*queued.values(), task["id"], task["status"], task["codex_thread_id"]),
+                ).rowcount
+                != 1
+            ):
+                raise TaskError("Task changed while reserving the new instruction", 409, "active")
+            c.execute(
+                "UPDATE ap_nodes SET state='implementing',generation=generation+1,reason='',fix_rounds=?,no_progress=? WHERE id=?",
+                (
+                    0 if current["state"] == "accepted" else current["fix_rounds"],
+                    0 if current["state"] == "accepted" else current["no_progress"],
+                    node["id"],
+                ),
+            )
+            c.execute(
+                "UPDATE ap_nodes SET state='pending',reason='' WHERE state='blocked_dependencies' AND id IN (SELECT node_id FROM ap_edges WHERE parent_id=?)",
+                (node["id"],),
+            )
+            c.execute(
+                "UPDATE ap_workflows SET state='running',reason='Owner supplied a new leaf turn' WHERE id=? AND state='completed'",
+                (workflow["id"],),
+            )
+            c.execute(
+                "INSERT INTO ap_operations VALUES(?,?, 'owner_turn',?,'reserved',?,?)",
+                (
+                    uuid.uuid4().hex,
+                    node["id"],
+                    current["generation"] + 1,
+                    canonical(dict(prompt_digest=digest(turn.prompt), thread=turn.resume_thread)),
+                    now_iso(),
+                ),
+            )
+            if not _scheduled:
+                self.manager.db._insert_message(task["id"], turn.message())
+            if current["candidate_id"]:
+                c.execute(
+                    "UPDATE ap_reviews SET state='cancelled' WHERE candidate_id=? AND state IN ('claimed','running')",
+                    (current["candidate_id"],),
+                )
+                c.execute(
+                    "UPDATE ap_validation SET state='cancelled' WHERE candidate_id=? AND state='running'",
+                    (current["candidate_id"],),
+                )
+        job = self.jobs.get(node["id"])
+        if job:
+            job.cancel()
+        if not _scheduled:
+            self.manager.db._notify(task["id"], task["status"], "queued")
+        return True
 
     def _spawn(self, n, old, new, work):
         w = self.ledger.get("workflows", n["workflow_id"])
@@ -477,7 +568,7 @@ class Autopilot:
         reserved_fixes = self.ledger.rows("operations", "node_id=? AND kind='fix' AND state='reserved'", (n["id"],))
         if reserved_fixes:
             op = reserved_fixes[-1]
-            if op["payload"]["thread"] != task["codex_thread_id"]:
+            if op["payload"]["thread"] and op["payload"]["thread"] != task["codex_thread_id"]:
                 self.ledger.transition(
                     n["id"],
                     n["state"],
@@ -515,29 +606,57 @@ class Autopilot:
             return
         head = await git.submit_head(task, n["spec"], w["plan"]["permissions"]["commit_owned_changes"])
         s = await git.scope(task["worktree"], task["base_sha"], head)
+        if n["spec"]["kind"] == "integration":
+            for item in n["inputs"]:
+                if item["kind"] != "report":
+                    rc, _, _ = await git.git(
+                        task["worktree"], "merge-base", "--is-ancestor", item["head_sha"], head, check=False
+                    )
+                    if rc != 0:
+                        self.ledger.transition(
+                            n["id"],
+                            n["state"],
+                            "blocked_scope",
+                            reason="Integration candidate does not contain every pinned accepted input SHA",
+                        )
+                        return
         previous = self.ledger.get("candidates", n["candidate_id"]) if n["candidate_id"] else None
-        if previous and previous["payload"]["scope"]["tree_sha"] == s["tree_sha"]:
+        owner_turns = self.ledger.rows("operations", "node_id=? AND kind='owner_turn' AND state='reserved'", (n["id"],))
+        if previous and previous["payload"]["scope"]["tree_sha"] == s["tree_sha"] and not owner_turns:
             self._request_fix(n, "unchanged_tree", previous["payload"].get("findings", []))
             return
         inherited = self._findings(n["id"])
+        instructions = [
+            dict(prompt=m["prompt"], kind=m["kind"])
+            for m in self.manager.db.list_messages(task["id"])
+            if m["kind"] in ("instruction", "steer", "scheduled_instruction")
+        ]
         payload = dict(
             scope=s,
             task_id=task["id"],
             turn=len(self.manager.db.list_turns(task["id"])),
             execution_key=digest([task["last_turn_at"], task["semantic_result"]]),
+            prompt_digest=digest(task["last_prompt"]),
+            instructions_digest=digest(instructions),
             repository=task["repository"],
             contract=json.loads(task["completion_contract"]),
             contract_digest=digest(json.loads(task["completion_contract"])),
             policy_digest=digest(w["plan"]["policy"]),
             input_digest=input_digest(n, w),
             profile_digest=digest(n["spec"]["validation"]),
-            acceptance=n["spec"]["prompt"],
+            acceptance=n["spec"]["prompt"]
+            + ("\nAdditional owner requirements: " + canonical(instructions) if instructions else ""),
             inputs=n["inputs"],
             changed_paths=sorted(await git.changed_paths(task["worktree"], task["base_sha"])),
             unresolved=[f["id"] for f in inherited],
             findings=inherited,
         )
-        self.ledger.submit(n, w, payload)
+        submitted = self.ledger.submit(n, w, payload)
+        if submitted:
+            for op in owner_turns:
+                self.ledger.finish(
+                    "operations", op["id"], "completed", dict(op["payload"], candidate_id=submitted["id"])
+                )
 
     async def _snapshot(self, candidate):
         p = candidate["payload"]
@@ -648,12 +767,29 @@ class Autopilot:
                     id="validation-" + str(i),
                     path="",
                     line=0,
-                    reason=c.get("excerpt") or f"Required validation failed: {c}",
+                    reason=c.get("excerpt")
+                    or "Required validation failed: "
+                    + canonical(
+                        {
+                            key: c[key]
+                            for key in (
+                                "command",
+                                "command_digest",
+                                "artifact",
+                                "required_change",
+                                "required_commit",
+                                "exit_status",
+                                "timed_out",
+                            )
+                            if key in c
+                        }
+                    ),
                 )
                 for i, c in enumerate(result["checks"])
                 if c["exit_status"] != 0 or c.get("timed_out")
             ]
-            self._request_fix(n, digest(findings), findings)
+            stable = [dict(f, reason=re.sub(r"\bin \d+(?:\.\d+)?s\b", "in <elapsed>s", f["reason"])) for f in findings]
+            self._request_fix(n, digest(stable), findings)
 
     def _availability_key(self, provider, w):
         p = w["plan"]["policy"]
@@ -899,6 +1035,8 @@ class Autopilot:
     def _request_fix(self, n, fingerprint, findings):
         w = self.ledger.get("workflows", n["workflow_id"])
         current = self.ledger.get("nodes", n["id"])
+        if current["generation"] != n["generation"] or current["candidate_id"] != n["candidate_id"]:
+            return
         progress = current["no_progress"] + 1 if current["last_failure"] == fingerprint else 1
         policy = w["plan"]["policy"]
         if progress >= policy["no_progress_limit"]:
@@ -928,15 +1066,25 @@ class Autopilot:
         from app.task_manager import _Turn
 
         task = self.manager.db.get_task(n["task_id"])
-        if not task["codex_thread_id"]:
-            self.ledger.transition(
-                n["id"], "reserving_fix", "blocked_result", reason="No recoverable original implementation thread"
-            )
-            return
         prompt = (
             "Autopilot correction for the existing work. Keep the existing worktree/thread. Resolve findings with evidence; retain the original acceptance contract.\n"
             + n["reason"]
         )
+        if not task["codex_thread_id"]:
+            reference = self.root / n["workflow_id"] / "fix-inputs" / f"{n['name']}-{n['fix_rounds'] + 1}.md"
+            reference.parent.mkdir(parents=True, exist_ok=True)
+            reference.write_text(
+                n["spec"]["prompt"]
+                + "\nContract: "
+                + canonical(n["spec"]["contract"])
+                + "\nPinned inputs: "
+                + canonical(n["inputs"])
+            )
+            reference.chmod(0o444)
+            prompt += (
+                "\nNo recoverable implementation thread exists. Inspect existing Git state before correcting only these findings. Read immutable acceptance instructions: "
+                + str(reference)
+            )
         turn = _Turn(prompt, resume_thread=task["codex_thread_id"], service_tier="default", trigger="autopilot_fix")
         fields = self.manager._queue_fields(turn)
         op_id = uuid.uuid4().hex
@@ -948,7 +1096,7 @@ class Autopilot:
             cur = c.execute(
                 "UPDATE tasks SET status='queued',"
                 + ",".join(f"{k}=?" for k in fields)
-                + " WHERE id=? AND status='completed' AND completion_pending=0 AND codex_thread_id=?",
+                + " WHERE id=? AND status='completed' AND completion_pending=0 AND codex_thread_id IS ?",
                 (*fields.values(), task["id"], task["codex_thread_id"]),
             )
             if cur.rowcount != 1:

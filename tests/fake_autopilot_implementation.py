@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import re
 import uuid
 
 prompt = sys.stdin.read()
@@ -16,7 +17,9 @@ metadata = state / (thread + "-implementation.json")
 if resume:
     node = json.loads(metadata.read_text())["node"]
 else:
-    node = prompt.splitlines()[0].split()[-1]
+    reference = re.search(r"Read immutable acceptance instructions: (\S+)", prompt)
+    original = Path(reference.group(1)).read_text() if reference else prompt
+    node = original.splitlines()[0].split()[-1]
     metadata.write_text(json.dumps(dict(node=node)))
 
 
@@ -38,6 +41,8 @@ if node in ("I1", "I2"):
         if "<<<<<<<" in p.read_text():
             p.write_text("good\n")
             subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "add", "--", str(p)], check=True)
+    if "Add integration-fixed marker" in prompt:
+        (root / "integration-fixed.txt").write_text("good\n")
 else:
     (root / (node + ".txt")).write_text("bad\n" if node == "A" and not resume else "good\n")
 emit(

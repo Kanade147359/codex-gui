@@ -22,6 +22,11 @@ if name == "A" and (root / "A.txt").read_text() == "bad\n":
 if scenario.get("always_changes") and (not scenario.get("changes_only") or name in scenario["changes_only"]):
     verdict = "CHANGES_REQUESTED"
     blocking = [dict(id="persistent", path=name + ".txt", line=1, reason="Persistent fixture finding")]
+if scenario.get("integration_changes") and name == "I1" and not (root / "integration-fixed.txt").exists():
+    verdict = "CHANGES_REQUESTED"
+    blocking = [
+        dict(id="integration-marker", path="integration-fixed.txt", line=1, reason="Add integration-fixed marker")
+    ]
 result = dict(
     candidate_id=candidate["id"],
     run_generation=candidate["run_generation"],

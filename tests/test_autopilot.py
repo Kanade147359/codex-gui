@@ -175,7 +175,7 @@ def test_T06_bounded_errors_never_fallback(make_manager, git_repo, error, state)
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("change", ["head", "contract", "inputs"])
+@pytest.mark.parametrize("change", ["head", "contract", "inputs", "turn"])
 def test_T10_T26_stale_head_review_cannot_accept(make_manager, git_repo, change):
     async def scenario():
         m = make_manager()
@@ -191,6 +191,8 @@ def test_T10_T26_stale_head_review_cannot_accept(make_manager, git_repo, change)
             await git(root, "commit", "-m", "concurrent update")
         elif change == "contract":
             m.set_completion_contract(task["id"], dict(required_paths=["README.md"]))
+        elif change == "turn":
+            m.db.update_task(task["id"], last_prompt="New requested acceptance scope on the same code tree")
         else:
             with ap.ledger.transaction() as c:
                 c.execute(
@@ -333,21 +335,27 @@ def test_T17_vertical_e2e_restart_integration_and_D(make_manager, git_repo, fake
         )
         original = await sha(git_repo)
         identity = await register(ap, raw)
-        await drive(
-            m,
-            lambda: all(
+
+        def parents_accepted():
+            return all(
                 n["state"] == "accepted" for n in ap.ledger.view(identity)["nodes"] if n["name"] in ("A", "B", "C")
-            ),
-        )
-        # Freeze new dispatch, wait for any already-claimed read-only jobs, then replace the GUI/controller.
-        await ap.control(identity, "pause")
+            )
+
+        # Observe the checkpoint before another tick can claim I1; no Pause/Resume or owner approval is used.
+        deadline = time.monotonic() + 20
+        while not parents_accepted():
+            assert time.monotonic() < deadline
+            m.tick()
+            await asyncio.sleep(0.02)
         await asyncio.gather(*list(ap.jobs.values()), return_exceptions=True)
-        await ap.shutdown()
-        m.detach()
-        replacement = make_manager(max_concurrent=3)
+        await m.shutdown()
+        from app.database import Database
+        from app.task_manager import TaskManager
+
+        reopened = Database(m.settings.db_path)
+        replacement = TaskManager(m.settings, reopened)
         new = install(replacement)
         replacement.recover()
-        await new.control(identity, "resume")
         await drive(replacement, lambda: new.ledger.view(identity)["state"] == "completed", timeout=30)
         view = new.ledger.view(identity)
         integration = next(n for n in view["nodes"] if n["name"] == "I1")
@@ -359,6 +367,7 @@ def test_T17_vertical_e2e_restart_integration_and_D(make_manager, git_repo, fake
         assert len(new.ledger.rows("acceptances")) == 5
         (tmp_path / "e2e-result.json").write_text(json.dumps(view, indent=2))
         await replacement.shutdown()
+        reopened.close()
 
     asyncio.run(scenario())
 
@@ -423,6 +432,19 @@ def test_T18_stacked_and_contained_commits_skip_duplicates(git_repo, tmp_path):
         result = await integrate(root, [b, a, b], "stacked")
         assert [s["action"] for s in result["steps"]] == ["merge", "already_contained", "already_contained"]
         assert (root / "A.txt").exists() and (root / "B.txt").exists()
+
+    asyncio.run(scenario())
+
+
+def test_T18_missing_pinned_commit_is_not_a_resolvable_conflict(git_repo):
+    async def scenario():
+        from app.autopilot.git import integrate
+        from app.git_manager import GitError
+
+        before = await sha(git_repo)
+        with pytest.raises(GitError, match="without resolvable index conflicts"):
+            await integrate(git_repo, ["f" * 40], "missing-input")
+        assert await sha(git_repo) == before
 
     asyncio.run(scenario())
 
@@ -711,6 +733,119 @@ def test_T12_recorded_merge_reconciles_without_another_git_merge(make_manager, g
         assert len(ap.ledger.rows("operations", "kind='integration'")) == 1
         await drive(m, lambda: ap.ledger.view(identity)["state"] == "completed")
         assert await sha(task["worktree"]) == before and len(ap.ledger.rows("acceptances")) == 2
+        await m.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_T08_integration_review_fix_creates_first_thread_without_another_task(make_manager, git_repo):
+    async def scenario():
+        m = make_manager()
+        ap = install(m, FixtureProvider("claude", dict(integration_changes=True)))
+        raw = plan(git_repo, ("C",))
+        raw["nodes"].append(
+            dict(
+                id="I1",
+                kind="integration",
+                prompt="fixture I1",
+                paths=["."],
+                depends_on=["C"],
+                validation=dict(
+                    commands=[["python3", "-c", "from pathlib import Path; assert Path('C.txt').exists()"]]
+                ),
+            )
+        )
+        identity = await register(ap, raw)
+        await drive(m, lambda: ap.ledger.view(identity)["state"] == "completed")
+        node = next(n for n in ap.ledger.view(identity)["nodes"] if n["name"] == "I1")
+        assert node["fix_rounds"] == 1 and len(node["candidates"]) == 2 and len(m.db.list_tasks()) == 2
+        assert m.db.get_task(node["task_id"])["codex_thread_id"]
+        operation = next(op for op in node["operations"] if op["kind"] == "integration")
+        assert operation["payload"]["accepted_head_sha"] == node["candidates"][-1]["payload"]["scope"]["head_sha"]
+        await m.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_T10_owner_leaf_instruction_resumes_same_thread_and_gets_new_candidate(make_manager, git_repo):
+    async def scenario():
+        m = make_manager()
+        ap = install(m)
+        identity = await register(ap, plan(git_repo))
+        await drive(m, lambda: ap.ledger.view(identity)["state"] == "completed")
+        node = ap.ledger.view(identity)["nodes"][0]
+        thread = m.db.get_task(node["task_id"])["codex_thread_id"]
+        await m.send_instruction(
+            node["task_id"], "Confirm the existing accepted C artifact still meets the original contract"
+        )
+        await drive(m, lambda: ap.ledger.view(identity)["state"] == "completed")
+        node = ap.ledger.view(identity)["nodes"][0]
+        assert len(node["candidates"]) == 2 and m.db.get_task(node["task_id"])["codex_thread_id"] == thread
+        assert len(m.db.list_turns(node["task_id"])) == 2
+        assert "Additional owner requirements" in node["candidates"][-1]["payload"]["acceptance"]
+        await m.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "status,outcome", [("PARTIAL", "incomplete"), ("BLOCKED", "blocked"), ("NEEDS_INPUT", "needs_input")]
+)
+def test_semantic_failures_keep_their_original_outcome_without_review(make_manager, git_repo, status, outcome):
+    async def scenario():
+        from conftest import FakeRunner
+
+        m = make_manager()
+        ap = install(m)
+        m.runner = FakeRunner()
+        raw = plan(git_repo)
+        raw["nodes"][0].update(prompt="semantic " + status + " Explicit semantic result", paths=["out.txt"])
+        identity = await register(ap, raw)
+        await drive(m, lambda: ap.ledger.view(identity)["nodes"][0]["state"] == "blocked_result")
+        node = ap.ledger.view(identity)["nodes"][0]
+        assert m.db.get_task(node["task_id"])["task_outcome"] == outcome and not ap.ledger.rows("reviews")
+        await m.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_T16_git_snapshot_and_commit_never_execute_configured_filters(git_repo, tmp_path):
+    async def scenario():
+        marker = tmp_path / "filter-ran"
+        await git(git_repo, "config", "filter.poison.clean", f"touch {marker}")
+        await git(git_repo, "config", "filter.poison.smudge", f"touch {marker}")
+        (git_repo / ".gitattributes").write_text("*.txt filter=poison\n")
+        (git_repo / "payload.txt").write_text("candidate data\n")
+        await git(git_repo, "add", ".gitattributes", "payload.txt")
+        await git(git_repo, "commit", "-m", "candidate")
+        head = await sha(git_repo)
+        root = await snapshot(str(git_repo), head, head, tmp_path / "review")
+        assert (root / "payload.txt").read_text() == "candidate data\n" and not marker.exists()
+
+    asyncio.run(scenario())
+
+
+def test_T11_scheduled_owner_turns_wait_for_independent_acceptance_and_run_serially(make_manager, git_repo):
+    async def scenario():
+        m = make_manager()
+        ap = install(m)
+        identity = await register(ap, plan(git_repo))
+        await drive(m, lambda: ap.ledger.view(identity)["state"] == "completed")
+        node = ap.ledger.view(identity)["nodes"][0]
+        thread = m.db.get_task(node["task_id"])["codex_thread_id"]
+        first = await m.schedule_instruction(node["task_id"], "Confirm C artifact once", service_tier="default")
+        second = await m.schedule_instruction(node["task_id"], "Confirm C artifact twice", service_tier="default")
+        await drive(
+            m,
+            lambda: (
+                m.db.get_scheduled(first["id"])["status"] == m.db.get_scheduled(second["id"])["status"] == "completed"
+                and ap.ledger.view(identity)["state"] == "completed"
+            ),
+        )
+        assert (
+            len(m.db.list_turns(node["task_id"])) == 3 and m.db.get_task(node["task_id"])["codex_thread_id"] == thread
+        )
+        assert len(ap.ledger.view(identity)["nodes"][0]["candidates"]) == 3
         await m.shutdown()
 
     asyncio.run(scenario())

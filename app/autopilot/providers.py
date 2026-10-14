@@ -195,7 +195,7 @@ def validate_codex_route(config):
     if (
         provider.get("base_url") not in (None, "https://api.openai.com/v1", "https://chatgpt.com/backend-api/codex")
         or provider.get("requires_openai_auth") is False
-        or any(provider.get(k) for k in ("env_key", "experimental_bearer_token", "env_http_headers"))
+        or any(provider.get(k) for k in ("env_key", "experimental_bearer_token", "env_http_headers", "http_headers"))
     ):
         raise ProviderFailure("configuration", "Alternate endpoint or credential route detected (values withheld)")
 
@@ -214,6 +214,8 @@ async def review_prompt(candidate, root):
     for name in names.split("\0"):
         if not name:
             continue
+        if Path(name).name == "AGENTS.md" and name not in p.get("changed_paths", []):
+            continue  # Unchanged repository instructions are read in place, never copied into prompts.
         path = Path(root) / name
         if path.is_symlink():
             files[name] = "SYMLINK: " + os.readlink(path)
