@@ -7,6 +7,7 @@ import re
 from .git import git
 from .inputs import bytes_digest
 from .policy import canonical, digest, safe_path
+from .goals import fields as goal_fields, AXES
 
 PAGE = 64 * 1024
 MAX_PARTITIONS = 256
@@ -41,7 +42,12 @@ def read(root, path, start=1, end=240):
     if len(text.encode()) > PAGE:
         raise ValueError("requested source range exceeds page size")
     return dict(
-        path=path, start=start, end=start + len(lines) - 1, text=text, eof=eof, digest=bytes_digest(text.encode())
+        path=path,
+        start=start,
+        end=start + len(lines) - 1,
+        text=text,
+        eof=eof,
+        digest=bytes_digest(text.encode()),
     )
 
 
@@ -80,7 +86,13 @@ async def partitions(candidate, root):
             pieces.append(pending)
         for i, text in enumerate(pieces):
             pages.append(
-                dict(path=path, segment=i + 1, segments=len(pieces), diff=text, digest=bytes_digest(text.encode()))
+                dict(
+                    path=path,
+                    segment=i + 1,
+                    segments=len(pieces),
+                    diff=text,
+                    digest=bytes_digest(text.encode()),
+                )
             )
     if len(pages) > MAX_PARTITIONS:
         raise ValueError("review partition budget exceeded")
@@ -172,7 +184,11 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
                 candidate["payload"],
                 changed_paths=paths,
                 review_context=dict(
-                    phase="partition", index=index + 1, total=len(pages), partition=page, related=related
+                    phase="partition",
+                    index=index + 1,
+                    total=len(pages),
+                    partition=page,
+                    related=related,
                 ),
             ),
         )
@@ -197,7 +213,8 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
                     "coverage",
                     "unverified",
                 )
-            },
+            }
+            | goal_fields(result),
             part,
         )
         summaries.append(dict(partition=page | {"diff": "[reviewed in partition]"}, result=result))
@@ -205,10 +222,15 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
         return summaries[0]["result"]
     overall = dict(
         candidate,
-        payload=dict(candidate["payload"], review_context=dict(phase="overall", partitions=summaries, related=related)),
+        payload=dict(
+            candidate["payload"],
+            review_context=dict(phase="overall", partitions=summaries, related=related),
+        ),
     )
     final_attempt = dict(
-        attempt, id=attempt["id"] + "-overall", event_log=str(Path(attempt["event_log"]).with_name("overall.jsonl"))
+        attempt,
+        id=attempt["id"] + "-overall",
+        event_log=str(Path(attempt["event_log"]).with_name("overall.jsonl")),
     )
     try:
         result = await invoke(overall, final_attempt)
@@ -219,14 +241,78 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
     blocking = {f["id"]: f for entry in summaries for f in entry["result"]["blocking"]}
     blocking.update({f["id"]: f for f in result["blocking"]})
     unverified = list(
-        dict.fromkeys(result["unverified"] + [item for entry in summaries for item in entry["result"]["unverified"]])
+        dict.fromkeys(
+            result["unverified"] + [item for entry in summaries for item in entry["result"]["unverified"]]
+        )
     )
     if blocking:
         result.update(verdict="CHANGES_REQUESTED", blocking=list(blocking.values()))
     elif any(entry["result"]["verdict"] != "APPROVE" for entry in summaries):
-        result.update(verdict="INCONCLUSIVE", unverified=unverified + ["not all fixed partitions approved"])
+        result.update(
+            verdict="INCONCLUSIVE",
+            unverified=unverified + ["not all fixed partitions approved"],
+        )
     if any(entry["result"]["verdict"] == "NEEDS_HUMAN" for entry in summaries):
         result["verdict"] = "NEEDS_HUMAN"
+    if candidate["payload"].get("goal_review_version", 1) >= 2:
+        import copy
+
+        result["goal_assessment"] = copy.deepcopy(result["goal_assessment"])
+        for axis in AXES:
+            negative = next(
+                (
+                    entry["result"]["goal_assessment"][axis]
+                    for entry in summaries
+                    if entry["result"]["goal_assessment"][axis]["status"] == "VIOLATION"
+                ),
+                None,
+            )
+            unknown = next(
+                (
+                    entry["result"]["goal_assessment"][axis]
+                    for entry in summaries
+                    if entry["result"]["goal_assessment"][axis]["status"] == "UNKNOWN"
+                ),
+                None,
+            )
+            if negative or unknown:
+                result["goal_assessment"][axis] = negative or unknown
+                if result["verdict"] == "APPROVE":
+                    result.update(
+                        verdict="INCONCLUSIVE",
+                        unverified=result["unverified"] + ["Unresolved goal axis: " + axis],
+                    )
+        root_diagnosis = next(
+            (
+                entry["result"]["diagnosis"]
+                for entry in summaries
+                if entry["result"]["diagnosis"]["classification"]
+                in (
+                    "TASK_ASSUMPTION_FALSE",
+                    "TASK_CONTRACT_CONFLICT",
+                    "MISSING_PREREQUISITE",
+                )
+            ),
+            None,
+        )
+        if root_diagnosis:
+            result["diagnosis"] = root_diagnosis
+        elif result["diagnosis"]["classification"] == "NO_ISSUE" and result["verdict"] != "APPROVE":
+            adverse = next(
+                (
+                    entry["result"]["diagnosis"]
+                    for entry in summaries
+                    if entry["result"]["diagnosis"]["classification"] != "NO_ISSUE"
+                ),
+                None,
+            )
+            result["diagnosis"] = adverse or dict(
+                result["diagnosis"],
+                classification="IMPLEMENTATION_DEFECT" if blocking else "INCONCLUSIVE",
+                finding_ids=list(blocking),
+                observed="Fixed partitions contain adverse or incomplete findings",
+                rationale="Overall clean diagnosis cannot override partition evidence",
+            )
     result["partition_evidence"] = [
         dict(
             index=i + 1,
@@ -235,6 +321,7 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
             digest=entry["partition"]["digest"],
             verdict=entry["result"]["verdict"],
             session=entry["result"].get("session"),
+            **goal_fields(entry["result"]),
         )
         for i, entry in enumerate(summaries)
     ]

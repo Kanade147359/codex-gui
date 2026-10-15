@@ -1,0 +1,111 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+____ test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded _____
+
+git_repo = PosixPath('/tmp/codex-gui-goal-base-results/test_real_codex_cache_write_to0/repo')
+stack = (<app.task_manager.TaskManager object at 0x7ed9e0e978b0>, <app.fake_responses.MockResponses object at 0x7ed9e0e95930>, <function stack.<locals>.make at 0x7ed9e0fdf640>)
+
+    def test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded(git_repo, stack):
+        m, mock, make = stack
+        mock.script = [("exec", BIG, {"input": 30_000, "cached": 0, "write": 30_000, "output": 40}),
+                       ("text", "done", {"input": 45_000, "cached": 30_000, "write": 15_000, "output": 10})]
+    
+        async def scenario():
+            t = await make(git_repo)
+            done = await finished(m, t["id"])
+            assert done["status"] == "completed", done["status_detail"]
+            row = m.db.list_turns(t["id"])[0]
+            assert (row["input_tokens"], row["cached_input_tokens"], row["cache_write_input_tokens"], row["output_tokens"]) == (75_000, 30_000, 45_000, 50)
+            assert row["requests"] == 2 and row["max_request_input"] == 45_000
+            assert json.loads(row["requests_json"]) == [{"i": 30000, "c": 0, "w": 30000, "o": 40}, {"i": 45000, "c": 30000, "w": 15000, "o": 10}]
+            assert row["tool_calls"] >= 1 and row["large_tool_outputs"] == 1          # the seq output is far above 8k tokens
+            assert row["tool_output_tokens_est"] <= 10_100                             # what the model saw is capped
+            big = [e for e in m.db.list_context_events(t["id"], ["large_tool_output"])]
+            assert len(big) == 1 and big[0]["data"]["raw_tokens_est"] > 100_000 and big[0]["data"]["truncated_for_model"]
+            assert row["service_tier"] == "default" and done["last_cache_activity_at"]
+            eff = m.usage(t["id"])["efficiency"]
+            assert eff["cache_write_input_tokens"] == 45_000 and eff["total"]["usd"]["cache_write_cost"] == pytest.approx(45_000 * 2.5 / 1e6)
+            await m.shutdown()
+>       go(scenario())
+
+tests/test_ctx_e2e.py:88: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_ctx_e2e.py:60: in go
+    return asyncio.run(coro)
+/home/kanade/.pyenv/versions/3.10.14/lib/python3.10/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/home/kanade/.pyenv/versions/3.10.14/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def scenario():
+        t = await make(git_repo)
+        done = await finished(m, t["id"])
+        assert done["status"] == "completed", done["status_detail"]
+        row = m.db.list_turns(t["id"])[0]
+        assert (row["input_tokens"], row["cached_input_tokens"], row["cache_write_input_tokens"], row["output_tokens"]) == (75_000, 30_000, 45_000, 50)
+        assert row["requests"] == 2 and row["max_request_input"] == 45_000
+        assert json.loads(row["requests_json"]) == [{"i": 30000, "c": 0, "w": 30000, "o": 40}, {"i": 45000, "c": 30000, "w": 15000, "o": 10}]
+>       assert row["tool_calls"] >= 1 and row["large_tool_outputs"] == 1          # the seq output is far above 8k tokens
+E       assert (1 >= 1 and 0 == 1)
+
+tests/test_ctx_e2e.py:80: AssertionError
+_____________ test_real_codex_tool_output_limit_reaches_the_model ______________
+
+git_repo = PosixPath('/tmp/codex-gui-goal-base-results/test_real_codex_tool_output_li0/repo')
+stack = (<app.task_manager.TaskManager object at 0x7ed9e1c63f40>, <app.fake_responses.MockResponses object at 0x7ed9e1c613c0>, <function stack.<locals>.make at 0x7ed9e0ec72e0>)
+
+    def test_real_codex_tool_output_limit_reaches_the_model(git_repo, stack):
+        m, mock, make = stack
+    
+        async def seen(**kw):
+            mock.requests.clear()
+            mock.script = [("exec", BIG), ("text", "ok")]
+            t = await make(git_repo, **kw)
+            await finished(m, t["id"])
+            return len(tool_output_of(mock.requests[1]))
+    
+        async def scenario():
+            default, balanced, conservative = await seen(), await seen(tool_output="balanced"), await seen(tool_output="conservative")
+            assert balanced == default                 # Balanced (16000) is above the model's own cap: no effect
+            assert conservative < default              # Conservative (8000) really lowers what the model gets back
+            await m.shutdown()
+>       go(scenario())
+
+tests/test_ctx_e2e.py:140: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_ctx_e2e.py:60: in go
+    return asyncio.run(coro)
+/home/kanade/.pyenv/versions/3.10.14/lib/python3.10/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/home/kanade/.pyenv/versions/3.10.14/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    async def scenario():
+        default, balanced, conservative = await seen(), await seen(tool_output="balanced"), await seen(tool_output="conservative")
+        assert balanced == default                 # Balanced (16000) is above the model's own cap: no effect
+>       assert conservative < default              # Conservative (8000) really lowers what the model gets back
+E       assert 156 < 156
+
+tests/test_ctx_e2e.py:138: AssertionError
+_______________ test_tool_output_token_limit_only_lowers_the_cap _______________
+
+repo = PosixPath('/tmp/codex-gui-goal-base-results/test_tool_output_token_limit_o0/repo')
+home = PosixPath('/tmp/codex-gui-goal-base-results/test_tool_output_token_limit_o0/codexhome')
+
+    def test_tool_output_token_limit_only_lowers_the_cap(repo, home):
+        """Measured facts behind the presets: 16000 / 32000 change nothing, 8000 trims a little, smaller values trim more."""
+        sizes = {lim: run(tp.measure_tool_output("codex", repo, lim, codex_home=home))["tokens_est"]
+                 for lim in (None, 2000, 4000, 8000, 16000, 32000)}
+        assert all(sizes.values())
+        assert sizes[16000] == sizes[None] and sizes[32000] == sizes[None]   # no-ops on this model
+>       assert sizes[8000] < sizes[None]                                     # Conservative really does reduce
+E       assert 39 < 39
+
+tests/test_ctx_integration.py:66: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded
+FAILED tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model
+FAILED tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap
+3 failed in 5.81s

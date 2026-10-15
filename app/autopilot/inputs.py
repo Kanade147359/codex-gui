@@ -53,11 +53,23 @@ async def requirements(ap, node, workflow):
     docs = []
     names = set(spec["input_files"]) | {n for n in plan["inputs"] if Path(n).name.upper() == "COMMON.MD"}
     for name in sorted(names):
-        docs.append(dict(name="documents/" + name, body=plan["inputs"][name], origin="owner input"))
+        docs.append(
+            dict(
+                name="documents/" + name,
+                body=plan["inputs"][name],
+                origin="owner input",
+            )
+        )
     for name, body in plan.get("rules", {}).items():
         parent = str(Path(name).parent)
         if parent == "." or owns(parent, spec["paths"]) or any(owns(p, [parent]) for p in spec["paths"]):
-            docs.append(dict(name="rules/" + name, body=body, origin="base rules; candidate edits cannot waive"))
+            docs.append(
+                dict(
+                    name="rules/" + name,
+                    body=body,
+                    origin="base rules; candidate edits cannot waive",
+                )
+            )
     for item in node["inputs"]:
         candidate = ap.ledger.get("candidates", item["candidate_id"])
         parent = ap.ledger.get("nodes", candidate["node_id"])
@@ -83,6 +95,19 @@ async def requirements(ap, node, workflow):
     for doc in docs:
         doc["digest"] = bytes_digest(doc["body"].encode())
     result = dict(version=1, node=node["name"], instruction=spec["prompt"], documents=docs)
+    from .goals import index
+
+    result["goal_index"] = index(plan, spec, docs)
+    lineage = ap.ledger.rows("replacements", "new_node_id=?", (node["id"],))
+    if lineage:
+        result["replan_lineage"] = lineage[0]["payload"]
+        original = lineage[0]["payload"]["original_spec"].get("acceptance_conditions", [])
+        result["goal_index"]["condition_origins"] = {
+            c["id"]: ("owner_input" if c in original else "replanner_proposal; not owner-approved")
+            for c in spec.get("acceptance_conditions", [])
+        }
+        result["goal_index"].pop("digest", None)
+        result["goal_index"]["digest"] = digest(result["goal_index"])
     result["digest"] = digest(result)
     return result
 

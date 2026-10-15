@@ -1,0 +1,99 @@
+{
+  "tested_code_and_tests_sha": "471f1a124684fdc4c6cac87882fa338a47621742",
+  "baseline_sha": "d395d232807203813b5052ae0df9ab926690d180",
+  "unchanged_main_sha": "12dabe5385f130383b00cd2609dd6bff7360d68f",
+  "draft_pr": "https://github.com/Kanade147359/codex-gui/pull/7",
+  "stacked_on": "https://github.com/Kanade147359/codex-gui/pull/5",
+  "branch": "codex-gui/goal-aware-replanning",
+  "worktree": "/tmp/codex-gui-goal-replanning",
+  "status": [
+    "IMPLEMENTED_UNMERGED",
+    "VERIFIED_WITH_FAKE_PROVIDERS",
+    "INSTALLED_CLI_LOCAL_ENDPOINT_AUTH_AND_TOOLCHAIN_SMOKE_VERIFIED",
+    "REAL_MODEL_NOT_RUN",
+    "NOT_DEPLOYED"
+  ],
+  "checks": [
+    {
+      "command": "pytest -q",
+      "passed": 826,
+      "failed": 3,
+      "skipped": 33,
+      "seconds": 146.13,
+      "result": "ONLY_IDENTICAL_BASELINE_FAILURES",
+      "log": "full-suite.log"
+    },
+    {
+      "command": "pytest -q <three named ctx tests> on unmodified d395d23 archive",
+      "failed": 3,
+      "failures": [
+        "tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded",
+        "tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model",
+        "tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap"
+      ],
+      "log": "baseline-d395d23.log"
+    },
+    {
+      "command": "CODEX_GUI_BROWSER=1 CODEX_GUI_AUTOPILOT_CLI_SMOKE=1 CODEX_GUI_AUTOPILOT_AUTH_SMOKE=1 CODEX_GUI_AUTOPILOT_TOOLCHAIN_SMOKE=1 pytest -q tests/test_autopilot_browser.py tests/test_goal_replanning_browser.py tests/test_autopilot_cli_smoke.py tests/test_autopilot_auth_smoke.py tests/test_autopilot_toolchains.py",
+      "passed": 13,
+      "failed": 0,
+      "log": "installed-cli-browser-toolchains.log"
+    },
+    {
+      "command": "ruff check --isolated --select F app/autopilot tests/*goal* tests/autopilot_helpers.py tests/fake_autopilot_replanner.py tests/fake_autopilot_review.py tests/test_autopilot_cli_smoke.py; node --check static/autopilot.js; git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "regressions": {
+    "goal_root_cases": 27,
+    "goal_and_existing_autopilot_api_document_cases": 91,
+    "all_these_cases_passed": true
+  },
+  "e2e": {
+    "trace": "e2e.json",
+    "public_markdown": "tests/fixtures/autopilot-goals",
+    "actual": [
+      "Markdown UI/import API",
+      "FastAPI routes",
+      "SQLite ledger",
+      "Git clones/worktrees/full SHAs",
+      "TaskManager/CodexRunner",
+      "existing scheduler/controller",
+      "bubblewrap managed validator",
+      "Chromium localhost server on ephemeral port"
+    ],
+    "fake": [
+      "implementation model",
+      "Claude review model",
+      "Codex fallback review model",
+      "independent Codex replanning model"
+    ],
+    "manual_automatic_case_actions_after_start": 0,
+    "independent_prerequisite": "test_accepted_prerequisite_is_readable_to_replanner_and_managed_sandbox verifies pinned P artifacts in actual analyst packet and actual sandbox validation"
+  },
+  "provider_compatibility": {
+    "claude_version": "2.1.185",
+    "codex_version": "0.159.2",
+    "auth": "isolated metadata confirms subscription OAuth/ChatGPT; no original credential modification",
+    "schema": "review_version=2; goal_assessment.version=1; proposal.version=1 separate from provider_version",
+    "sessions": "new independent thread/start; no implementation resume/fork",
+    "tool_control": "installed CLI restricted catalog, runtime tool-event rejection and read-only bubblewrap; bounded controller snapshot reads",
+    "quota": "versioned synthetic events only; no deliberate real quota exhaustion",
+    "real_models": "NOT_RUN",
+    "billing_state": "owner extra-usage-disabled confirmation not established for real-model bootstrap; no model/credit/purchase/settings operation"
+  },
+  "safety": {
+    "production_gui": "NOT_CHANGED",
+    "production_db": "NOT_OPENED_OR_CHANGED",
+    "main": "NOT_CHANGED_OR_MERGED",
+    "pr5": "NOT_CHANGED",
+    "deployment": "NOT_RUN",
+    "billing": "NOT_CHANGED",
+    "delegation": "one available active agent slot; implementation integrated by parent"
+  },
+  "limitations": [
+    "Real Claude/Codex model reasoning quality, actual included-quota exhaustion and real account extra-usage enforcement are not validated by fake/local-endpoint success.",
+    "Three existing ctx/tool-output assertions fail identically on the fixed PR #5 baseline with installed Codex 0.159.2; their assertions remain unchanged.",
+    "Unsupported/invalid graphs, changed contracts/authority and unknown external process outcomes stop or await an exact owner-authored plan; no silent retry or manual-success override."
+  ]
+}

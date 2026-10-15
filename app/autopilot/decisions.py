@@ -7,7 +7,10 @@ from .policy import canonical, digest
 
 
 def authorization(workflow):
-    return digest({key: workflow["plan"].get(key, {}) for key in ("policy", "permissions", "inputs", "rules")})
+    value = {key: workflow["plan"].get(key, {}) for key in ("policy", "permissions", "inputs", "rules")}
+    if "goals" in workflow["plan"]:
+        value["goals"] = workflow["plan"]["goals"]
+    return digest(value)
 
 
 def target(node, workflow):

@@ -66,6 +66,25 @@ class FixtureProvider(ClaudeProvider):
         finally:
             self.processes.pop(attempt["id"], None)
 
+    async def start_replan(self, packet, policy, root, attempt, on_identity):
+        from app.autopilot.replanning import validate_proposal
+
+        self.calls.append(dict(replan=packet["source_node"]["name"], packet=packet))
+        rc, output, timed = await run_bounded(
+            [sys.executable, str(Path(__file__).with_name("fake_autopilot_replanner.py"))],
+            stdin=json.dumps(dict(packet=packet, root=str(root), scenario=self.scenario)),
+            timeout=15,
+            log_path=attempt.get("event_log"),
+            on_start=lambda proc: on_identity(dict(pid=proc.pid, session="replan-process-" + attempt["id"])),
+        )
+        if rc or timed:
+            raise ProviderFailure("invalid_output", "fake replanner did not finish: " + output[-500:])
+        value = json.loads(output)
+        if "fixture_error" in value:
+            raise ProviderFailure(value["fixture_error"], "fixture replanner unavailable")
+        validate_proposal({k: v for k, v in value.items() if k != "session"}, packet)
+        return dict(value, provider="codex", model="fake", provider_version="synthetic fixture", independence="new independent fixture process")
+
 
 def install(manager, claude=None, codex=None):
     manager.runner = ImplementationRunner()

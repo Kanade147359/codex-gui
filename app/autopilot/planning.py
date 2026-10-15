@@ -5,7 +5,7 @@ import uuid
 
 from app.models import now_iso
 from . import git
-from .policy import canonical, digest, manifest, owns
+from .policy import canonical, digest, owns
 
 
 async def propose(ap, planner):
@@ -17,7 +17,11 @@ async def propose(ap, planner):
     if not path:
         return
     _, mode, _ = await git.git(
-        w["plan"]["repository"], "ls-tree", candidate["payload"]["scope"]["head_sha"], "--", path
+        w["plan"]["repository"],
+        "ls-tree",
+        candidate["payload"]["scope"]["head_sha"],
+        "--",
+        path,
     )
     if not mode.startswith(("100644 ", "100755 ")):
         raise ValueError("planning artifact must be a regular accepted file")
@@ -25,7 +29,12 @@ async def propose(ap, planner):
 
     text = await accepted_text(w["plan"]["repository"], candidate["payload"]["scope"]["head_sha"], path)
     raw = json.loads(text)
-    if not isinstance(raw, dict) or set(raw) != {"nodes"} or not isinstance(raw["nodes"], list) or not raw["nodes"]:
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != {"nodes"}
+        or not isinstance(raw["nodes"], list)
+        or not raw["nodes"]
+    ):
         raise ValueError("planning artifact must contain nonempty nodes revisions")
     plan = dict(w["plan"])
     nodes = {n["id"]: dict(n) for n in plan["nodes"]}
@@ -61,8 +70,17 @@ async def propose(ap, planner):
         nodes[nid] = spec
         changed.append(nid)
     plan["nodes"] = list(nodes.values())
-    normalized = manifest({k: v for k, v in plan.items() if k not in ("base_sha", "rules")})
-    normalized.update(base_sha=plan["base_sha"], rules=plan.get("rules", {}))
+    from .graph_revision import normalize
+
+    retired = {
+        r["source_node_id"].split(":", 1)[1]
+        for r in ap.ledger.rows(
+            "replacements",
+            "source_node_id IN (SELECT id FROM ap_nodes WHERE workflow_id=?)",
+            (w["id"],),
+        )
+    }
+    normalized = normalize(plan, retired)
     payload = dict(
         expected_plan=digest(w["plan"]),
         plan=normalized,
@@ -70,11 +88,16 @@ async def propose(ap, planner):
         before={name: next(spec for spec in w["plan"]["nodes"] if spec["id"] == name) for name in changed},
         expansions=expansions,
         artifact=dict(
-            head_sha=candidate["payload"]["scope"]["head_sha"], path=path, digest=bytes_digest(text.encode())
+            head_sha=candidate["payload"]["scope"]["head_sha"],
+            path=path,
+            digest=bytes_digest(text.encode()),
         ),
     )
     with ap.ledger.transaction() as c:
-        if c.execute("SELECT 1 FROM ap_plan_revisions WHERE source_candidate=?", (candidate["id"],)).fetchone():
+        if c.execute(
+            "SELECT 1 FROM ap_plan_revisions WHERE source_candidate=?",
+            (candidate["id"],),
+        ).fetchone():
             return  # Another scheduler/controller already reserved or applied this exact artifact.
         current = c.execute("SELECT candidate_id,state FROM ap_nodes WHERE id=?", (planner["id"],)).fetchone()
         live = c.execute("SELECT plan,state FROM ap_workflows WHERE id=?", (w["id"],)).fetchone()

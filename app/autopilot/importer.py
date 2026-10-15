@@ -75,6 +75,21 @@ def documents(uploads):
 def prepare(inputs):
     """Optional YAML front matter describes metadata; Markdown body stays in inputs."""
     common = [p for p in inputs if PurePosixPath(p).name.upper() == "COMMON.MD"]
+    goals = []
+    for name in common:
+        body = inputs[name]
+        if body.startswith("---\n"):
+            match = re.match(r"\A---\n(.*?)\n---(?:\n|$)", body, re.S)
+            if not match:
+                raise ValueError("unclosed COMMON front matter")
+            try:
+                metadata = yaml.safe_load(match[1]) or {}
+            except yaml.YAMLError as error:
+                raise ValueError("invalid COMMON metadata") from error
+            if isinstance(metadata, dict) and "goals" in metadata:
+                if not isinstance(metadata["goals"], list):
+                    raise ValueError("explicit goals must be a list")
+                goals.extend(metadata["goals"])
     nodes = []
     for name, body in inputs.items():
         if name in common:
@@ -91,6 +106,9 @@ def prepare(inputs):
             if not isinstance(meta, dict):
                 raise ValueError("task metadata must be a mapping")
         allowed = {
+            "goal_ids",
+            "acceptance_conditions",
+            "assumptions",
             "id",
             "kind",
             "depends_on",
@@ -119,7 +137,14 @@ def prepare(inputs):
         nodes.append(node)
     if not nodes:
         raise ValueError("at least one task instruction is required")
-    return dict(version=1, inputs=inputs, nodes=nodes, document_digest=digest(inputs), common=common)
+    return dict(
+        version=1,
+        inputs=inputs,
+        nodes=nodes,
+        goals=goals,
+        document_digest=digest(inputs),
+        common=common,
+    )
 
 
 def convert(body):
@@ -140,4 +165,5 @@ def convert(body):
         nodes=nodes,
         policy=body.get("policy", {}),
         permissions=body.get("permissions", {}),
+        goals=body.get("goals", []),
     )

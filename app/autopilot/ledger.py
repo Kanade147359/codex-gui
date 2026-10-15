@@ -51,6 +51,16 @@ CREATE TABLE IF NOT EXISTS ap_decisions (
 CREATE TABLE IF NOT EXISTS ap_plan_revisions (
  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
  source_candidate TEXT NOT NULL UNIQUE, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_replans (
+ id TEXT PRIMARY KEY, node_id TEXT NOT NULL UNIQUE REFERENCES ap_nodes(id), source_candidate TEXT NOT NULL,
+ run_generation INTEGER NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_graph_revisions (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id), replan_id TEXT NOT NULL UNIQUE,
+ state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_replacements (
+ id TEXT PRIMARY KEY, revision_id TEXT NOT NULL REFERENCES ap_graph_revisions(id),
+ source_node_id TEXT NOT NULL REFERENCES ap_nodes(id), new_node_id TEXT NOT NULL UNIQUE REFERENCES ap_nodes(id),
+ payload TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
 
@@ -103,11 +113,15 @@ class Ledger:
             "provider_availability",
             "decisions",
             "plan_revisions",
+            "replans",
+            "graph_revisions",
+            "replacements",
         }:
             raise ValueError("unknown ledger table")
         with self.db._lock:
             return [
-                unpack(r) for r in self.db._conn.execute(f"SELECT * FROM ap_{table} WHERE {where} ORDER BY rowid", args)
+                unpack(r)
+                for r in self.db._conn.execute(f"SELECT * FROM ap_{table} WHERE {where} ORDER BY rowid", args)
             ]
 
     def get(self, table, identity):
@@ -220,6 +234,10 @@ class Ledger:
                     count = c.execute(
                         "SELECT count(*) FROM ap_nodes WHERE state IN ('launching','integrating') AND json_extract(spec,'$.kind')='integration'"
                     ).fetchone()[0]
+                elif new in ("reviewing", "analyzing"):
+                    count = c.execute(
+                        "SELECT count(*) FROM ap_nodes WHERE state IN ('reviewing','analyzing')"
+                    ).fetchone()[0]
                 else:
                     count = c.execute("SELECT count(*) FROM ap_nodes WHERE state=?", (new,)).fetchone()[0]
                 if count >= limit:
@@ -268,7 +286,9 @@ class Ledger:
                 return False
             w = unpack(c.execute("SELECT * FROM ap_workflows WHERE id=?", (n["workflow_id"],)).fetchone())
             r = unpack(c.execute("SELECT * FROM ap_reviews WHERE id=?", (review["id"],)).fetchone())
-            evidence = [unpack(x) for x in c.execute("SELECT * FROM ap_validation WHERE candidate_id=?", (cid,))]
+            evidence = [
+                unpack(x) for x in c.execute("SELECT * FROM ap_validation WHERE candidate_id=?", (cid,))
+            ]
             task = c.execute("SELECT * FROM tasks WHERE id=?", (n["task_id"],)).fetchone()
             if not w or not task:
                 return False
@@ -289,21 +309,31 @@ class Ledger:
                 and r["state"] == "completed"
                 and r["payload"].get("verdict") == "APPROVE"
             )
-            latest_review = c.execute("SELECT max(generation) FROM ap_reviews WHERE candidate_id=?", (cid,)).fetchone()[
-                0
-            ]
+            latest_review = c.execute(
+                "SELECT max(generation) FROM ap_reviews WHERE candidate_id=?", (cid,)
+            ).fetchone()[0]
             prior_findings = set(p.get("unresolved", []))
             from .decisions import gate_approved, candidate_approved
 
             manual_satisfied = gate_approved(self, n, w, c)
             final_owner_satisfied = candidate_approved(self, n, w, c)
+            from .goals import validate_review
+
+            goal_valid = True
+            try:
+                validate_review(r["payload"], cand)
+            except (ValueError, KeyError, TypeError):
+                goal_valid = False
             for previous in c.execute(
-                "SELECT payload FROM ap_reviews WHERE candidate_id=? AND id!=?", (cid, review["id"])
+                "SELECT payload FROM ap_reviews WHERE candidate_id=? AND id!=?",
+                (cid, review["id"]),
             ):
                 data = json.loads(previous["payload"])
                 prior_findings.update(f["id"] for f in data.get("blocking", []) + data.get("findings", []))
             if (
                 w["state"] != "running"
+                or not goal_valid
+                or p.get("goal_review_version", 1) != w["plan"]["policy"].get("goal_review_version", 1)
                 or w["generation"] != cand["run_generation"]
                 or n["candidate_id"] != cid
                 or n["generation"] != cand["generation"]
@@ -326,7 +356,9 @@ class Ledger:
                     and [x.get("command_digest") for x in e["payload"].get("checks", []) if "command" in x]
                     == [digest(cmd) for cmd in n["spec"]["validation"]["commands"]]
                     and bool(e["payload"].get("checks"))
-                    and all(x.get("exit_status") == 0 and not x.get("timed_out") for x in e["payload"]["checks"])
+                    and all(
+                        x.get("exit_status") == 0 and not x.get("timed_out") for x in e["payload"]["checks"]
+                    )
                     for e in evidence
                 )
                 or (not w["plan"]["policy"]["automatic_acceptance"] and not final_owner_satisfied)
@@ -343,7 +375,8 @@ class Ledger:
                 or p.get("recorded_completion", {}).get("parsed_result") != result
                 or digest(task["last_prompt"]) != p["prompt_digest"]
                 or digest(owner_instructions) != p["instructions_digest"]
-                or c.execute("SELECT count(*) FROM turns WHERE task_id=?", (task["id"],)).fetchone()[0] != p["turn"]
+                or c.execute("SELECT count(*) FROM turns WHERE task_id=?", (task["id"],)).fetchone()[0]
+                != p["turn"]
                 or digest(w["plan"]["policy"]) != p["policy_digest"]
                 or input_digest(n, w) != p["input_digest"]
                 or digest(json.loads(task["completion_contract"])) != p["contract_digest"]
@@ -369,7 +402,8 @@ class Ledger:
             c.execute("UPDATE ap_candidates SET state='accepted' WHERE id=?", (cid,))
             c.execute("UPDATE ap_nodes SET state='accepted',reason='' WHERE id=?", (n["id"],))
             for operation in c.execute(
-                "SELECT * FROM ap_operations WHERE node_id=? AND kind='integration'", (n["id"],)
+                "SELECT * FROM ap_operations WHERE node_id=? AND kind='integration'",
+                (n["id"],),
             ).fetchall():
                 data = json.loads(operation["payload"])
                 data.update(
@@ -378,7 +412,10 @@ class Ledger:
                     accepted_review_id=r["id"],
                     validation_ids=[e["id"] for e in evidence if e["state"] == "PASS"],
                 )
-                c.execute("UPDATE ap_operations SET payload=? WHERE id=?", (canonical(data), operation["id"]))
+                c.execute(
+                    "UPDATE ap_operations SET payload=? WHERE id=?",
+                    (canonical(data), operation["id"]),
+                )
             c.execute(
                 "UPDATE tasks SET task_outcome='success',outcome_source='autopilot',approval_source='ai_review',approved_at=?,outcome_reason='AI review accepted',completion_pending=0 WHERE id=?",
                 (now_iso(), n["task_id"]),
@@ -402,7 +439,14 @@ class Ledger:
 
             n["decision_target"] = target(n, w)
             n["decisions"] = self.rows("decisions", "node_id=?", (n["id"],))
+            n["replans"] = self.rows("replans", "node_id=?", (n["id"],))
+            n["replan_lineage"] = self.rows(
+                "replacements", "new_node_id=? OR source_node_id=?", (n["id"], n["id"])
+            )
         revisions = self.rows("plan_revisions", "workflow_id=?", (workflow_id,))
         for revision in revisions:
             revision["decision_target"] = digest(revision["payload"])
-        return dict(**w, nodes=nodes, plan_revisions=revisions)
+        dynamic = self.rows("graph_revisions", "workflow_id=?", (workflow_id,))
+        for revision in dynamic:
+            revision["decision_target"] = digest(revision["payload"])
+        return dict(**w, nodes=nodes, plan_revisions=revisions, graph_revisions=dynamic)

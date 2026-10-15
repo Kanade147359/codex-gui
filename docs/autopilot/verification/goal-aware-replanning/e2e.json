@@ -1,0 +1,852 @@
+{
+  "tested_sha": "471f1a124684fdc4c6cac87882fa338a47621742",
+  "fixture": "tests/fixtures/autopilot-goals",
+  "kind": "REAL_API_SQLITE_GIT_TASKMANAGER_WITH_FAKE_MODELS",
+  "workflow": "0f7c900ea31c42b9848f05643fea4f51",
+  "state": "completed",
+  "restart": "after durable independent proposal, before atomic graph apply",
+  "duplicate_apply": "two concurrent checked_apply calls; one revision/replacement",
+  "manual_send_approve_merge": 0,
+  "nodes": [
+    {
+      "name": "C",
+      "state": "superseded",
+      "fix_rounds": 1,
+      "inputs": [],
+      "depends_on": [],
+      "native_task_outcome": "needs_review",
+      "implementation_thread": "implementation-6dfecc917c5c4e839de0012af1f011fd",
+      "candidates": [
+        {
+          "id": "21c0681dd3d04e628fdb686367a17236",
+          "scope": {
+            "base_sha": "f4c28a0ccce31910a4a29afed1065603af483e0a",
+            "diff_digest": "0c31a3eb678baf8aed184aea96b8014b3af626510fb7ce727821d89325d9c872",
+            "head_sha": "c3438a8ada7c3136f12b1bbdcbe7513b9866368f",
+            "tree_sha": "397e8dd5bc4a3e1a91c238065ad7b625ea172e7b"
+          },
+          "requirements_digest": "a914b45fb186b01c8fd006dd722536253b6596b15172c9cdc1016fb3c7c40675",
+          "goal_index_digest": "d130c53eada23182fc0e24a3f135540204cb56374aae4140d4b55b7c69ff5ba6",
+          "input_documents": [
+            {
+              "name": "documents/C.md",
+              "digest": "a75d87cb0c36380d63f574cbb5e27cb3fb47055f8281dfc06bad60d995db30ed"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "c9db04c98eb2efd1f4d64a10c6646819cff83d958291c6bd3cf27171bc5ce055"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "checks": [
+                {
+                  "artifact": "C.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "a637e09ae041c5d6f8caa14eaeef9d60960a7d9c96640a95a4f3e0ecffb2a03b",
+                  "exit_status": 0,
+                  "timed_out": false
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "id": "b78a8bac956a4094991110fd4939c916",
+              "provider": "claude",
+              "state": "completed",
+              "session": "review-0a223ddb50314fa3a49844af6658589b",
+              "verdict": "CHANGES_REQUESTED",
+              "assessment": {
+                "architectural_consistency": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "evidence_completeness": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_alignment": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_index_digest": "d130c53eada23182fc0e24a3f135540204cb56374aae4140d4b55b7c69ff5ba6",
+                "requirements_digest": "a914b45fb186b01c8fd006dd722536253b6596b15172c9cdc1016fb3c7c40675",
+                "task_correctness": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "VIOLATION"
+                },
+                "version": 1
+              },
+              "diagnosis": {
+                "anchors": [],
+                "classification": "IMPLEMENTATION_DEFECT",
+                "expected": "Satisfy assigned acceptance without contradicting COMMON.",
+                "finding_ids": [
+                  "C-read-input"
+                ],
+                "observed": "The actual candidate and fixed requirement bodies were inspected.",
+                "rationale": "Ordinary implementation findings stay in the original implementation thread.",
+                "reproduction": "Inspect fixed candidate and run the registered validation profile.",
+                "version": 1
+              },
+              "blocking": [
+                {
+                  "id": "C-read-input",
+                  "line": 1,
+                  "path": "C.py",
+                  "reason": "Read the actual input instead of returning a constant"
+                }
+              ]
+            }
+          ],
+          "accepted": false
+        },
+        {
+          "id": "7df307b40326404fb10e82dd74dab9f3",
+          "scope": {
+            "base_sha": "f4c28a0ccce31910a4a29afed1065603af483e0a",
+            "diff_digest": "c658098f32fde63244c34751b66d879a6e9d35cf5b3bdd96dcf15fbe0941ecc3",
+            "head_sha": "1e62de307e36de794513404783ce7a9df310933e",
+            "tree_sha": "1a344640106053180daf9d3746eead8742ca1b6f"
+          },
+          "requirements_digest": "a914b45fb186b01c8fd006dd722536253b6596b15172c9cdc1016fb3c7c40675",
+          "goal_index_digest": "d130c53eada23182fc0e24a3f135540204cb56374aae4140d4b55b7c69ff5ba6",
+          "input_documents": [
+            {
+              "name": "documents/C.md",
+              "digest": "a75d87cb0c36380d63f574cbb5e27cb3fb47055f8281dfc06bad60d995db30ed"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "c9db04c98eb2efd1f4d64a10c6646819cff83d958291c6bd3cf27171bc5ce055"
+            }
+          ],
+          "validation": [
+            {
+              "state": "FAIL",
+              "checks": [
+                {
+                  "artifact": "C.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "a637e09ae041c5d6f8caa14eaeef9d60960a7d9c96640a95a4f3e0ecffb2a03b",
+                  "exit_status": 1,
+                  "timed_out": false
+                }
+              ]
+            }
+          ],
+          "reviews": [],
+          "accepted": false
+        }
+      ],
+      "replans": [
+        {
+          "id": "f3d03f8be48549d29cd567e403611593",
+          "state": "completed",
+          "packet_digest": "213fcdd95e0a8e967ce1a587d8a901a11a63791f52b3064158b4f5eb1b46cf16",
+          "evidence_supported": true,
+          "provider": "codex",
+          "provider_version": "synthetic fixture",
+          "session": "independent-replanner-aaebeea96330493a9031d0f15304c550",
+          "diagnosis": {
+            "anchors": [
+              {
+                "kind": "source",
+                "quote": "good,data",
+                "ref": "input.csv"
+              },
+              {
+                "kind": "requirement",
+                "quote": "Input is JSON",
+                "ref": "assumption:A-json"
+              },
+              {
+                "kind": "validation",
+                "quote": "JSONDecodeError",
+                "ref": "087a51f6d8e04ef7b2a7e0e82838ce53"
+              }
+            ],
+            "classification": "TASK_ASSUMPTION_FALSE",
+            "expected": "Transform the input to good while remaining local.",
+            "finding_ids": [
+              "C-read-input"
+            ],
+            "observed": "JSONDecodeError on the accepted CSV input.",
+            "rationale": "The task assumed JSON, but the immutable accepted input is CSV.",
+            "reproduction": "Run the frozen validator against input.csv after the JSON decoder repair.",
+            "version": 1
+          },
+          "new_tasks": [
+            {
+              "acceptance_conditions": [
+                {
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "id": "AC-good",
+                  "text": "Transform the accepted input to good locally"
+                }
+              ],
+              "completion_contract": {},
+              "depends_on": [],
+              "finding_ids": [
+                "C-read-input"
+              ],
+              "goal_ids": [
+                "G-local"
+              ],
+              "implementation": "Repair C.py to parse CSV without adding external access. Preserve the original completion and validation contract.",
+              "invalidated_assumptions": [
+                "A-json"
+              ],
+              "manual_gates": [],
+              "parent_task": "C",
+              "paths": [
+                "C.py",
+                "C.txt"
+              ],
+              "purpose": "Implement the assigned transform using the actual local CSV format.",
+              "rationale": "Smallest correction satisfying the same goal, acceptance and validator.",
+              "relationship": "replace",
+              "root_cause": "False JSON assumption",
+              "task_id": "R",
+              "title": "Decode the actual CSV prerequisite",
+              "validation": {
+                "artifacts": [
+                  "C.txt"
+                ],
+                "commands": [
+                  [
+                    "python3",
+                    "-c",
+                    "from pathlib import Path; exec(Path('C.py').read_text()); assert transform(Path('input.csv').read_text()) == 'good'"
+                  ]
+                ],
+                "network": false,
+                "outputs": [],
+                "timeout": 300
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "D",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [
+        {
+          "candidate_id": "3d6912b8b75b4e1d8a943ba9c7ec054c",
+          "head_sha": "e9776a37b1ec331028d0a96d9c634fe29022044c",
+          "kind": "code",
+          "node": "R"
+        }
+      ],
+      "depends_on": [
+        "R"
+      ],
+      "native_task_outcome": "success",
+      "implementation_thread": "implementation-215e70c70cdf4f1e9297b3ceed47e7c9",
+      "candidates": [
+        {
+          "id": "ee43ff844de440268986eec7f4302261",
+          "scope": {
+            "base_sha": "e9776a37b1ec331028d0a96d9c634fe29022044c",
+            "diff_digest": "883cf263362b2473559aa3169b9caa08c0c10ad4e4c637be44f425f2b38517aa",
+            "head_sha": "8dd0e3f974e04fcfbc4c1e536c9fc8f07db59aa2",
+            "tree_sha": "f2ffafda906c17aaba4d822249e4aa328eb6389f"
+          },
+          "requirements_digest": "d96ae76ec97d83a3469830ba9f8c967ce7f1fd18da02b68748fba06feea63dec",
+          "goal_index_digest": "6ff37a10614f22b164473d6e1c07e1dbe06ed16931205018a00fde93219174b8",
+          "input_documents": [
+            {
+              "name": "documents/COMMON.md",
+              "digest": "c9db04c98eb2efd1f4d64a10c6646819cff83d958291c6bd3cf27171bc5ce055"
+            },
+            {
+              "name": "documents/D.md",
+              "digest": "02e17357780b35904e6f77de82d2f8f4f7798fc8322c35a00727b2ebff7117d0"
+            },
+            {
+              "name": "handoff/R/C.txt",
+              "digest": "106675dc1490d5cdd6d1f0410731316ce93fc964c6cf6726e2b0d53e19688feb",
+              "head_sha": "e9776a37b1ec331028d0a96d9c634fe29022044c",
+              "relative_path": "C.txt"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "checks": [
+                {
+                  "artifact": "D.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "b67c751483b7960078132e7c2a4b0a2d39587e84c7bc3d684574e263e6a7b0d6",
+                  "exit_status": 0,
+                  "timed_out": false
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "id": "fc68789e632942efacde5f1a52e3ea38",
+              "provider": "claude",
+              "state": "completed",
+              "session": "review-38c69e22f411451592f8df45c9ce6b38",
+              "verdict": "APPROVE",
+              "assessment": {
+                "architectural_consistency": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/D.md",
+                    "handoff/R/C.txt"
+                  ],
+                  "status": "MATCH"
+                },
+                "evidence_completeness": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/D.md",
+                    "handoff/R/C.txt"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_alignment": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/D.md",
+                    "handoff/R/C.txt"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_index_digest": "6ff37a10614f22b164473d6e1c07e1dbe06ed16931205018a00fde93219174b8",
+                "requirements_digest": "d96ae76ec97d83a3469830ba9f8c967ce7f1fd18da02b68748fba06feea63dec",
+                "task_correctness": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/D.md",
+                    "handoff/R/C.txt"
+                  ],
+                  "status": "MATCH"
+                },
+                "version": 1
+              },
+              "diagnosis": {
+                "anchors": [],
+                "classification": "NO_ISSUE",
+                "expected": "Satisfy assigned acceptance without contradicting COMMON.",
+                "finding_ids": [],
+                "observed": "The actual candidate and fixed requirement bodies were inspected.",
+                "rationale": "Ordinary implementation findings stay in the original implementation thread.",
+                "reproduction": "Inspect fixed candidate and run the registered validation profile.",
+                "version": 1
+              },
+              "blocking": []
+            }
+          ],
+          "accepted": true
+        }
+      ],
+      "replans": []
+    },
+    {
+      "name": "E",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [],
+      "depends_on": [],
+      "native_task_outcome": "success",
+      "implementation_thread": "implementation-f22ae47c37c6438bbb8b7dffddfdd340",
+      "candidates": [
+        {
+          "id": "764bc55140ce4374a8d27dc40ef4c461",
+          "scope": {
+            "base_sha": "f4c28a0ccce31910a4a29afed1065603af483e0a",
+            "diff_digest": "663c259f28a3915ebcc29380f2f3de5f9009fca21c7e0cad84c1ea7db49e0017",
+            "head_sha": "bd69478314bbd3466729dd76db97538c385de5ca",
+            "tree_sha": "2091a2cf88064e171bdd2ece1c5ffc4752f02955"
+          },
+          "requirements_digest": "b2544a4fd89f2f05d1dbc2cac6538f25e0df706400ad5ede4b5120aae0634ec4",
+          "goal_index_digest": "e39a3303ed3d0f12dce9ce7e4d893798cb865d287eba1d75e94cf9e516006fd2",
+          "input_documents": [
+            {
+              "name": "documents/COMMON.md",
+              "digest": "c9db04c98eb2efd1f4d64a10c6646819cff83d958291c6bd3cf27171bc5ce055"
+            },
+            {
+              "name": "documents/E.md",
+              "digest": "b617d2f89ad9295b34814ba4441afd8772ca8bed616852867f6eb7588d404447"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "checks": [
+                {
+                  "artifact": "E.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "0c18d690ee159613f8102877e5c45714f89dfd5e1dcff1941c9bfca1b3251c29",
+                  "exit_status": 0,
+                  "timed_out": false
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "id": "66ae959c142346a8be9b391bf7e311a7",
+              "provider": "claude",
+              "state": "completed",
+              "session": "review-dd7bb8f5bfa64e349445624a15e4bb58",
+              "verdict": "APPROVE",
+              "assessment": {
+                "architectural_consistency": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/E.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "evidence_completeness": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/E.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_alignment": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/E.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_index_digest": "e39a3303ed3d0f12dce9ce7e4d893798cb865d287eba1d75e94cf9e516006fd2",
+                "requirements_digest": "b2544a4fd89f2f05d1dbc2cac6538f25e0df706400ad5ede4b5120aae0634ec4",
+                "task_correctness": {
+                  "acceptance_ids": [],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/COMMON.md",
+                    "documents/E.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "version": 1
+              },
+              "diagnosis": {
+                "anchors": [],
+                "classification": "NO_ISSUE",
+                "expected": "Satisfy assigned acceptance without contradicting COMMON.",
+                "finding_ids": [],
+                "observed": "The actual candidate and fixed requirement bodies were inspected.",
+                "rationale": "Ordinary implementation findings stay in the original implementation thread.",
+                "reproduction": "Inspect fixed candidate and run the registered validation profile.",
+                "version": 1
+              },
+              "blocking": []
+            }
+          ],
+          "accepted": true
+        }
+      ],
+      "replans": []
+    },
+    {
+      "name": "R",
+      "state": "accepted",
+      "fix_rounds": 0,
+      "inputs": [],
+      "depends_on": [],
+      "native_task_outcome": "success",
+      "implementation_thread": "implementation-2a6737bd45bf4684ac3b7a9e4b94ead2",
+      "candidates": [
+        {
+          "id": "3d6912b8b75b4e1d8a943ba9c7ec054c",
+          "scope": {
+            "base_sha": "f4c28a0ccce31910a4a29afed1065603af483e0a",
+            "diff_digest": "a6ff14347c126a295e372495a30406ce630f8f3afa43c0131849a4d1e97fa405",
+            "head_sha": "e9776a37b1ec331028d0a96d9c634fe29022044c",
+            "tree_sha": "e4bec90333a7ff61b529b0a1350713c626bbd037"
+          },
+          "requirements_digest": "c72f62dd5803bd77cc9d18dc29cae21fb955d18a48b23e48ffdf6a7bff243335",
+          "goal_index_digest": "ec27a2578dd63ac3ee99925f38828936dfa7b91246c9a440a0d7143caa1d637c",
+          "input_documents": [
+            {
+              "name": "documents/C.md",
+              "digest": "a75d87cb0c36380d63f574cbb5e27cb3fb47055f8281dfc06bad60d995db30ed"
+            },
+            {
+              "name": "documents/COMMON.md",
+              "digest": "c9db04c98eb2efd1f4d64a10c6646819cff83d958291c6bd3cf27171bc5ce055"
+            }
+          ],
+          "validation": [
+            {
+              "state": "PASS",
+              "checks": [
+                {
+                  "artifact": "C.txt",
+                  "exit_status": 0
+                },
+                {
+                  "command_digest": "a637e09ae041c5d6f8caa14eaeef9d60960a7d9c96640a95a4f3e0ecffb2a03b",
+                  "exit_status": 0,
+                  "timed_out": false
+                }
+              ]
+            }
+          ],
+          "reviews": [
+            {
+              "id": "da52c2ee91954890b143090b12b4f324",
+              "provider": "claude",
+              "state": "completed",
+              "session": "review-28809cec352242a786d1dec518d2fa11",
+              "verdict": "APPROVE",
+              "assessment": {
+                "architectural_consistency": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "evidence_completeness": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_alignment": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "goal_index_digest": "ec27a2578dd63ac3ee99925f38828936dfa7b91246c9a440a0d7143caa1d637c",
+                "requirements_digest": "c72f62dd5803bd77cc9d18dc29cae21fb955d18a48b23e48ffdf6a7bff243335",
+                "task_correctness": {
+                  "acceptance_ids": [
+                    "AC-good"
+                  ],
+                  "evidence": [
+                    {
+                      "line": 0,
+                      "path": "",
+                      "reason": "Checks this assigned slice; the workflow goal may remain partially implemented.",
+                      "source_ref": "task:instruction"
+                    }
+                  ],
+                  "goal_ids": [
+                    "G-local"
+                  ],
+                  "source_refs": [
+                    "task:instruction",
+                    "documents/C.md",
+                    "documents/COMMON.md"
+                  ],
+                  "status": "MATCH"
+                },
+                "version": 1
+              },
+              "diagnosis": {
+                "anchors": [],
+                "classification": "NO_ISSUE",
+                "expected": "Satisfy assigned acceptance without contradicting COMMON.",
+                "finding_ids": [],
+                "observed": "The actual candidate and fixed requirement bodies were inspected.",
+                "rationale": "Ordinary implementation findings stay in the original implementation thread.",
+                "reproduction": "Inspect fixed candidate and run the registered validation profile.",
+                "version": 1
+              },
+              "blocking": []
+            }
+          ],
+          "accepted": true
+        }
+      ],
+      "replans": []
+    }
+  ],
+  "graph_revisions": [
+    {
+      "id": "a5bd5dc48411462aad974da3ac2a88fb",
+      "state": "applied",
+      "old_graph": [
+        {
+          "id": "C",
+          "depends_on": []
+        },
+        {
+          "id": "D",
+          "depends_on": [
+            "C"
+          ]
+        },
+        {
+          "id": "E",
+          "depends_on": []
+        }
+      ],
+      "new_graph": [
+        {
+          "id": "C",
+          "depends_on": []
+        },
+        {
+          "id": "R",
+          "depends_on": []
+        },
+        {
+          "id": "D",
+          "depends_on": [
+            "R"
+          ]
+        },
+        {
+          "id": "E",
+          "depends_on": []
+        }
+      ],
+      "owner_decision": {
+        "action": "auto_within_envelope",
+        "note": "",
+        "target": null
+      }
+    }
+  ]
+}
