@@ -1314,6 +1314,9 @@ class Autopilot:
             await self._accept(n, candidate, self.ledger.get("reviews", record["id"]))
         elif result["verdict"] == "CHANGES_REQUESTED":
             self._retain_findings(candidate, result["blocking"])
+            if result.get("diagnosis", {}).get("classification") == "ENVIRONMENT_FAILURE":
+                self.ledger.transition(n["id"], "reviewing", "blocked_infrastructure", reason="Review reported environment failure; inspect managed validation/provider evidence before resuming")
+                return
             if result.get("diagnosis", {}).get("classification") in goals.ROOT_CAUSES:
                 packet = replanning.packet(self, n, w, candidate)
                 if await replanning.verify_evidence(result["diagnosis"], packet, root):
@@ -1736,6 +1739,10 @@ class Autopilot:
                                 "blocked_decision",
                                 reason="Stale independent replan proposal retained",
                             )
+                    elif rows[-1]["payload"].get("proposal", {}).get("diagnosis", {}).get("classification") == "IMPLEMENTATION_DEFECT":
+                        packet = rows[-1]["payload"]["packet"]
+                        context = packet.get("failure_context", {})
+                        self._request_fix(n, context.get("fingerprint", digest(packet["findings"])), context.get("findings", packet["findings"]), _skip_replan=True)
                     else:
                         self.ledger.transition(
                             n["id"],

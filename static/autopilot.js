@@ -80,6 +80,8 @@
             const note = document.createElement('input'); note.placeholder = '所有者判断の理由'; note.value = ownerNotes.get(revision.decision_target) || ''; note.oninput = () => ownerNotes.set(revision.decision_target,note.value); card.append(note);
             for (const action of ['approve','reject']) {
               const button = text('button',`Owner ${action} root-cause plan`);
+              button.disabled = action === 'approve' && p.hard_blocks.length > 0;
+              if (button.disabled) button.title = '固定目標・承認条件・trust modelの変更には、新しい所有者作成のworkflow/contractが必要です。';
               button.onclick = async () => {try {await api(`/api/autopilot/workflows/${selected}/graph-revisions/${revision.id}/decision`,{owner_action:true,expected_target:revision.decision_target,action,note:note.value}); await refresh();} catch(e) {showError(e);}};
               card.append(button);
             }

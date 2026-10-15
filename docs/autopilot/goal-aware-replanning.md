@@ -65,6 +65,8 @@ finding IDs and exact evidence anchors. The controller verifies source quotes ag
 tracked fixed snapshot files, requirement quotes against the frozen originals, and
 validation references against controller-run records. Test failure alone, README claims,
 authentication problems and quota failures never authorize a graph change.
+Source anchors may use `path#L301-L320` for counterexamples beyond the first page; the
+same bounded, tracked-snapshot reader verifies those exact lines.
 
 ## Choose a replanning policy before Start
 

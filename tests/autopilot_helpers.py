@@ -83,7 +83,7 @@ class FixtureProvider(ClaudeProvider):
         if "fixture_error" in value:
             raise ProviderFailure(value["fixture_error"], "fixture replanner unavailable")
         validate_proposal({k: v for k, v in value.items() if k != "session"}, packet)
-        return value
+        return dict(value, provider="codex", model="fake", provider_version="synthetic fixture", independence="new independent fixture process")
 
 
 def install(manager, claude=None, codex=None):

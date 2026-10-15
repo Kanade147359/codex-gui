@@ -71,8 +71,11 @@ if scenario.get("request_file") and not p["source_context"]["requested_code"]:
 if (root / "input.csv").exists() and p["source_node"]["name"] == "C":
     spec = p["source_node"]["spec"]
     assert spec["assumptions"][0]["id"] == "A-json"
-    assert p["fix_history"] and p["validation"][-1]["state"] == "FAIL"
-    assert "JSONDecodeError" in json.dumps(p["validation"][-1])
+    if scenario.get("initial_premise"):
+        assert not p["fix_history"] and p["validation"][-1]["state"] == "PASS"
+    else:
+        assert p["fix_history"] and p["validation"][-1]["state"] == "FAIL"
+        assert "JSONDecodeError" in json.dumps(p["validation"][-1])
     assert (root / "input.csv").read_text() == "good,data\n"
     assert any(
         view["path"] == "input.csv" and "good,data" in view["text"]
@@ -94,6 +97,8 @@ if (root / "input.csv").exists() and p["source_node"]["name"] == "C":
             ),
         ],
     )
+    if scenario.get("initial_premise"):
+        diag["anchors"] = diag["anchors"][:2]
     replacement = "R"
     tasks = [
         dict(

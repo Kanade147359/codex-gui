@@ -637,14 +637,14 @@ class CodexProvider(ReviewProvider):
                     ),
                     trusted_review_policy["review_timeout"],
                 )
-                return dict(
-                    value,
+                metadata = dict(
                     provider="codex",
                     model=result.get("model") or model,
-                    version=cap["version"],
                     session=tid,
                     independence="new independent thread; may use same model as implementation",
                 )
+                metadata["provider_version" if "version" in value else "version"] = cap["version"]
+                return dict(value, **metadata)
             except asyncio.TimeoutError:
                 raise ProviderFailure("timeout", "Codex reviewer timed out") from None
             except AppServerError as e:

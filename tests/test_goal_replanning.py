@@ -110,6 +110,33 @@ def test_replanner_quota_wait_releases_shared_slots_and_stop_is_final(make_manag
     asyncio.run(scenario())
 
 
+def test_environment_diagnosis_does_not_consume_fix_or_replanning_budget(make_manager, git_repo):
+    async def scenario():
+        from goal_helpers import GoalReviewer
+
+        class EnvironmentReview(GoalReviewer):
+            async def start_review(self, *args):
+                result = await super().start_review(*args)
+                result.update(
+                    verdict="CHANGES_REQUESTED",
+                    blocking=[dict(id="env", path="", line=0, reason="Required observation unavailable")],
+                )
+                result["diagnosis"].update(classification="ENVIRONMENT_FAILURE", finding_ids=["env"])
+                result["goal_assessment"]["evidence_completeness"]["status"] = "UNKNOWN"
+                return result
+
+        m = make_manager()
+        ap = install_goals(m)
+        ap.providers["claude"] = EnvironmentReview("claude")
+        wid = await register(ap, plan(git_repo, ("P",)))
+        await drive(m, lambda: ap.ledger.get("nodes", wid + ":P")["state"] == "blocked_infrastructure")
+        n = ap.ledger.get("nodes", wid + ":P")
+        assert n["fix_rounds"] == 0 and not ap.ledger.rows("replans") and not ap.ledger.rows("replacements")
+        await m.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_common_only_prohibition_rejects_locally_passing_code_and_uses_original_thread(
     make_manager, git_repo, fake_codex_state
 ):
@@ -209,13 +236,21 @@ def test_root_cause_dynamic_graph_real_api_sqlite_git_and_restart(settings, git_
         assert app.state.manager.db.get_task(c["task_id"])["task_outcome"] != "success"
         assert not next(n for n in before["nodes"] if n["name"] == "D")["task_id"]
         client.portal.call(app.state.manager.shutdown)
-    monkeypatch.setattr(graph_revision, "checked_apply", original)
+
+    async def duplicate_apply(*args, **kwargs):
+        await asyncio.gather(original(*args, **kwargs), original(*args, **kwargs))
+
+    monkeypatch.setattr(graph_revision, "checked_apply", duplicate_apply)
     app2 = create_app(settings, FakeRunner())
     ap = install_goals(app2.state.manager)
     with TestClient(app2) as client:
         final = api_wait(client, wid, lambda v: v["state"] == "completed")
         nodes = {n["name"]: n for n in final["nodes"]}
         assert nodes["C"]["state"] == "superseded" and nodes["R"]["state"] == "accepted"
+        assert (
+            nodes["R"]["candidates"][-1]["payload"]["scope"]["base_sha"]
+            == nodes["C"]["candidates"][-1]["payload"]["scope"]["base_sha"]
+        )
         assert nodes["D"]["spec"]["depends_on"] == ["R"]
         assert (
             nodes["D"]["inputs"][0]["head_sha"]
@@ -314,7 +349,7 @@ def test_model_cannot_weaken_global_goals_or_mandatory_acceptance(settings, coun
         assert ap.ledger.get("graph_revisions", r["id"])["state"] == "rejected"
 
 
-@pytest.mark.parametrize("change", ["sha", "plan", "consumed", "stop"])
+@pytest.mark.parametrize("change", ["sha", "plan", "source_inputs", "consumed", "stop"])
 def test_stale_source_plan_consumed_inputs_and_stop_refuse_graph_apply(settings, counterexample_repo, change):
     app = create_app(settings, FakeRunner())
     ap = install_goals(app.state.manager)
@@ -344,6 +379,12 @@ def test_stale_source_plan_consumed_inputs_and_stop_refuse_graph_apply(settings,
                 db.execute(
                     "UPDATE ap_nodes SET inputs=? WHERE id=?",
                     (canonical([dict(immutable="already consumed")]), wid + ":D"),
+                )
+        elif change == "source_inputs":
+            with ap.ledger.transaction() as db:
+                db.execute(
+                    "UPDATE ap_nodes SET inputs=? WHERE id=?",
+                    (canonical([dict(changed="source accepted input")]), wid + ":C"),
                 )
         else:
             client.portal.call(ap.control, wid, "stop")
@@ -501,6 +542,212 @@ def test_partition_goal_violation_survives_overall_approve(make_manager, git_rep
         assert result["verdict"] == "INCONCLUSIVE"
         assert result["goal_assessment"]["goal_alignment"]["status"] == "VIOLATION"
         assert len(result["partition_evidence"]) == 2
+        await m.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_codex_replanner_adapter_preserves_schema_version_and_cli_metadata(tmp_path, monkeypatch):
+    from pathlib import Path
+    from app.autopilot.providers import CodexProvider
+    from app.autopilot.replanning import proposal_schema
+
+    auth_home = tmp_path / "private-auth"
+    (auth_home / ".codex").mkdir(parents=True)
+    (auth_home / ".codex/auth.json").write_text("{}")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: auth_home))
+    scope = dict(base_sha="a" * 40, head_sha="b" * 40, tree_sha="c" * 40, diff_digest="d" * 64)
+    packet = dict(
+        digest="e" * 64, candidate=dict(id="pinned", scope=scope), authority=dict(policy=dict(max_tasks=3))
+    )
+    result = dict(
+        version=1,
+        packet_digest=packet["digest"],
+        source_candidate="pinned",
+        scope=scope,
+        diagnosis=dict(
+            version=1,
+            classification="INCONCLUSIVE",
+            finding_ids=[],
+            reproduction="Inspect pinned source",
+            observed="Missing evidence",
+            expected="Anchored counterexample",
+            rationale="Do not change a plan without evidence",
+            anchors=[],
+        ),
+        tasks=[],
+        replacement_task="",
+        requested_changes=[],
+        requested_reads=[],
+    )
+    methods = []
+
+    class Client:
+        pid = None
+
+        def __init__(self, argv, env):
+            assert "--ro-bind" in argv and env["CODEX_HOME"] == "/scratch/.codex"
+
+        async def start(self):
+            pass
+
+        async def request(self, method, params, **kwargs):
+            methods.append(method)
+            if method == "account/read":
+                return dict(account=dict(type="chatgpt"))
+            if method in ("account/rateLimits/read", "model/list"):
+                return {}
+            if method == "thread/start":
+                assert params["sandbox"] == "read-only" and params["approvalPolicy"] == "never"
+                assert params["config"]["features"]["shell_tool"] is False
+                return dict(thread=dict(id="independent-analysis"), model="fixture-model")
+            if method == "turn/start":
+                assert params["outputSchema"] == proposal_schema()
+                assert json.loads(params["input"][0]["text"]) == packet
+                return dict(turn=dict(id="turn-analysis"))
+            return {}
+
+        def subscribe(self, tid):
+            queue = asyncio.Queue()
+            queue.put_nowait(
+                (
+                    "item/completed",
+                    dict(turnId="turn-analysis", item=dict(type="agentMessage", text=json.dumps(result))),
+                )
+            )
+            queue.put_nowait(("turn/completed", dict(turn=dict(id="turn-analysis", status="completed"))))
+            return queue
+
+        async def close(self):
+            pass
+
+    async def scenario():
+        provider = CodexProvider(client_factory=Client)
+
+        async def probe(_):
+            return dict(binary="/usr/bin/true", version="CLI-fixture-version")
+
+        provider.probe_capabilities_and_auth = probe
+        source = tmp_path / "source"
+        source.mkdir()
+        value = await provider.start_replan(
+            packet,
+            dict(codex_model="", review_timeout=3),
+            source,
+            dict(id="analysis-fixture"),
+            lambda _: None,
+        )
+        assert value["version"] == 1 and value["provider_version"] == "CLI-fixture-version"
+        assert value["session"] == "independent-analysis"
+        assert "thread/resume" not in methods and "thread/fork" not in methods
+        assert methods.count("thread/start") == 1 and "turn/interrupt" in methods
+
+    asyncio.run(scenario())
+
+
+def test_initial_review_can_trigger_anchored_independent_replanning(make_manager, counterexample_repo):
+    async def scenario():
+        from goal_helpers import GoalReviewer
+
+        class InitialPremise(GoalReviewer):
+            async def start_review(self, candidate, *args):
+                result = await super().start_review(candidate, *args)
+                if candidate["payload"]["requirements"]["node"] == "C" and result["blocking"]:
+                    result["diagnosis"].update(
+                        classification="TASK_ASSUMPTION_FALSE",
+                        reproduction="Inspect tracked input.csv and explicit task assumption",
+                        observed="Accepted input is CSV",
+                        expected="Input is JSON according to A-json",
+                        rationale="The original premise contradicts the pinned accepted input",
+                        anchors=[
+                            dict(kind="source", ref="input.csv", quote="good,data"),
+                            dict(kind="requirement", ref="assumption:A-json", quote="Input is JSON"),
+                        ],
+                    )
+                return result
+
+        m = make_manager()
+        ap = install_goals(m, initial_premise=True)
+        ap.providers["claude"] = InitialPremise("claude")
+        wid = await register(ap, root_plan(counterexample_repo, "propose_only"))
+        await drive(m, lambda: bool(ap.ledger.rows("graph_revisions")))
+        source = ap.ledger.get("nodes", wid + ":C")
+        assert source["state"] == "awaiting_replan_decision" and source["fix_rounds"] == 0
+        assert len(ap.ledger.rows("replans")) == 1 and len(ap.ledger.rows("nodes")) == 3
+        assert m.db.get_task(source["task_id"])["task_outcome"] != "success"
+        await m.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_root_counterexample_can_reference_later_fixed_source_lines(git_repo):
+    async def scenario():
+        from app.autopilot.replanning import verify_evidence
+
+        (git_repo / "counter.py").write_text("# padding\n" * 300 + "ACTUAL_FORMAT = 'CSV'\n")
+        await git(git_repo, "add", "counter.py")
+        await git(git_repo, "commit", "-qm", "Pinned later-line counterexample")
+        packet = dict(
+            source_node=dict(
+                spec=dict(prompt="Parse the input", assumptions=[dict(id="A-json", text="Input is JSON")])
+            ),
+            requirements=dict(documents=[], goal_index=dict(declared=[])),
+            validation=[],
+            findings=[dict(id="premise")],
+        )
+        diagnosis = dict(
+            version=1,
+            classification="TASK_ASSUMPTION_FALSE",
+            finding_ids=["premise"],
+            reproduction="Inspect fixed source line 301",
+            observed="CSV source format",
+            expected="JSON in the task assumption",
+            rationale="A concrete counterexample contradicts the explicit premise",
+            anchors=[
+                dict(kind="source", ref="counter.py#L301-L301", quote="ACTUAL_FORMAT = 'CSV'"),
+                dict(kind="requirement", ref="assumption:A-json", quote="Input is JSON"),
+            ],
+        )
+        assert await verify_evidence(diagnosis, packet, git_repo)
+        diagnosis["anchors"][0]["ref"] = "counter.py"
+        with pytest.raises(ValueError):
+            await verify_evidence(diagnosis, packet, git_repo)
+
+    asyncio.run(scenario())
+
+
+def test_completed_ordinary_diagnosis_replays_repair_without_another_model_call(make_manager, git_repo):
+    async def scenario():
+        from app.autopilot.controller import Autopilot
+        from goal_helpers import GoalReviewer
+
+        m = make_manager()
+        ap = install_goals(m, always_changes=True, changes_only=["P"])
+        original = ap._request_fix
+        completed = asyncio.Event()
+
+        def crash_boundary(node, fingerprint, findings, _skip_replan=False):
+            if _skip_replan:
+                completed.set()  # Persisted diagnosis, before deterministic repair transition.
+            else:
+                original(node, fingerprint, findings)
+
+        ap._request_fix = crash_boundary
+        wid = await register(ap, plan(git_repo, ("P",)))
+        await drive(m, completed.is_set)
+        assert ap.ledger.rows("replans")[0]["state"] == "completed"
+        await ap.shutdown()
+        replacement = Autopilot(m, providers=dict(claude=GoalReviewer("claude"), codex=GoalReviewer("codex")))
+        m.autopilot = replacement
+        m.tick()
+        assert replacement.ledger.get("nodes", wid + ":P")["state"] in (
+            "fix_queued",
+            "reserving_fix",
+            "blocked_no_progress",
+            "blocked_budget",
+        )
+        assert len(replacement.ledger.rows("replans")) == 1 and not replacement.providers["codex"].calls
+        assert not replacement.ledger.rows("graph_revisions")
         await m.shutdown()
 
     asyncio.run(scenario())

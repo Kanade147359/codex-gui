@@ -3,7 +3,7 @@
 import uuid
 
 from app.models import now_iso
-from .policy import canonical, digest, manifest, owns, profile
+from .policy import canonical, digest, manifest, owns, profile, input_digest
 from .ledger import unpack
 
 
@@ -233,7 +233,10 @@ def apply(ap, identity, *, expected=None, action=None, note=""):
         candidate = unpack(
             db.execute("SELECT * FROM ap_candidates WHERE id=?", (p["source_candidate"],)).fetchone()
         )
-        if candidate["payload"]["requirements_digest"] != p["requirements_digest"]:
+        if (
+            candidate["payload"]["requirements_digest"] != p["requirements_digest"]
+            or input_digest(n, w) != candidate["payload"]["input_digest"]
+        ):
             raise ValueError("replan requirements changed")
         task = db.execute("SELECT * FROM tasks WHERE id=?", (n["task_id"],)).fetchone()
         if (

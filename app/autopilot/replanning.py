@@ -1,6 +1,7 @@
 """Bounded independent diagnosis. Model claims never directly mutate the graph or authority."""
 
 import json
+import re
 import time
 import uuid
 
@@ -215,11 +216,13 @@ async def verify_evidence(diagnosis, packet, root):
         elif kind == "source":
             from .policy import safe_path
 
-            ref = safe_path(ref)
+            location = re.fullmatch(r"(.+)#L([1-9]\d*)(?:-L?([1-9]\d*))?", ref)
+            start, end = (int(location[2]), int(location[3] or location[2])) if location else (1, 240)
+            ref = safe_path(location[1] if location else ref)
             _, tracked, _ = await git.git(root, "ls-files", "--error-unmatch", "--", ref)
             if tracked.strip() != ref:
                 raise ValueError("counterexample is not a tracked fixed source file")
-            text = read(root, ref, 1, 240)["text"]
+            text = read(root, ref, start, end)["text"]
             if quote not in text:
                 raise ValueError("source counterexample quote is absent")
         else:
@@ -476,6 +479,9 @@ async def analyze(ap, node):
                             proposal=proposal,
                             session=result["session"],
                             provider="codex",
+                            model=result.get("model"),
+                            provider_version=result.get("provider_version"),
+                            independence=result.get("independence"),
                             evidence_supported=supported,
                         )
                     ),
@@ -494,6 +500,13 @@ async def analyze(ap, node):
                 context.get("fingerprint", digest(p["findings"])),
                 context.get("findings", p["findings"]),
                 _skip_replan=True,
+            )
+        elif proposal["diagnosis"]["classification"] == "ENVIRONMENT_FAILURE":
+            ap.ledger.transition(
+                node["id"],
+                "analyzing",
+                "blocked_infrastructure",
+                reason="Independent diagnosis reports environment failure; no new tasks or implementation repair dispatched",
             )
         else:
             ap.ledger.transition(
@@ -539,6 +552,12 @@ async def analyze(ap, node):
         ap.ledger.transition(
             node["id"],
             "analyzing",
-            "waiting_replan_provider" if state == "waiting_provider" else "blocked_infrastructure",
+            "waiting_replan_provider"
+            if state == "waiting_provider"
+            else "blocked_auth"
+            if error.kind == "auth"
+            else "blocked_configuration"
+            if error.kind in ("configuration", "model_unsupported")
+            else "blocked_infrastructure",
             reason="Independent replanner unavailable: " + error.kind,
         )
