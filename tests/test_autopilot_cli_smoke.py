@@ -19,7 +19,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_installed_appserver_independent_session_structured_output_and_sandbox(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["legacy", "goal_v2", "replan"])
+def test_installed_appserver_independent_session_structured_output_and_sandbox(tmp_path, monkeypatch, mode):
     async def scenario():
         scope = dict(base_sha="a" * 40, head_sha="b" * 40, tree_sha="c" * 40, diff_digest="d" * 64)
         candidate = dict(
@@ -39,6 +40,20 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
             unverified=[],
             requested_reads=[],
         )
+        if mode == "goal_v2":
+            from app.autopilot.goals import index
+            from app.autopilot.policy import digest
+            from goal_fixtures import goal_fields
+            bundle = dict(version=1, node="smoke", documents=[], goal_index=index({}, dict(prompt="local task slice"), []))
+            bundle["digest"] = digest(bundle)
+            candidate["payload"].update(goal_review_version=2, requirements=bundle)
+            result.update(goal_fields(candidate, result))
+        if mode == "replan":
+            from app.autopilot.replanning import proposal_schema, validate_proposal
+            packet = dict(digest="e" * 64, candidate=dict(id=candidate["id"], scope=scope), authority=dict(policy=dict(max_tasks=3)))
+            result = dict(version=1, packet_digest=packet["digest"], source_candidate=candidate["id"], scope=scope,
+                          diagnosis=dict(version=1, classification="INCONCLUSIVE", finding_ids=[], reproduction="Inspect pinned fixture", observed="No sufficient evidence", expected="Anchored premise diagnosis", rationale="No authority changes without evidence", anchors=[]),
+                          tasks=[], replacement_task="", requested_changes=[], requested_reads=[])
         mock = MockResponses([("text", json.dumps(result))]).start()
         root = tmp_path / "source"
         root.mkdir()
@@ -91,11 +106,11 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
                 dict(
                     threadId=tid,
                     input=[dict(type="text", text="offline structured smoke")],
-                    outputSchema=review_schema(candidate),
+                    outputSchema=proposal_schema() if mode == "replan" else review_schema(candidate),
                 ),
             )
-            value = await asyncio.wait_for(CodexProvider().consume_events(queue, candidate, turn["turn"]["id"]), 20)
-            assert value["verdict"] == "APPROVE" and mock.requests
+            value = await asyncio.wait_for(CodexProvider().consume_events(queue, candidate, turn["turn"]["id"], validator=(lambda value: validate_proposal(value, packet)) if mode == "replan" else None), 20)
+            assert (value["tasks"] == [] if mode == "replan" else value["verdict"] == "APPROVE") and mock.requests
             assert (root / "CLAUDE.md").read_text().startswith("Untrusted")
             # Delay only the local scripted response so cancellation targets an actually active turn.
             import app.fake_responses as fr

@@ -11,10 +11,24 @@ import uuid
 from app import completion
 from app.models import now_iso, make_task_id, ACTIVE_STATUSES, WAITING_STATUSES
 from app.procinfo import process_identity, same_process
-from . import git, inputs as fixed_inputs, decisions, planning
+from . import (
+    git,
+    inputs as fixed_inputs,
+    decisions,
+    planning,
+    replanning,
+    graph_revision,
+    goals,
+)
 from .ledger import Ledger, unpack
 from .policy import canonical, digest, manifest, input_digest
-from .providers import ClaudeProvider, CodexProvider, ProviderFailure, validate_result, validate_codex_route
+from .providers import (
+    ClaudeProvider,
+    CodexProvider,
+    ProviderFailure,
+    validate_result,
+    validate_codex_route,
+)
 from .runner import Validator, InfrastructureUnavailable, redact
 
 log = logging.getLogger(__name__)
@@ -29,6 +43,9 @@ BLOCKED = {
     "blocked_result",
     "blocked_dependencies",
     "reconciling",
+    "awaiting_replan_decision",
+    "awaiting_replacement",
+    "superseded",
     "stopped",
 }
 
@@ -134,7 +151,10 @@ class Autopilot:
                 allowed = ("draft",) if action == "start" else ("paused", "waiting", "running")
                 if w["state"] not in allowed:
                     raise ValueError("stopped workflows cannot resume; register a reviewed new plan")
-                c.execute("UPDATE ap_workflows SET state='running',reason='' WHERE id=?", (workflow_id,))
+                c.execute(
+                    "UPDATE ap_workflows SET state='running',reason='' WHERE id=?",
+                    (workflow_id,),
+                )
                 if action == "resume":
                     # An explicit owner Resume may retry repaired infrastructure/auth/config; it never clears gates,
                     # fix budgets, no-progress stops, Stop or unknown external operation outcomes.
@@ -174,7 +194,8 @@ class Autopilot:
                 ):
                     await self.providers[r["provider"]].cancel(r["id"])
             await asyncio.gather(
-                *(j for nid, j in list(self.jobs.items()) if nid.startswith(workflow_id + ":")), return_exceptions=True
+                *(j for nid, j in list(self.jobs.items()) if nid.startswith(workflow_id + ":")),
+                return_exceptions=True,
             )
             with self.ledger.transaction() as c:
                 c.execute(
@@ -183,6 +204,22 @@ class Autopilot:
                 )
                 c.execute(
                     "UPDATE ap_validation SET state='cancelled' WHERE state='running' AND candidate_id IN (SELECT ac.id FROM ap_candidates ac JOIN ap_nodes n ON n.id=ac.node_id WHERE n.workflow_id=?)",
+                    (workflow_id,),
+                )
+        if action == "stop":
+            for row in self.ledger.rows(
+                "replans",
+                "node_id IN (SELECT id FROM ap_nodes WHERE workflow_id=?) AND state IN ('running','claimed')",
+                (workflow_id,),
+            ):
+                await self.providers["codex"].cancel(row["id"])
+            with self.ledger.transaction() as c:
+                c.execute(
+                    "UPDATE ap_replans SET state='cancelled' WHERE node_id IN (SELECT id FROM ap_nodes WHERE workflow_id=?) AND state IN ('running','claimed','waiting_provider')",
+                    (workflow_id,),
+                )
+                c.execute(
+                    "UPDATE ap_graph_revisions SET state='cancelled' WHERE workflow_id=? AND state IN ('ready','awaiting_owner')",
                     (workflow_id,),
                 )
         self.manager.scheduler.wake()
@@ -233,14 +270,29 @@ class Autopilot:
 
         with nullcontext(_connection) if _connection is not None else self.ledger.transaction() as c:
             current = unpack(c.execute("SELECT * FROM ap_nodes WHERE id=?", (node["id"],)).fetchone())
-            run = c.execute("SELECT state,generation FROM ap_workflows WHERE id=?", (workflow["id"],)).fetchone()
+            run = c.execute(
+                "SELECT state,generation FROM ap_workflows WHERE id=?",
+                (workflow["id"],),
+            ).fetchone()
             if (
                 run["state"] not in ("running", "paused", "completed")
                 or run["generation"] != workflow["generation"]
-                or current["state"] in ("reconciling", "reconciling_git", "publishing", "stopped")
+                or current["state"]
+                in (
+                    "reconciling",
+                    "reconciling_git",
+                    "publishing",
+                    "stopped",
+                    "analyzing",
+                    "awaiting_replan_decision",
+                    "awaiting_replacement",
+                    "superseded",
+                )
             ):
                 raise TaskError(
-                    "Stopped/uncertain workflow requires an inspected recovery plan", 409, "autopilot_stopped"
+                    "Stopped/uncertain workflow requires an inspected recovery plan",
+                    409,
+                    "autopilot_stopped",
                 )
             if (
                 node["spec"]["manual_gates"]
@@ -248,21 +300,31 @@ class Autopilot:
                 or json.loads(task["completion_contract"]).get("manual_approval")
             ):
                 raise TaskError(
-                    "An instruction cannot clear required owner/design approval", 409, "autopilot_manual_gate"
+                    "An instruction cannot clear required owner/design approval",
+                    409,
+                    "autopilot_manual_gate",
                 )
             children = c.execute(
-                "SELECT n.state FROM ap_nodes n JOIN ap_edges e ON e.node_id=n.id WHERE e.parent_id=?", (node["id"],)
+                "SELECT n.state FROM ap_nodes n JOIN ap_edges e ON e.node_id=n.id WHERE e.parent_id=?",
+                (node["id"],),
             ).fetchall()
             if any(child["state"] not in ("pending", "blocked_dependencies") for child in children):
                 raise TaskError(
-                    "Pinned inputs were already consumed; use a revised workflow plan", 409, "autopilot_input_consumed"
+                    "Pinned inputs were already consumed; use a revised workflow plan",
+                    409,
+                    "autopilot_input_consumed",
                 )
             if not _scheduled and (
                 c.execute(
                     "UPDATE tasks SET status='queued',"
                     + ",".join(f"{key}=?" for key in queued)
                     + " WHERE id=? AND status=? AND completion_pending=0 AND codex_thread_id IS ?",
-                    (*queued.values(), task["id"], task["status"], task["codex_thread_id"]),
+                    (
+                        *queued.values(),
+                        task["id"],
+                        task["status"],
+                        task["codex_thread_id"],
+                    ),
                 ).rowcount
                 != 1
             ):
@@ -315,7 +377,11 @@ class Autopilot:
         w = self.ledger.get("workflows", n["workflow_id"])
         if w["state"] != "running":
             return
-        resource = {"reviewing": "review", "validating": "validator"}.get(new)
+        resource = {
+            "reviewing": "review",
+            "analyzing": "review",
+            "validating": "validator",
+        }.get(new)
         if new == "launching" and n["spec"]["kind"] == "integration":
             resource = "integration"
         limit = (
@@ -371,7 +437,11 @@ class Autopilot:
                     and planner["spec"].get("plan_artifact")
                     and planner["id"] not in self.jobs
                 ):
-                    existing = self.ledger.rows("plan_revisions", "source_candidate=?", (planner["candidate_id"],))
+                    existing = self.ledger.rows(
+                        "plan_revisions",
+                        "source_candidate=?",
+                        (planner["candidate_id"],),
+                    )
                     if not existing:
                         self._spawn(planner, "accepted", "accepted", self._plan_revision)
             for revision in self.ledger.rows("plan_revisions", "workflow_id=? AND state='ready'", (w["id"],)):
@@ -381,26 +451,70 @@ class Autopilot:
                     with self.ledger.transaction() as c:
                         c.execute(
                             "UPDATE ap_plan_revisions SET state='stale',payload=? WHERE id=? AND state='ready'",
-                            (canonical(dict(revision["payload"], reason=redact(str(error)))), revision["id"]),
+                            (
+                                canonical(dict(revision["payload"], reason=redact(str(error)))),
+                                revision["id"],
+                            ),
                         )
-            if all(n["state"] == "accepted" for n in nodes):
+            for revision in self.ledger.rows(
+                "graph_revisions", "workflow_id=? AND state='ready'", (w["id"],)
+            ):
+                source = self.ledger.get("nodes", revision["payload"]["source_node"])
+                if source["id"] not in self.jobs:
+
+                    async def apply_revision(node, rid=revision["id"]):
+                        try:
+                            await graph_revision.checked_apply(self, rid)
+                        except ValueError as error:
+                            with self.ledger.transaction() as c:
+                                row = self.ledger.get("graph_revisions", rid)
+                                c.execute(
+                                    "UPDATE ap_graph_revisions SET state='stale',payload=? WHERE id=? AND state='ready'",
+                                    (
+                                        canonical(
+                                            dict(
+                                                row["payload"],
+                                                reason=redact(str(error)),
+                                            )
+                                        ),
+                                        rid,
+                                    ),
+                                )
+
+                    self._spawn(source, source["state"], source["state"], apply_revision)
+            for original in nodes:
+                if original["state"] == "awaiting_replacement":
+                    links = self.ledger.rows("replacements", "source_node_id=?", (original["id"],))
+                    if links and all(
+                        self.ledger.get("nodes", link["new_node_id"])["state"] == "accepted" for link in links
+                    ):
+                        self.ledger.transition(
+                            original["id"],
+                            "awaiting_replacement",
+                            "superseded",
+                            reason="Replaced by accepted artifacts; original task is not SUCCESS",
+                        )
+            nodes = self.ledger.rows("nodes", "workflow_id=?", (w["id"],))
+            if all(n["state"] in ("accepted", "superseded") for n in nodes):
                 if w["plan"]["permissions"]["publish_main"]:
                     if not any(n["id"] in self.jobs for n in nodes):
                         # Publication is an explicit operation, never deployment or live checkout modification.
-                        self._spawn(nodes[-1], "accepted", "publishing", self._publish)
+                        final = next(n for n in nodes if n["name"] == w["plan"]["nodes"][-1]["id"])
+                        self._spawn(final, "accepted", "publishing", self._publish)
                 else:
                     with self.ledger.transaction() as c:
                         c.execute(
-                            "UPDATE ap_workflows SET state='completed',reason='All candidates independently accepted; not deployed' WHERE id=? AND state='running'",
+                            "UPDATE ap_workflows SET state='completed',reason='All active candidates independently accepted; replaced originals retained without SUCCESS; not deployed' WHERE id=? AND state='running'",
                             (w["id"],),
                         )
                 continue
             by_name = {n["name"]: n for n in nodes}
             all_nodes = self.ledger.rows("nodes")
-            reviews = sum(n["state"] == "reviewing" for n in all_nodes)
+            reviews = sum(n["state"] in ("reviewing", "analyzing") for n in all_nodes)
             validators = sum(n["state"] == "validating" for n in all_nodes)
             integrations = sum(
-                n["state"] in ("launching", "integrating") and n["spec"]["kind"] == "integration" for n in all_nodes
+                n["state"] in ("launching", "integrating") and n["spec"]["kind"] == "integration"
+                for n in all_nodes
             )
             for n in nodes:
                 if (
@@ -409,7 +523,10 @@ class Autopilot:
                     and all(by_name[p]["state"] == "accepted" for p in n["spec"]["depends_on"])
                 ):
                     if self.ledger.transition(
-                        n["id"], "blocked_dependencies", "pending", reason="Pinned parent gates resolved"
+                        n["id"],
+                        "blocked_dependencies",
+                        "pending",
+                        reason="Pinned parent gates resolved",
                     ):
                         n = self.ledger.get("nodes", n["id"])
                 if n["id"] in self.jobs or n["state"] in BLOCKED:
@@ -419,7 +536,10 @@ class Autopilot:
                     parents = [by_name[p] for p in n["spec"]["depends_on"]]
                     if any(p["state"] in BLOCKED for p in parents):
                         self.ledger.transition(
-                            n["id"], state, "blocked_dependencies", reason="A required accepted input is unavailable"
+                            n["id"],
+                            state,
+                            "blocked_dependencies",
+                            reason="A required accepted input is unavailable",
                         )
                         continue
                     if not all(p["state"] == "accepted" for p in parents):
@@ -434,7 +554,8 @@ class Autopilot:
                         )
                         continue
                     if n["spec"]["kind"] == "integration" and integrations >= min(
-                        policy["integration_slots"], self.manager.settings.autopilot_integration_slots
+                        policy["integration_slots"],
+                        self.manager.settings.autopilot_integration_slots,
                     ):
                         continue
                     self._spawn(n, state, "launching", self._launch)
@@ -459,12 +580,21 @@ class Autopilot:
                             "waiting_implementation_provider",
                             reason="Included Codex quota unavailable; no provider slot held",
                         )
-                    elif task and task["status"] in ("failed", "stopped", "blocked", "interrupted"):
+                    elif task and task["status"] in (
+                        "failed",
+                        "stopped",
+                        "blocked",
+                        "interrupted",
+                    ):
                         self.ledger.transition(
-                            n["id"], state, "blocked_result", reason="Implementation stopped: " + task["status"]
+                            n["id"],
+                            state,
+                            "blocked_result",
+                            reason="Implementation stopped: " + task["status"],
                         )
                 elif state == "submitted" and validators < min(
-                    policy["validator_slots"], self.manager.settings.autopilot_validator_slots
+                    policy["validator_slots"],
+                    self.manager.settings.autopilot_validator_slots,
                 ):
                     self._spawn(n, state, "validating", self._validate)
                     validators += 1
@@ -473,7 +603,24 @@ class Autopilot:
                 ):
                     provider = self._select_provider(n, w)
                     if provider:
-                        self._spawn(n, state, "reviewing", lambda node, p=provider: self._review(node, p))
+                        self._spawn(
+                            n,
+                            state,
+                            "reviewing",
+                            lambda node, p=provider: self._review(node, p),
+                        )
+                        reviews += 1
+                elif state in (
+                    "analysis_queued",
+                    "waiting_replan_provider",
+                ) and reviews < min(policy["review_slots"], self.manager.settings.autopilot_review_slots):
+                    if replanning.provider_ready(self, n, w):
+                        self._spawn(
+                            n,
+                            state,
+                            "analyzing",
+                            lambda node: replanning.analyze(self, node),
+                        )
                         reviews += 1
                 elif state == "fix_queued":
                     self._spawn(n, state, "reserving_fix", self._fix)
@@ -550,6 +697,14 @@ class Autopilot:
             + fixed_inputs.DIRECTORY
             + "/requirements.json before implementation. These versioned requirements remain binding during fixes."
         )
+        lineage = self.ledger.rows("replacements", "new_node_id=?", (n["id"],))
+        seed = None
+        if lineage and not any(
+            self.ledger.rows("replacements", "new_node_id=?", (w["id"] + ":" + item["node"],))
+            for item in inputs
+        ):
+            seed = lineage[0]["payload"]["source_scope"]
+            base = seed["head_sha"]
         task = await self.manager.create_task(
             repository=w["plan"]["repository"],
             base_ref=base,
@@ -561,8 +716,13 @@ class Autopilot:
             service_tier="default",
             _defer_dispatch=True,
             _task_id=task_id,
-            _branch=f"autopilot/{w['id']}/integration/{n['name']}" if n["spec"]["kind"] == "integration" else None,
+            _branch=f"autopilot/{w['id']}/integration/{n['name']}"
+            if n["spec"]["kind"] == "integration"
+            else None,
         )
+        if seed:
+            self.manager.db.update_task(task_id, base_sha=seed["base_sha"])
+            task = self.manager.db.get_task(task_id)
         fixed_inputs.materialize(task["worktree"], bundle)
         from .environment import preflight
 
@@ -598,7 +758,12 @@ class Autopilot:
                     pending_turn=_Turn(conflict_prompt, trigger="initial").to_json(),
                     last_prompt=conflict_prompt,
                 )
-                self.ledger.transition(n["id"], "launching", "conflict", reason=canonical(result["conflicts"]))
+                self.ledger.transition(
+                    n["id"],
+                    "launching",
+                    "conflict",
+                    reason=canonical(result["conflicts"]),
+                )
                 self.manager._dispatch(task_id)
                 return
             if n["spec"].get("integration_mode") == "merge-then-implement":
@@ -627,7 +792,9 @@ class Autopilot:
         w = self.ledger.get("workflows", n["workflow_id"])
         task = self.manager.db.get_task(n["task_id"])
         result = completion.parse_result(task["semantic_result"])
-        reserved_fixes = self.ledger.rows("operations", "node_id=? AND kind='fix' AND state='reserved'", (n["id"],))
+        reserved_fixes = self.ledger.rows(
+            "operations", "node_id=? AND kind='fix' AND state='reserved'", (n["id"],)
+        )
         if reserved_fixes:
             op = reserved_fixes[-1]
             if op["payload"]["thread"] and op["payload"]["thread"] != task["codex_thread_id"]:
@@ -672,7 +839,9 @@ class Autopilot:
             allowed_prompts.update(
                 op["payload"].get("prompt_digest")
                 for op in self.ledger.rows(
-                    "operations", "node_id=? AND kind IN ('integration_implementation','fix','owner_turn')", (n["id"],)
+                    "operations",
+                    "node_id=? AND kind IN ('integration_implementation','fix','owner_turn')",
+                    (n["id"],),
                 )
             )
             if not task["codex_thread_id"] or digest(task["last_prompt"]) not in allowed_prompts:
@@ -687,7 +856,12 @@ class Autopilot:
             for item in n["inputs"]:
                 if item["kind"] != "report":
                     rc, _, _ = await git.git(
-                        task["worktree"], "merge-base", "--is-ancestor", item["head_sha"], head, check=False
+                        task["worktree"],
+                        "merge-base",
+                        "--is-ancestor",
+                        item["head_sha"],
+                        head,
+                        check=False,
                     )
                     if rc != 0:
                         self.ledger.transition(
@@ -698,7 +872,11 @@ class Autopilot:
                         )
                         return
         previous = self.ledger.get("candidates", n["candidate_id"]) if n["candidate_id"] else None
-        owner_turns = self.ledger.rows("operations", "node_id=? AND kind='owner_turn' AND state='reserved'", (n["id"],))
+        owner_turns = self.ledger.rows(
+            "operations",
+            "node_id=? AND kind='owner_turn' AND state='reserved'",
+            (n["id"],),
+        )
         if previous and previous["payload"]["scope"]["tree_sha"] == s["tree_sha"] and not owner_turns:
             self._request_fix(n, "unchanged_tree", previous["payload"].get("findings", []))
             return
@@ -710,6 +888,7 @@ class Autopilot:
         ]
         payload = dict(
             scope=s,
+            goal_review_version=w["plan"]["policy"].get("goal_review_version", 1),
             requirements=bundle,
             requirements_digest=bundle["digest"],
             review_files=n["spec"].get("review_files", []),
@@ -745,7 +924,10 @@ class Autopilot:
         if submitted:
             for op in owner_turns:
                 self.ledger.finish(
-                    "operations", op["id"], "completed", dict(op["payload"], candidate_id=submitted["id"])
+                    "operations",
+                    op["id"],
+                    "completed",
+                    dict(op["payload"], candidate_id=submitted["id"]),
                 )
 
     async def _snapshot(self, candidate):
@@ -811,7 +993,10 @@ class Autopilot:
             )
         except (InfrastructureUnavailable, OSError) as e:
             self.ledger.finish(
-                "validation", record["id"], "UNAVAILABLE", dict(record["payload"], reason=redact(str(e)))
+                "validation",
+                record["id"],
+                "UNAVAILABLE",
+                dict(record["payload"], reason=redact(str(e))),
             )
             raise InfrastructureUnavailable(redact(str(e))) from None
         finally:
@@ -850,7 +1035,12 @@ class Autopilot:
             result["checks"].append(dict(required_change="any", exit_status=0 if changed else 1))
         if contract.get("require_commit"):
             s = candidate["payload"]["scope"]
-            result["checks"].append(dict(required_commit=True, exit_status=0 if s["base_sha"] != s["head_sha"] else 1))
+            result["checks"].append(
+                dict(
+                    required_commit=True,
+                    exit_status=0 if s["base_sha"] != s["head_sha"] else 1,
+                )
+            )
         if any(c["exit_status"] != 0 for c in result["checks"]):
             result["state"] = "FAIL"
         self.ledger.finish("validation", record["id"], result["state"], result)
@@ -883,7 +1073,21 @@ class Autopilot:
                 for i, c in enumerate(result["checks"])
                 if c["exit_status"] != 0 or c.get("timed_out")
             ]
-            stable = [dict(f, reason=re.sub(r"\bin \d+(?:\.\d+)?s\b", "in <elapsed>s", f["reason"])) for f in findings]
+            stable = [
+                dict(
+                    f,
+                    reason=re.sub(r"\bin \d+(?:\.\d+)?s\b", "in <elapsed>s", f["reason"]),
+                )
+                for f in findings
+            ]
+            if n["fix_rounds"] >= 1 and replanning.queue(
+                self,
+                n,
+                "Post-fix validation failed; premise remains unconfirmed pending independent analysis",
+                fingerprint=digest(stable),
+                findings=findings,
+            ):
+                return
             self._request_fix(n, digest(stable), findings)
 
     def _availability_key(self, provider, w):
@@ -1002,23 +1206,39 @@ class Autopilot:
                             "coverage",
                             "unverified",
                         )
-                    },
+                    }
+                    | goals.fields(result),
                     candidate,
                 ) | {
                     k: v
                     for k, v in result.items()
-                    if k in ("provider", "model", "version", "session", "independence", "partition_evidence")
+                    if k
+                    in (
+                        "provider",
+                        "model",
+                        "version",
+                        "session",
+                        "independence",
+                        "partition_evidence",
+                    )
                 }
             except (ValueError, KeyError, TypeError):
                 raise ProviderFailure(
-                    "invalid_output", "adapter returned an invalid terminal review contract"
+                    "invalid_output",
+                    "adapter returned an invalid terminal review contract",
                 ) from None
-            await self._snapshot(candidate)  # Detect unexpected host-side snapshot changes as well as sandbox writes.
+            await self._snapshot(
+                candidate
+            )  # Detect unexpected host-side snapshot changes as well as sandbox writes.
             result = json.loads(redact(canonical(result)))
             self.ledger.finish("reviews", record["id"], "completed", dict(record["payload"], **result))
         except ProviderFailure as e:
             payload = dict(
-                record["payload"], error_kind=e.kind, reason=redact(str(e)), findings=e.findings, reset_at=e.reset_at
+                record["payload"],
+                error_kind=e.kind,
+                reason=redact(str(e)),
+                findings=e.findings,
+                reset_at=e.reset_at,
             )
             self.ledger.finish("reviews", record["id"], "incomplete", payload)
             self._retain_findings(candidate, e.findings)
@@ -1037,11 +1257,25 @@ class Autopilot:
                         ),
                     )
                 self.ledger.transition(n["id"], "reviewing", "review_queued", reason=payload["reason"])
-            elif e.kind in ("transient", "invalid_output", "timeout", "max_turns", "context", "unknown"):
+            elif e.kind in (
+                "transient",
+                "invalid_output",
+                "timeout",
+                "max_turns",
+                "context",
+                "unknown",
+            ):
                 failures = (
                     sum(
                         r["payload"].get("error_kind")
-                        in ("transient", "invalid_output", "timeout", "max_turns", "context", "unknown")
+                        in (
+                            "transient",
+                            "invalid_output",
+                            "timeout",
+                            "max_turns",
+                            "context",
+                            "unknown",
+                        )
                         for r in attempts
                     )
                     + 1
@@ -1064,7 +1298,12 @@ class Autopilot:
         except Exception as e:
             payload = dict(record["payload"], error_kind="infrastructure", reason=redact(str(e)))
             self.ledger.finish("reviews", record["id"], "incomplete", payload)
-            self.ledger.transition(n["id"], "reviewing", "blocked_infrastructure", reason=payload["reason"][:1000])
+            self.ledger.transition(
+                n["id"],
+                "reviewing",
+                "blocked_infrastructure",
+                reason=payload["reason"][:1000],
+            )
             return
         finally:
             self.processes.pop(record["id"], None)
@@ -1075,10 +1314,30 @@ class Autopilot:
             await self._accept(n, candidate, self.ledger.get("reviews", record["id"]))
         elif result["verdict"] == "CHANGES_REQUESTED":
             self._retain_findings(candidate, result["blocking"])
+            if result.get("diagnosis", {}).get("classification") in goals.ROOT_CAUSES:
+                packet = replanning.packet(self, n, w, candidate)
+                if await replanning.verify_evidence(result["diagnosis"], packet, root):
+                    if replanning.queue(
+                        self,
+                        n,
+                        "Anchored premise evidence; independent Codex analysis requested",
+                    ):
+                        return
+                else:
+                    self.ledger.transition(
+                        n["id"],
+                        "reviewing",
+                        "blocked_decision",
+                        reason="Premise claim lacks independently verifiable evidence; no replan applied",
+                    )
+                    return
             self._request_fix(n, digest(result["blocking"]), result["blocking"])
         elif result["verdict"] == "NEEDS_HUMAN":
             self.ledger.transition(
-                n["id"], "reviewing", "blocked_decision", reason="Independent reviewer requires owner decision"
+                n["id"],
+                "reviewing",
+                "blocked_decision",
+                reason="Independent reviewer requires owner decision",
             )
         else:
             self.ledger.transition(
@@ -1162,13 +1421,26 @@ class Autopilot:
         reviews = self.ledger.rows("reviews", "candidate_id=? AND state='completed'", (cand["id"],))
         await self._accept(n, cand, reviews[-1])
 
-    def _request_fix(self, n, fingerprint, findings):
+    def _request_fix(self, n, fingerprint, findings, _skip_replan=False):
         w = self.ledger.get("workflows", n["workflow_id"])
         current = self.ledger.get("nodes", n["id"])
         if current["generation"] != n["generation"] or current["candidate_id"] != n["candidate_id"]:
             return
         progress = current["no_progress"] + 1 if current["last_failure"] == fingerprint else 1
         policy = w["plan"]["policy"]
+        if (
+            not _skip_replan
+            and current["fix_rounds"] >= 1
+            and (progress >= policy["no_progress_limit"] or current["fix_rounds"] >= policy["max_fix_rounds"])
+        ):
+            if replanning.queue(
+                self,
+                current,
+                "Repeated failure; bounded independent diagnostic analysis before more repair",
+                fingerprint=fingerprint,
+                findings=findings,
+            ):
+                return
         if progress >= policy["no_progress_limit"]:
             self.ledger.transition(
                 n["id"],
@@ -1180,7 +1452,10 @@ class Autopilot:
             return
         if current["fix_rounds"] >= policy["max_fix_rounds"]:
             self.ledger.transition(
-                n["id"], current["state"], "blocked_budget", reason="Shared validation/review fix budget exhausted"
+                n["id"],
+                current["state"],
+                "blocked_budget",
+                reason="Shared validation/review fix budget exhausted",
             )
             return
         self.ledger.transition(
@@ -1434,13 +1709,71 @@ class Autopilot:
 
     def reconcile(self, workflow_id=None):
         nodes = self.ledger.rows(
-            "nodes", "workflow_id=?" if workflow_id else "1", (workflow_id,) if workflow_id else ()
+            "nodes",
+            "workflow_id=?" if workflow_id else "1",
+            (workflow_id,) if workflow_id else (),
         )
         for n in nodes:
             if n["id"] in self.jobs:
                 continue
             state = n["state"]
-            if state in ("launching", "integrating", "publishing", "reserving_fix", "submitting"):
+            if state == "analyzing":
+                rows = self.ledger.rows("replans", "node_id=?", (n["id"],))
+                if (
+                    rows
+                    and rows[-1]["state"] == "completed"
+                    and not self.ledger.rows("graph_revisions", "replan_id=?", (rows[-1]["id"],))
+                ):
+                    if rows[-1]["payload"].get("proposal", {}).get("tasks") and rows[-1]["payload"].get(
+                        "evidence_supported"
+                    ):
+                        try:
+                            graph_revision.propose(self, rows[-1]["id"])
+                        except ValueError:
+                            self.ledger.transition(
+                                n["id"],
+                                state,
+                                "blocked_decision",
+                                reason="Stale independent replan proposal retained",
+                            )
+                    else:
+                        self.ledger.transition(
+                            n["id"],
+                            state,
+                            "blocked_decision",
+                            reason="Persisted analysis needs owner inspection; no duplicate launch",
+                        )
+                else:
+                    with self.ledger.transaction() as c:
+                        for row in rows:
+                            identity = row["payload"].get("identity", {})
+                            row["payload"]["reconciliation"] = (
+                                "process_alive"
+                                if same_process(
+                                    identity.get("pid"),
+                                    identity.get("proc_identity"),
+                                    needle="",
+                                )
+                                else "dead_or_unknown"
+                            )
+                            c.execute(
+                                "UPDATE ap_replans SET state='uncertain',payload=? WHERE id=? AND state IN ('claimed','running')",
+                                (canonical(row["payload"]), row["id"]),
+                            )
+                    self.ledger.transition(
+                        n["id"],
+                        state,
+                        "reconciling",
+                        reason="Independent analysis outcome uncertain; never blindly relaunch",
+                    )
+                continue
+            if state in (
+                "launching",
+                "integrating",
+                "publishing",
+                "reserving_fix",
+                "submitting",
+            ):
                 task = self.manager.db.get_task(n["task_id"]) if n["task_id"] else None
                 operations = self.ledger.rows("operations", "node_id=? AND kind='integration'", (n["id"],))
                 if state in ("launching", "integrating") and operations and task:
@@ -1463,14 +1796,20 @@ class Autopilot:
                 if active:
                     for r in active:
                         identity = r["payload"].get("identity", {})
-                        alive = same_process(identity.get("pid"), identity.get("proc_identity"), needle="")
+                        alive = same_process(
+                            identity.get("pid"),
+                            identity.get("proc_identity"),
+                            needle="",
+                        )
                         self.ledger.finish(
                             table,
                             r["id"],
                             "uncertain",
                             dict(
                                 r["payload"],
-                                reconciliation="process_alive" if alive else "process_dead_or_identity_unknown",
+                                reconciliation="process_alive"
+                                if alive
+                                else "process_dead_or_identity_unknown",
                             ),
                         )
                     self.ledger.transition(
@@ -1487,26 +1826,42 @@ class Autopilot:
                         self.ledger.transition(n["id"], state, "review_complete")
                     elif state == "reviewing" and latest["payload"].get("verdict") == "CHANGES_REQUESTED":
                         self._request_fix(
-                            n, digest(latest["payload"].get("blocking", [])), latest["payload"].get("blocking", [])
+                            n,
+                            digest(latest["payload"].get("blocking", [])),
+                            latest["payload"].get("blocking", []),
                         )
                     elif state == "reviewing" and latest["payload"].get("verdict") == "NEEDS_HUMAN":
                         self.ledger.transition(
-                            n["id"], state, "blocked_decision", reason="Recovered reviewer requires owner decision"
+                            n["id"],
+                            state,
+                            "blocked_decision",
+                            reason="Recovered reviewer requires owner decision",
                         )
                     elif state == "validating" and latest["state"] == "FAIL":
                         findings = [
-                            dict(id="validation-" + str(i), path="", line=0, reason=x.get("excerpt") or canonical(x))
+                            dict(
+                                id="validation-" + str(i),
+                                path="",
+                                line=0,
+                                reason=x.get("excerpt") or canonical(x),
+                            )
                             for i, x in enumerate(latest["payload"].get("checks", []))
                             if x.get("exit_status") != 0
                         ]
                         self._request_fix(n, digest(findings), findings)
                     else:
                         self.ledger.transition(
-                            n["id"], state, "reconciling", reason="Persisted non-approval requires inspected recovery"
+                            n["id"],
+                            state,
+                            "reconciling",
+                            reason="Persisted non-approval requires inspected recovery",
                         )
                 else:
                     self.ledger.transition(
-                        n["id"], state, "reconciling", reason="Claimed operation has no durable result"
+                        n["id"],
+                        state,
+                        "reconciling",
+                        reason="Claimed operation has no durable result",
                     )
 
     async def _reconcile_git(self, node):

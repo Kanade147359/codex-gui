@@ -83,6 +83,8 @@ result = dict(
     unverified=[],
     resolved=payload.get("unresolved", []) if not blocking else [],
 )
+from goal_fixtures import goal_fields
+result.update(goal_fields(candidate,result))
 if payload.get("read_protocol"):
     result["requested_reads"] = []
 if scenario.get("ignore_prior_findings"):

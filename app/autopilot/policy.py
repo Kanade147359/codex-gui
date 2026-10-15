@@ -15,14 +15,15 @@ def digest(value):
 
 
 def input_digest(node, workflow):
-    return digest(
-        dict(
+    value = dict(
             dependencies=node["inputs"],
             bundle=workflow["plan"]["inputs"],
             spec=node["spec"],
             rules=workflow["plan"].get("rules", {}),
         )
-    )
+    if "goals" in workflow["plan"]:
+        value["goals"] = workflow["plan"]["goals"]
+    return digest(value)
 
 
 def safe_path(value):
@@ -111,6 +112,7 @@ def manifest(value):
         "permissions",
         "inputs",
         "idempotency_key",
+        "goals",
     }:
         raise ValueError("invalid workflow manifest")
     if value.get("version") != 1:
@@ -132,9 +134,17 @@ def manifest(value):
         "automatic_acceptance",
         "review_timeout",
         "provider_backoff",
+        "replanning",
+        "goal_review_version",
     }
     if set(policy) - allowed:
         raise ValueError("unknown policy fields")
+    policy.setdefault("goal_review_version", 2)
+    if policy["goal_review_version"] != 2:
+        raise ValueError("new workflows require goal-aware review v2")
+    from .replanning import normalize_policy
+
+    policy["replanning"] = normalize_policy(policy.get("replanning", {}))
     for key, default, maximum in (
         ("max_fix_rounds", 3, 10),
         ("no_progress_limit", 2, 10),
@@ -152,11 +162,19 @@ def manifest(value):
             or not (0 if key in ("max_fix_rounds", "infra_retries") else 1) <= policy[key] <= maximum
         ):
             raise ValueError(f"invalid {key}")
-    for key, default in (("account", "personal"), ("bucket", "included"), ("claude_model", ""), ("codex_model", "")):
+    for key, default in (
+        ("account", "personal"),
+        ("bucket", "included"),
+        ("claude_model", ""),
+        ("codex_model", ""),
+    ):
         policy.setdefault(key, default)
         if not isinstance(policy[key], str) or policy[key].startswith("-"):
             raise ValueError(f"invalid {key}")
-    for key, default in (("extra_usage_disabled_confirmed", False), ("automatic_acceptance", True)):
+    for key, default in (
+        ("extra_usage_disabled_confirmed", False),
+        ("automatic_acceptance", True),
+    ):
         policy.setdefault(key, default)
         if type(policy[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
@@ -175,6 +193,10 @@ def manifest(value):
     ):
         raise ValueError("inputs must be a map of immutable Markdown texts")
     inputs = {safe_path(p): s for p, s in inputs.items()}
+    from .goals import declarations
+
+    goals = declarations(value.get("goals", []), inputs)
+    known_goals = {g["id"] for g in goals}
     nodes = value.get("nodes", [])
     if not isinstance(nodes, list) or not 1 <= len(nodes) <= 200:
         raise ValueError("workflow requires 1..200 nodes")
@@ -197,6 +219,9 @@ def manifest(value):
             "plan_artifact",
             "handoff",
             "review_files",
+            "goal_ids",
+            "acceptance_conditions",
+            "assumptions",
         }:
             raise ValueError("invalid node fields")
         n = dict(raw)
@@ -206,7 +231,10 @@ def manifest(value):
         n.setdefault("kind", "code")
         if n["kind"] not in ("code", "report", "integration"):
             raise ValueError("unknown artifact kind")
-        n.setdefault("prompt", "Integrate the pinned accepted inputs and verify the acceptance contract.")
+        n.setdefault(
+            "prompt",
+            "Integrate the pinned accepted inputs and verify the acceptance contract.",
+        )
         if not isinstance(n["prompt"], str) or not n["prompt"].strip():
             raise ValueError("node prompt is required")
         for key in ("paths", "depends_on", "manual_gates", "input_files"):
@@ -220,11 +248,16 @@ def manifest(value):
             raise ValueError("input bundle is controller-owned")
         if not n["paths"] and not n["draft"]:
             raise ValueError("explicit edit ownership is required")
-        n["validation"] = profile(n.get("validation", {}), n["kind"]) if not n["draft"] else n.get("validation", {})
+        n["validation"] = (
+            profile(n.get("validation", {}), n["kind"]) if not n["draft"] else n.get("validation", {})
+        )
         if n["draft"] and not isinstance(n["validation"], dict):
             raise ValueError("draft validation must be an object")
         envelope = n.get("envelope", {})
-        if not isinstance(envelope, dict) or set(envelope) - {"paths", "validation_profiles"}:
+        if not isinstance(envelope, dict) or set(envelope) - {
+            "paths",
+            "validation_profiles",
+        }:
             raise ValueError("invalid planning authorization envelope")
         n["envelope"] = dict(
             paths=[safe_path(p) for p in envelope.get("paths", n["paths"])],
@@ -247,6 +280,17 @@ def manifest(value):
         n.setdefault("depends_on", [])
         n.setdefault("manual_gates", [])
         n.setdefault("input_files", [])
+        n.setdefault("goal_ids", [])
+        if not isinstance(n["goal_ids"], list) or any(g not in known_goals for g in n["goal_ids"]):
+            raise ValueError("unknown task goal association")
+        n["acceptance_conditions"] = declarations(n.get("acceptance_conditions", []), inputs, kinds=False)
+        n["assumptions"] = declarations(n.get("assumptions", []), inputs, kinds=False)
+        if any(
+            g not in known_goals
+            for condition in n["acceptance_conditions"] + n["assumptions"]
+            for g in condition["goal_ids"]
+        ):
+            raise ValueError("unknown acceptance/assumption goal association")
         if any(not isinstance(s, str) or not s for s in n["manual_gates"]):
             raise ValueError("manual gates require named owner decisions")
         if any(p not in inputs for p in n["input_files"]):
@@ -287,7 +331,9 @@ def manifest(value):
             if other in ancestors[nid] or by_id[other]["kind"] == "integration" or n["kind"] == "integration":
                 continue
             if any(
-                owns(p, by_id[other]["paths"]) or owns(q, n["paths"]) for p in n["paths"] for q in by_id[other]["paths"]
+                owns(p, by_id[other]["paths"]) or owns(q, n["paths"])
+                for p in n["paths"]
+                for q in by_id[other]["paths"]
             ):
                 raise ValueError(f"concurrent path ownership conflict: {other}/{nid}")
     if permissions["publish_main"]:
@@ -315,4 +361,5 @@ def manifest(value):
         permissions=permissions,
         inputs=inputs,
         idempotency_key=request_key,
+        goals=goals,
     )

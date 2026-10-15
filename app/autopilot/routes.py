@@ -7,6 +7,27 @@ from .runner import redact
 router = APIRouter()
 
 
+@router.post("/api/autopilot/workflows/{identity}/graph-revisions/{revision_id}/decision")
+async def dynamic_graph_decision(request: Request, identity: str, revision_id: str, body: dict):
+    from .graph_revision import checked_apply
+
+    ap = controller(request)
+    try:
+        revision = ap.ledger.get("graph_revisions", revision_id)
+        if not revision or revision["workflow_id"] != identity or body.get("owner_action") is not True:
+            raise ValueError("explicit owner action for this dynamic graph is required")
+        await checked_apply(
+            ap,
+            revision_id,
+            expected=body["expected_target"],
+            action=body["action"],
+            note=body.get("note", ""),
+        )
+        return ap.ledger.view(identity)
+    except (ValueError, TypeError, KeyError) as error_value:
+        raise error(error_value)
+
+
 @router.post("/api/autopilot/import")
 async def import_markdown(request: Request):
     from .importer import MAX_TOTAL, documents, prepare
