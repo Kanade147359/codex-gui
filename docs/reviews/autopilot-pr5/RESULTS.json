@@ -1,0 +1,1052 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-10-15T04:06:15.646188+00:00",
+  "repository": "Kanade147359/codex-gui",
+  "review_submission": {
+    "status": "PREPARED",
+    "independent_session": true,
+    "other_ai_started": false,
+    "artifacts_only": true,
+    "draft_pr": null,
+    "meaning": "レビュー提出の完了。元タスク・PR #5の承認ではない。"
+  },
+  "code_verdict": "CHANGES_REQUIRED",
+  "target": {
+    "pr": 5,
+    "url": "https://github.com/Kanade147359/codex-gui/pull/5",
+    "base_sha": "12dabe5385f130383b00cd2609dd6bff7360d68f",
+    "submitted_head": "d395d232807203813b5052ae0df9ab926690d180",
+    "submitter_validation_code_sha": "a5a9daad8dc4c99b00a6655e68044fdd52cba6bc",
+    "observed_head": "d395d232807203813b5052ae0df9ab926690d180",
+    "observed_base": "12dabe5385f130383b00cd2609dd6bff7360d68f",
+    "pr_advanced": false,
+    "code_to_head_only_docs": true,
+    "code_to_head_changed_paths": [
+      "docs/autopilot/README.md",
+      "docs/autopilot/document-workflow-e2e.json",
+      "docs/autopilot/document-workflow-test-results.txt",
+      "docs/autopilot/document-workflow-verification.json",
+      "docs/autopilot/document-workflow-verification.md",
+      "docs/autopilot/document-workflows.md",
+      "docs/autopilot/provider-compatibility.md"
+    ],
+    "original_task_id": "dd40fc8f",
+    "original_task_match": "repository, dedicated worktree id, GUI git log d395d23/a5a9daa and semantic result URL PR #5; metadata branch is stale"
+  },
+  "needs_review": {
+    "status": "CONFIRMED",
+    "reason": "Completion checks passed; automatic completion approval is disabled.",
+    "source": "gate",
+    "evidence": {
+      "observed_at": "2026-10-15T03:59:20.469511+00:00",
+      "method": "GET only; no database access",
+      "task": {
+        "id": "dd40fc8f",
+        "repository": "/home/kanade/workspace/codex-gui",
+        "branch": "codex-gui/dd40fc8f-implementation-md-codex-gui-au",
+        "worktree": "/home/kanade/.local/share/codex-gui/worktrees/codex-gui/dd40fc8f",
+        "execution_status": "completed",
+        "task_outcome": "needs_review",
+        "outcome_reason": "Completion checks passed; automatic completion approval is disabled.",
+        "outcome_source": "gate",
+        "semantic_status": "SUCCESS",
+        "evidence_result": "PASS",
+        "completion_checks": [
+          {
+            "name": "process exited normally",
+            "status": "pass",
+            "reason": ""
+          },
+          {
+            "name": "validation",
+            "status": "skipped",
+            "reason": "not configured"
+          },
+          {
+            "name": "structured semantic result",
+            "status": "pass",
+            "reason": ""
+          }
+        ],
+        "completion_contract": {
+          "required_paths": [],
+          "required_changed_paths": [],
+          "require_any_change": false,
+          "require_commit": false,
+          "manual_approval": false,
+          "validation_commands": []
+        },
+        "semantic_result": {
+          "status": "SUCCESS",
+          "reason": "実装・隔離E2E・Draft PR提出完了: https://github.com/Kanade147359/codex-gui/pull/5 。関連71件・UI4件PASS。全体799件PASS、既存失敗3件は変更前mainでも再現。詳細: docs/autopilot/document-workflow-verification.json。実モデル未実施、未merge・未deploy。本番環境は変更していません。"
+        },
+        "completion_result": "<absent>"
+      },
+      "approval": {
+        "auto_approve_verified_success": false
+      },
+      "autopilot": {
+        "autopilot": false
+      },
+      "git": {
+        "branch": "codex-gui/dd40fc8f-implementation-md-codex-gui-au",
+        "head_log": [
+          "d395d23 Record fixed-SHA document workflow E2E, owner gates and offline compatibility results",
+          "a5a9daa Require exact candidate owner acceptance and release gated successors after approval",
+          "e8c4eb5 Keep exact legacy successor assertions alongside COMMON fixture requirements"
+        ],
+        "note": "GUI task metadata branch differs from PR branch; task final semantic result explicitly references PR #5."
+      },
+      "live_static": {
+        "file": "static/autopilot.js",
+        "sha256": "d695160cd197183af0cf2d8833ee6f68ed8f244e34e657c608c4c5158ce82ad6",
+        "matches": [
+          "12dabe5385f130383b00cd2609dd6bff7360d68f"
+        ],
+        "running_commit": "UNKNOWN: static bytes do not prove imported Python code revision"
+      }
+    },
+    "github_reviews": [],
+    "github_state": "open",
+    "github_draft": true
+  },
+  "findings": [
+    {
+      "id": "R5-01",
+      "priority": "P1",
+      "title": "計画revisionが担当指示書をowner承認なしで削除できる",
+      "file": "app/autopilot/planning.py",
+      "line": 39,
+      "related_locations": [
+        {
+          "file": "app/autopilot/planning.py",
+          "line": 50
+        },
+        {
+          "file": "app/autopilot/inputs.py",
+          "line": 54
+        }
+      ],
+      "evidence": "accepted 00 output sets A.input_files=[]; revision expansions=[]; ready -> applied; workflow completed and A accepted without documents/A.md or owner decisions",
+      "reproduction": "test_planner_cannot_remove_owner_assigned_document",
+      "fix": "元の担当文書の参照を単調に保持する。削除・置換を拒否するか、具体化の許可範囲外としてexact revisionへのowner承認を必須にする。元の要求は実装者とReviewerの両方へ引き続き渡す。"
+    },
+    {
+      "id": "R5-02",
+      "priority": "P1",
+      "title": "runtime mountの子孫にある秘密情報・GUI stateがsandboxへ入る",
+      "file": "app/autopilot/environment.py",
+      "line": 84,
+      "related_locations": [
+        {
+          "file": "app/autopilot/environment.py",
+          "line": 50
+        }
+      ],
+      "evidence": "registered-runtime containing synthetic .aws/credentials, .npmrc, .env, codex-gui/state.sqlite is accepted; actual bwrap validator reads every file and returns PASS",
+      "reproduction": "test_registered_runtime_cannot_expose_nested_credentials",
+      "fix": "mount元の祖先だけでなく全子孫の機微ディレクトリ・資格情報・GUI state・特殊ファイルを拒否する。明示的なruntime内容のallowlistまたは検証済みprivate stagingを優先し、4種の漏出回帰試験を追加する。"
+    }
+  ],
+  "verification": {
+    "aggregate": "NOT_ALL_PASS",
+    "source_integrity": {
+      "head_files": 159,
+      "base_files": 139,
+      "tracked_archive_mismatches": []
+    },
+    "runs": [
+      {
+        "id": "full",
+        "sha": "d395d232807203813b5052ae0df9ab926690d180",
+        "command": "python -m pytest -q",
+        "working_directory": "/tmp/pr5-independent-review/head",
+        "python": "3.14.4",
+        "passed": 799,
+        "failed": 3,
+        "errors": 0,
+        "skipped": 29,
+        "deselected": 0,
+        "seconds": 122.546,
+        "failure_details": [
+          {
+            "test": "tests.test_ctx_e2e::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded",
+            "message": "assert (1 >= 1 and 0 == 1)"
+          },
+          {
+            "test": "tests.test_ctx_e2e::test_real_codex_tool_output_limit_reaches_the_model",
+            "message": "assert 156 < 156"
+          },
+          {
+            "test": "tests.test_ctx_integration::test_tool_output_token_limit_only_lowers_the_cap",
+            "message": "assert 39 < 39"
+          }
+        ],
+        "log_sha256": "6336dedb28542e9f5064bd5282964c4b1cab81f3ca1d2979da4cd989b8075941",
+        "junit_sha256": "63b6408699d795ed9de32e27291b6c72956c64de8241e7f090392f48243f6484",
+        "local_log": "/tmp/pr5-independent-review/full.log"
+      },
+      {
+        "id": "regression",
+        "sha": "d395d232807203813b5052ae0df9ab926690d180",
+        "command": "CODEX_GUI_AUTOPILOT_CLI_SMOKE=1 CODEX_GUI_AUTOPILOT_TOOLCHAIN_SMOKE=1 python -m pytest -q tests/test_autopilot.py tests/test_autopilot_api.py tests/test_autopilot_documents.py tests/test_autopilot_cli_smoke.py tests/test_autopilot_toolchains.py",
+        "working_directory": "/tmp/pr5-independent-review/head",
+        "python": "3.14.4",
+        "passed": 69,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "seconds": 26.621,
+        "failure_details": [],
+        "log_sha256": "f2385182d43903fcf22fb88e1f8bf204d102eab07aca3527172b9b22d8e352bc",
+        "junit_sha256": "ee46b396f8fc64acf6aba03bac9b06bce3774a79729c61c004c8ddce91150833",
+        "local_log": "/tmp/pr5-independent-review/regression.log"
+      },
+      {
+        "id": "baseline",
+        "sha": "12dabe5385f130383b00cd2609dd6bff7360d68f",
+        "command": "python -m pytest -q tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap",
+        "working_directory": "/tmp/pr5-independent-review/base",
+        "python": "3.14.4",
+        "passed": 0,
+        "failed": 3,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "seconds": 5.943,
+        "failure_details": [
+          {
+            "test": "tests.test_ctx_e2e::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded",
+            "message": "assert (1 >= 1 and 0 == 1)"
+          },
+          {
+            "test": "tests.test_ctx_e2e::test_real_codex_tool_output_limit_reaches_the_model",
+            "message": "assert 156 < 156"
+          },
+          {
+            "test": "tests.test_ctx_integration::test_tool_output_token_limit_only_lowers_the_cap",
+            "message": "assert 39 < 39"
+          }
+        ],
+        "log_sha256": "fecf1abc7dc51d698a03cb071b9415340b64786b1a638367fa88be5ffc95b1ee",
+        "junit_sha256": "dac38314aeb935ea73d93dd549a8f4dfb5fa3e38e77c7a00882b16adc9afa6b0",
+        "local_log": "/tmp/pr5-independent-review/baseline.log"
+      },
+      {
+        "id": "browser",
+        "sha": "d395d232807203813b5052ae0df9ab926690d180",
+        "command": "PLAYWRIGHT_BROWSERS_PATH=/tmp/pr5-independent-review/browsers CODEX_GUI_BROWSER=1 python -m pytest -q tests/test_autopilot_browser.py tests/test_ui_mobile_browser.py -k 'autopilot or 320'",
+        "working_directory": "/tmp/pr5-independent-review/head",
+        "python": "3.14.4",
+        "passed": 4,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 9,
+        "seconds": 27.61,
+        "failure_details": [],
+        "log_sha256": "a786f6232bc23fe2cb319140137fad5a2ad3b554d95d2862f2a585be7da16e79",
+        "junit_sha256": "108ef7bb27035391a5173ef0ad9f7a207f1f44d43946c97bac78cba5c64b05fb",
+        "local_log": "/tmp/pr5-independent-review/browser.log"
+      },
+      {
+        "id": "clean-import",
+        "sha": "d395d232807203813b5052ae0df9ab926690d180",
+        "command": "python -m pytest -q tests/test_autopilot_documents.py::test_uploaded_markdown_revision_repair_integration_and_successor_across_restart",
+        "working_directory": "/tmp/pr5-independent-review/head",
+        "python": "3.14.4",
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "seconds": 1.939,
+        "failure_details": [],
+        "log_sha256": "2f459807653d6b93f0d63ba4b658b0d38871555c546816cbd1e676ce54fea0ff",
+        "junit_sha256": "40f1f46d4e6659bce36e2e84da17d9ec2c5d9189657a647f5513e524cf2e1d97",
+        "local_log": "/tmp/pr5-independent-review/clean-import.log"
+      },
+      {
+        "id": "repro",
+        "sha": "d395d232807203813b5052ae0df9ab926690d180",
+        "command": "PYTHONPATH=/tmp/pr5-independent-review/head:/tmp/pr5-independent-review/head/tests python -m pytest -c /tmp/pr5-independent-review/head/pytest.ini -q /home/kanade/.local/share/codex-gui/worktrees/codex-gui/b910d878/docs/reviews/autopilot-pr5/reproduce_findings.py",
+        "working_directory": "/tmp/pr5-independent-review/head",
+        "python": "3.14.4",
+        "passed": 0,
+        "failed": 2,
+        "errors": 0,
+        "skipped": 0,
+        "deselected": 0,
+        "seconds": 1.526,
+        "failure_details": [
+          {
+            "test": "::test_planner_cannot_remove_owner_assigned_document",
+            "message": "AssertionError: ready/applied without owner decision, assigned instructions omitted: ['documents/COMMON.md', 'handoff/00/HANDOFF.md', 'handoff/00/plan.json']\nassert 'documents/A.md' in ['documents/COMMON.md', 'handoff/00/HANDOFF.md', 'handoff/00/plan.json']"
+          },
+          {
+            "test": "::test_registered_runtime_cannot_expose_nested_credentials",
+            "message": "AssertionError: sandbox read three synthetic credentials and nested GUI state\nassert 'PASS' != 'PASS'"
+          }
+        ],
+        "log_sha256": "0bd18206b30bcd70da731e58b1e6d2bc07c9fce000475001930c2023a4b482cb",
+        "junit_sha256": "41ad66336629387ac513c0e097dba5d66a39acec82f82a8c4d9b20b3c5d2f946",
+        "local_log": "/tmp/pr5-independent-review/submission-repro.log"
+      }
+    ],
+    "existing_failure_comparison": {
+      "same_test_ids": true,
+      "same_assertion_messages": true,
+      "new_failures_in_submitted_suite": 0,
+      "independent_safety_regressions_failed": 2
+    },
+    "auth_metadata_smokes": "NOT_RUN by this reviewer; submitter auth claims not adopted",
+    "static_checks": [
+      "git diff --check 12dabe5 d395d23 PASS",
+      "node --check static/autopilot.js PASS",
+      "ruff check app/autopilot --select F401,F821 PASS"
+    ],
+    "dependency_install_import": "Fresh requirements-dev.txt environment successfully imports Markdown and completes vertical fake-provider E2E",
+    "markdown_e2e": {
+      "state": "completed",
+      "workflow_id": "e8d29c860bf848aa9cae68075fbfb543",
+      "generation": 1,
+      "plan_revisions": [
+        {
+          "state": "applied",
+          "changed": [
+            "A",
+            "B",
+            "C"
+          ],
+          "expansions": [],
+          "artifact": {
+            "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+            "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+            "path": "plan.json"
+          }
+        }
+      ],
+      "nodes": [
+        {
+          "name": "00",
+          "state": "accepted",
+          "generation": 1,
+          "fix_rounds": 0,
+          "inputs": [],
+          "candidates": [
+            {
+              "id": "25bdf9f3dd0a4af9abbc7b53e2fc212c",
+              "generation": 1,
+              "run_generation": 1,
+              "scope": {
+                "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                "diff_digest": "b827613e69a2e97fefb3010c6636565635affa629013ba4583709acc7f9fed5c",
+                "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+                "tree_sha": "cc3d2d2b6244b2e768a7876dabcd0ce895869287"
+              },
+              "requirements_digest": "b039c82e08aaf7fdf585b7d48bf68b0ca48ef8b38dcaa228657d1bcb9853dabe",
+              "documents": [
+                {
+                  "name": "documents/00.md",
+                  "digest": "45904fb11116c3224c3bf2e7b3682299caf7391dbf487decc479f9c93d5a25fa",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "documents/COMMON.md",
+                  "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+                  "origin": "owner input"
+                }
+              ],
+              "validation": [
+                {
+                  "state": "PASS",
+                  "profile_digest": "8c5309fd7a4ec858a9769941dd6b52807698c3e6b5931846757711fd8ebc269f",
+                  "checks": [
+                    {
+                      "exit_status": 0,
+                      "artifact": "plan.json"
+                    },
+                    {
+                      "exit_status": 0,
+                      "artifact": "HANDOFF.md"
+                    },
+                    {
+                      "command_digest": "182757dfc939773db615f5b0160e469524790d8e221bb5383280f9f6f31d5d61",
+                      "exit_status": 0,
+                      "timed_out": false
+                    }
+                  ]
+                }
+              ],
+              "reviews": [
+                {
+                  "provider": "claude",
+                  "state": "completed",
+                  "verdict": "APPROVE",
+                  "error_kind": null,
+                  "session": "review-90c74a89b71b4d969524178e320cdd5b"
+                }
+              ],
+              "acceptances": [
+                {
+                  "owner_candidate_accepted": false,
+                  "policy_digest": "1ada06bfb1bac7245d9bef32704dd868068a40451b8503141f5e7ee445530ab0",
+                  "reason": "AI review accepted",
+                  "review_id": "c1ae44583e0144b486ffb9a29addec90",
+                  "scope": {
+                    "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                    "diff_digest": "b827613e69a2e97fefb3010c6636565635affa629013ba4583709acc7f9fed5c",
+                    "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+                    "tree_sha": "cc3d2d2b6244b2e768a7876dabcd0ce895869287"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "A",
+          "state": "accepted",
+          "generation": 2,
+          "fix_rounds": 1,
+          "inputs": [
+            {
+              "candidate_id": "25bdf9f3dd0a4af9abbc7b53e2fc212c",
+              "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+              "kind": "report",
+              "node": "00"
+            }
+          ],
+          "candidates": [
+            {
+              "id": "46bc7274c0d047abaeed873a9b48971d",
+              "generation": 1,
+              "run_generation": 1,
+              "scope": {
+                "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                "diff_digest": "ea39b8c75eefba25aaf89aaa31af4252a5f1d701a0af090ca06db05ee3fe3be6",
+                "head_sha": "ea2b76bdddee9fb21b303353aa0b6877f2c0928a",
+                "tree_sha": "caf8769c40b289608292a032b848e24adb377086"
+              },
+              "requirements_digest": "7bb8dedb9d7a228226a55d0ce59e7437b2e4711ba0a458640fcb6ce0a57323f5",
+              "documents": [
+                {
+                  "name": "documents/A.md",
+                  "digest": "4cf5385d9f8b942c72be2a57292afef8b3c8e0f10bd1e9f91e1be01d0caca303",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "documents/COMMON.md",
+                  "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "handoff/00/HANDOFF.md",
+                  "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/00/plan.json",
+                  "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                }
+              ],
+              "validation": [
+                {
+                  "state": "PASS",
+                  "profile_digest": "4090e474a8c56b623ef56148b7ed1a390267d59de35fabfe78f9d0023a77267e",
+                  "checks": [
+                    {
+                      "exit_status": 0,
+                      "artifact": "A.txt"
+                    },
+                    {
+                      "command_digest": "2316289a2bf296177bcee7bf4043893b859621c052e700f9d6aa87bb50e5f6dc",
+                      "exit_status": 0,
+                      "timed_out": false
+                    }
+                  ]
+                }
+              ],
+              "reviews": [
+                {
+                  "provider": "claude",
+                  "state": "completed",
+                  "verdict": "CHANGES_REQUESTED",
+                  "error_kind": null,
+                  "session": "review-e928f019046c407ca5f3f2dab59ebce7"
+                }
+              ],
+              "acceptances": []
+            },
+            {
+              "id": "10eb22011dd8425fa0699358c42cf65a",
+              "generation": 2,
+              "run_generation": 1,
+              "scope": {
+                "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+                "head_sha": "939846397b02dc24725d2a65d5b8384001ad01a4",
+                "tree_sha": "81c00d53390771af15cf4a5c498db238c05a0955"
+              },
+              "requirements_digest": "7bb8dedb9d7a228226a55d0ce59e7437b2e4711ba0a458640fcb6ce0a57323f5",
+              "documents": [
+                {
+                  "name": "documents/A.md",
+                  "digest": "4cf5385d9f8b942c72be2a57292afef8b3c8e0f10bd1e9f91e1be01d0caca303",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "documents/COMMON.md",
+                  "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "handoff/00/HANDOFF.md",
+                  "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/00/plan.json",
+                  "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                }
+              ],
+              "validation": [
+                {
+                  "state": "PASS",
+                  "profile_digest": "4090e474a8c56b623ef56148b7ed1a390267d59de35fabfe78f9d0023a77267e",
+                  "checks": [
+                    {
+                      "exit_status": 0,
+                      "artifact": "A.txt"
+                    },
+                    {
+                      "command_digest": "2316289a2bf296177bcee7bf4043893b859621c052e700f9d6aa87bb50e5f6dc",
+                      "exit_status": 0,
+                      "timed_out": false
+                    }
+                  ]
+                }
+              ],
+              "reviews": [
+                {
+                  "provider": "codex",
+                  "state": "completed",
+                  "verdict": "APPROVE",
+                  "error_kind": null,
+                  "session": "review-f47b7581143d409dadb05e490ef51870"
+                }
+              ],
+              "acceptances": [
+                {
+                  "owner_candidate_accepted": false,
+                  "policy_digest": "1ada06bfb1bac7245d9bef32704dd868068a40451b8503141f5e7ee445530ab0",
+                  "reason": "AI review accepted",
+                  "review_id": "9e13570b8969408a81b69868a154e09b",
+                  "scope": {
+                    "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                    "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+                    "head_sha": "939846397b02dc24725d2a65d5b8384001ad01a4",
+                    "tree_sha": "81c00d53390771af15cf4a5c498db238c05a0955"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "B",
+          "state": "accepted",
+          "generation": 1,
+          "fix_rounds": 0,
+          "inputs": [
+            {
+              "candidate_id": "25bdf9f3dd0a4af9abbc7b53e2fc212c",
+              "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+              "kind": "report",
+              "node": "00"
+            }
+          ],
+          "candidates": [
+            {
+              "id": "e90e79234d53453d9ae77f118677255a",
+              "generation": 1,
+              "run_generation": 1,
+              "scope": {
+                "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                "diff_digest": "185dff3596e45754255fbd1b80e46029d8f91536982bdbf64e4af86feb5f6a3d",
+                "head_sha": "e0814e2cd8b57b17307565659c660cf64a36865e",
+                "tree_sha": "557bb0fff8eb7cf7173b30b4cf1e372aab41b1c3"
+              },
+              "requirements_digest": "55827dedfa5571ef267cadf7c7283341e3873d82848e1f4d118f1c28145f589d",
+              "documents": [
+                {
+                  "name": "documents/B.md",
+                  "digest": "b8da5490cf2388fa02b954a5026bef3c8b0913c5a06941792d8a4202bd305790",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "documents/COMMON.md",
+                  "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "handoff/00/HANDOFF.md",
+                  "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/00/plan.json",
+                  "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                }
+              ],
+              "validation": [
+                {
+                  "state": "PASS",
+                  "profile_digest": "06828774a88ec1f2d35aac14c978ff380588c03e0484ee7d2e9d00dfac9fac46",
+                  "checks": [
+                    {
+                      "exit_status": 0,
+                      "artifact": "B.txt"
+                    },
+                    {
+                      "command_digest": "caf4e6e77d9b086df0548421da78fb0dbce551a8d11c4daff95daa1253a83f35",
+                      "exit_status": 0,
+                      "timed_out": false
+                    }
+                  ]
+                }
+              ],
+              "reviews": [
+                {
+                  "provider": "claude",
+                  "state": "incomplete",
+                  "verdict": null,
+                  "error_kind": "included_quota",
+                  "session": null
+                },
+                {
+                  "provider": "codex",
+                  "state": "completed",
+                  "verdict": "APPROVE",
+                  "error_kind": null,
+                  "session": "review-e794d2ee422546cea0e929bc1bf38ff6"
+                }
+              ],
+              "acceptances": [
+                {
+                  "owner_candidate_accepted": false,
+                  "policy_digest": "1ada06bfb1bac7245d9bef32704dd868068a40451b8503141f5e7ee445530ab0",
+                  "reason": "AI review accepted",
+                  "review_id": "fedf3728d6b443a6a395909f1ea3f4ac",
+                  "scope": {
+                    "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                    "diff_digest": "185dff3596e45754255fbd1b80e46029d8f91536982bdbf64e4af86feb5f6a3d",
+                    "head_sha": "e0814e2cd8b57b17307565659c660cf64a36865e",
+                    "tree_sha": "557bb0fff8eb7cf7173b30b4cf1e372aab41b1c3"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "C",
+          "state": "accepted",
+          "generation": 1,
+          "fix_rounds": 0,
+          "inputs": [
+            {
+              "candidate_id": "25bdf9f3dd0a4af9abbc7b53e2fc212c",
+              "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+              "kind": "report",
+              "node": "00"
+            }
+          ],
+          "candidates": [
+            {
+              "id": "d75f4e8770ae401e9d3bd6a7323ea096",
+              "generation": 1,
+              "run_generation": 1,
+              "scope": {
+                "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                "diff_digest": "13c5a1b9683751fb10d3e3aebc434f33cea723d8ec1c222d985df2e9ccc90702",
+                "head_sha": "a5bdfedea819f0fbce709d18a43542aff9ad84f4",
+                "tree_sha": "6113813be211089dae4b84b89f0649c543113df0"
+              },
+              "requirements_digest": "0729c221ad567e58414b8d255e7019ff6e139928fd66e971f8e8f98a5d1f01cd",
+              "documents": [
+                {
+                  "name": "documents/C.md",
+                  "digest": "02b6705abb2069904202f0632eedf0b3129a46c16979911cf1c15241e9428584",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "documents/COMMON.md",
+                  "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "handoff/00/HANDOFF.md",
+                  "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/00/plan.json",
+                  "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                }
+              ],
+              "validation": [
+                {
+                  "state": "PASS",
+                  "profile_digest": "0aee6db12dc1b148d64806989deb24246f196c631fc91c0e3a55e684e9f6caad",
+                  "checks": [
+                    {
+                      "exit_status": 0,
+                      "artifact": "C.txt"
+                    },
+                    {
+                      "command_digest": "4da7882e1e465319a6a0d5d95b9cc4f3cab3721703d1ac1f8c6468f320bfda86",
+                      "exit_status": 0,
+                      "timed_out": false
+                    }
+                  ]
+                }
+              ],
+              "reviews": [
+                {
+                  "provider": "codex",
+                  "state": "completed",
+                  "verdict": "APPROVE",
+                  "error_kind": null,
+                  "session": "review-cd47f036de62483e8c43e20aa51e7c58"
+                }
+              ],
+              "acceptances": [
+                {
+                  "owner_candidate_accepted": false,
+                  "policy_digest": "1ada06bfb1bac7245d9bef32704dd868068a40451b8503141f5e7ee445530ab0",
+                  "reason": "AI review accepted",
+                  "review_id": "2f150a85497747bf862a97ec7571bcd5",
+                  "scope": {
+                    "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                    "diff_digest": "13c5a1b9683751fb10d3e3aebc434f33cea723d8ec1c222d985df2e9ccc90702",
+                    "head_sha": "a5bdfedea819f0fbce709d18a43542aff9ad84f4",
+                    "tree_sha": "6113813be211089dae4b84b89f0649c543113df0"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "I1",
+          "state": "accepted",
+          "generation": 1,
+          "fix_rounds": 0,
+          "inputs": [
+            {
+              "candidate_id": "25bdf9f3dd0a4af9abbc7b53e2fc212c",
+              "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+              "kind": "report",
+              "node": "00"
+            },
+            {
+              "candidate_id": "10eb22011dd8425fa0699358c42cf65a",
+              "head_sha": "939846397b02dc24725d2a65d5b8384001ad01a4",
+              "kind": "code",
+              "node": "A"
+            },
+            {
+              "candidate_id": "e90e79234d53453d9ae77f118677255a",
+              "head_sha": "e0814e2cd8b57b17307565659c660cf64a36865e",
+              "kind": "code",
+              "node": "B"
+            },
+            {
+              "candidate_id": "d75f4e8770ae401e9d3bd6a7323ea096",
+              "head_sha": "a5bdfedea819f0fbce709d18a43542aff9ad84f4",
+              "kind": "code",
+              "node": "C"
+            }
+          ],
+          "candidates": [
+            {
+              "id": "08471db0ee404b67bb9670cef56a5958",
+              "generation": 1,
+              "run_generation": 1,
+              "scope": {
+                "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                "diff_digest": "d49e99beed846d5779148dce0ad0a0925dd327118380245d0d5ae6f7b3471848",
+                "head_sha": "88044f6d0538096614ff4f460217c667572a205d",
+                "tree_sha": "e1a2795002065135aeb9b8610bb2a3cdea8bafc0"
+              },
+              "requirements_digest": "776fed5a67b0a12c921de860fd8d03ed38ffd4a5836289d47179ef9e17044eba",
+              "documents": [
+                {
+                  "name": "documents/COMMON.md",
+                  "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "documents/I1.md",
+                  "digest": "1e21c22cc49c75db53e0c125edc5cc3d4b2e405e052df04621669b76d4c53407",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "handoff/00/HANDOFF.md",
+                  "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/00/plan.json",
+                  "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/A/A.txt",
+                  "digest": "47c327e006045cbbd6bf8b47c71dc2827be1618b878b6caea5973790119a5a52",
+                  "origin": "accepted artifact",
+                  "head_sha": "939846397b02dc24725d2a65d5b8384001ad01a4"
+                },
+                {
+                  "name": "handoff/B/B.txt",
+                  "digest": "47c327e006045cbbd6bf8b47c71dc2827be1618b878b6caea5973790119a5a52",
+                  "origin": "accepted artifact",
+                  "head_sha": "e0814e2cd8b57b17307565659c660cf64a36865e"
+                },
+                {
+                  "name": "handoff/C/C.txt",
+                  "digest": "47c327e006045cbbd6bf8b47c71dc2827be1618b878b6caea5973790119a5a52",
+                  "origin": "accepted artifact",
+                  "head_sha": "a5bdfedea819f0fbce709d18a43542aff9ad84f4"
+                }
+              ],
+              "validation": [
+                {
+                  "state": "PASS",
+                  "profile_digest": "dfba4966f3168569bf68fc49d73e9eee41e9dafa4597f426de936b51353b9554",
+                  "checks": [
+                    {
+                      "exit_status": 0,
+                      "artifact": "wiring.py"
+                    },
+                    {
+                      "command_digest": "4c8c8c2420e1afb1e3e768b09386a7a57d582be48813a0369e6b73b14cd599ff",
+                      "exit_status": 0,
+                      "timed_out": false
+                    }
+                  ]
+                }
+              ],
+              "reviews": [
+                {
+                  "provider": "codex",
+                  "state": "completed",
+                  "verdict": "APPROVE",
+                  "error_kind": null,
+                  "session": "review-51b5f78086b94324b35a887c541ad7e3"
+                }
+              ],
+              "acceptances": [
+                {
+                  "owner_candidate_accepted": false,
+                  "policy_digest": "1ada06bfb1bac7245d9bef32704dd868068a40451b8503141f5e7ee445530ab0",
+                  "reason": "AI review accepted",
+                  "review_id": "27936f98317540eeaa8a74749a5c1f45",
+                  "scope": {
+                    "base_sha": "dfe38fc2cd4be1408d806914f7b4f90b00ded234",
+                    "diff_digest": "d49e99beed846d5779148dce0ad0a0925dd327118380245d0d5ae6f7b3471848",
+                    "head_sha": "88044f6d0538096614ff4f460217c667572a205d",
+                    "tree_sha": "e1a2795002065135aeb9b8610bb2a3cdea8bafc0"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "D",
+          "state": "accepted",
+          "generation": 1,
+          "fix_rounds": 0,
+          "inputs": [
+            {
+              "candidate_id": "25bdf9f3dd0a4af9abbc7b53e2fc212c",
+              "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f",
+              "kind": "report",
+              "node": "00"
+            },
+            {
+              "candidate_id": "08471db0ee404b67bb9670cef56a5958",
+              "head_sha": "88044f6d0538096614ff4f460217c667572a205d",
+              "kind": "integration",
+              "node": "I1"
+            }
+          ],
+          "candidates": [
+            {
+              "id": "2d489c8888914334b1f2520d483051f3",
+              "generation": 1,
+              "run_generation": 1,
+              "scope": {
+                "base_sha": "88044f6d0538096614ff4f460217c667572a205d",
+                "diff_digest": "c83b6eb942fd148aa5092aeee91bb720b97b4eab262d9420134f596fe6159855",
+                "head_sha": "1e788c5bfe78638b18f152b0b42169b89a378df7",
+                "tree_sha": "bc00d11449bddd48064dc218a8fc54f7df5132ef"
+              },
+              "requirements_digest": "729bb0592a1653ee0c6422b6ed53b3ffdb478d05d2f000b68c4158c526d54094",
+              "documents": [
+                {
+                  "name": "documents/COMMON.md",
+                  "digest": "e2054904b6866456c16d3f160bbb2dde1bf4f00617f6395995249f4df03cb2a1",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "documents/D.md",
+                  "digest": "903edc82087883998dae161dc104063055528c76302d73d4da44f3149bd0aac6",
+                  "origin": "owner input"
+                },
+                {
+                  "name": "handoff/00/HANDOFF.md",
+                  "digest": "ad61980aba93835d0eb835a5fa1e7450077b0a99a401fb4406bdfe752579ee2a",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/00/plan.json",
+                  "digest": "df30ee5f287d8a5cf41a4953800dbe77b77fe8afb6207be74124160e7916f60e",
+                  "origin": "accepted artifact",
+                  "head_sha": "1f4b25ed16a9287e4dd76429430c6585902a765f"
+                },
+                {
+                  "name": "handoff/I1/wiring.py",
+                  "digest": "56042aa4a8c7ae41bf4ef1cbb370132b8797d747a615a3e2008946fafa77aa49",
+                  "origin": "accepted artifact",
+                  "head_sha": "88044f6d0538096614ff4f460217c667572a205d"
+                }
+              ],
+              "validation": [
+                {
+                  "state": "PASS",
+                  "profile_digest": "50cbafe0167b334643a852c72fb03b8f4ef8f956598afd28c96b1b4c01a2ed29",
+                  "checks": [
+                    {
+                      "exit_status": 0,
+                      "artifact": "D.txt"
+                    },
+                    {
+                      "command_digest": "d8bf7a84e1dc327c4f17ef3d2d2c820c91ffc5f4870a37c62b128a5d82278f9b",
+                      "exit_status": 0,
+                      "timed_out": false
+                    }
+                  ]
+                }
+              ],
+              "reviews": [
+                {
+                  "provider": "codex",
+                  "state": "completed",
+                  "verdict": "APPROVE",
+                  "error_kind": null,
+                  "session": "review-615dda5a160d4731b92e000eeabef4e7"
+                }
+              ],
+              "acceptances": [
+                {
+                  "owner_candidate_accepted": false,
+                  "policy_digest": "1ada06bfb1bac7245d9bef32704dd868068a40451b8503141f5e7ee445530ab0",
+                  "reason": "AI review accepted",
+                  "review_id": "b8853d745d464ecfac8f07ccb22f6809",
+                  "scope": {
+                    "base_sha": "88044f6d0538096614ff4f460217c667572a205d",
+                    "diff_digest": "c83b6eb942fd148aa5092aeee91bb720b97b4eab262d9420134f596fe6159855",
+                    "head_sha": "1e788c5bfe78638b18f152b0b42169b89a378df7",
+                    "tree_sha": "bc00d11449bddd48064dc218a8fc54f7df5132ef"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "environment": {
+      "python": "3.14.4",
+      "codex": "0.159.2",
+      "claude": "2.1.185",
+      "rustc": "1.98.1",
+      "node": "20.17.0",
+      "packages": {
+        "pytest": "9.1.1",
+        "fastapi": "0.143.1",
+        "starlette": "1.8.0",
+        "httpx": "0.28.1",
+        "PyYAML": "6.0.3",
+        "python-multipart": "0.0.32",
+        "playwright": "1.64.0"
+      }
+    },
+    "setup_notes": [
+      "Archive contents were compared to Git blob SHAs after testing; zero tracked mismatches.",
+      "Preliminary Python 3.10.14 document/toolchain run: 18 passed, 1 opt-in skipped (focused.log); reported primary comparisons use isolated Python 3.14.4.",
+      "Fixture collection initially resolved the review branch app through pytest.ini auto-discovery; corrected by explicit archive pytest.ini. Collection errors are not counted as submitted-code failures. Final published fixture rerun has 2 safety assertion failures and 0 collection errors."
+    ],
+    "reviewer_fixture_sha256": "baca034d292b4c6675593fc07ee904745a61ab896c645de94b4dbade07eae092"
+  },
+  "before_main_merge": [
+    "R5-01とR5-02を実装者が修正し、同じ安全性要求を保持した回帰を追加する",
+    "修正後の固定SHAを独立再レビュー・追試する。既存3失敗は別途解消または明示的判断が必要"
+  ],
+  "before_production_use": [
+    "実モデルのレビュー品質・長いdiff・requested_reads・手動承認再開の運用受入",
+    "実subscriptionの利用枠・認証・追加従量利用無効の確認",
+    "実quota枯渇とfallback/復旧の運用受入",
+    "必要な実案件toolchain/cacheを秘密情報なしで準備し隔離確認",
+    "稼働GUI全体の実行SHAを確認し、所有者が反映・再起動・rollbackを別途判断"
+  ],
+  "owner_decisions_remaining": [
+    "PR #5の採否",
+    "元タスクのGUI完了承認",
+    "GitHub PR reviewとmain統合の判断",
+    "運用受入の実行許可と反映判断"
+  ],
+  "not_verified": [
+    "REAL_MODEL_E2E",
+    "ACTUAL_QUOTA_EXHAUSTION",
+    "ACCOUNT_EXTRA_USAGE_DISABLED",
+    "LIVE_PYTHON_PROCESS_EXACT_SHA",
+    "REAL_PROJECT_DEPENDENCIES_AND_HARDWARE"
+  ],
+  "safety": {
+    "production_requests": "GET only",
+    "production_database_direct_access": false,
+    "approval_api_writes": false,
+    "production_settings_changed": false,
+    "production_process_restarted": false,
+    "original_worktree_or_thread_changed": false,
+    "production_code_modified": false,
+    "main_changed": false,
+    "original_pr_changed": false,
+    "billing_changed": false,
+    "real_model_called": false,
+    "delegated_agents": 0,
+    "test_repos_databases_data_dirs": "isolated temporary directories",
+    "development_http": "ephemeral localhost only",
+    "push": "normal review branch only"
+  }
+}
