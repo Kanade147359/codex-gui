@@ -83,6 +83,34 @@ result = dict(
     unverified=[],
     resolved=payload.get("unresolved", []) if not blocking else [],
 )
+if received["requirements"].get("version", 0) >= 2:
+    import hashlib
+    bundle = received["requirements"]
+    unsigned = {k:v for k,v in bundle.items() if k != "digest"}
+    assert hashlib.sha256(json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest() == bundle["digest"]
+    axes = ("task_correctness", "goal_alignment", "architectural_consistency", "evidence_completeness")
+    result["goal_review"] = dict(version=2, requirements_digest=bundle["digest"],
+        assessments={axis:dict(status="ALIGNED", goal_ids=[g["id"] for g in bundle.get("goals", [])],
+            evidence="Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.") for axis in axes}, root_causes=[])
+    if blocking:
+        axis = "goal_alignment" if blocking[0]["id"] == "COMMON-required" else "task_correctness"
+        result["goal_review"]["assessments"][axis].update(status="VIOLATION", evidence=blocking[0]["reason"])
+        result["goal_review"]["root_causes"] = [dict(finding_id=f["id"], classification="IMPLEMENTATION_DEFECT",
+            reproduction="Inspect the pinned diff and deliverable against the original contract", observed=f["reason"],
+            expected="Deliverable satisfies the fixed task and COMMON requirements", requirement_refs=["task:contract"],
+            counterexample=f["reason"], evidence_refs=["snapshot:" + f["path"] + ":1"]) for f in blocking]
+    if scenario.get("premise") and name == "A" and candidate["generation"] >= scenario.get("premise_generation", 2):
+        assert common and "adapter-v2" in common[0]["body"]
+        instruction = next(d for d in bundle["documents"] if d["name"].endswith("A.md"))
+        assert "adapter-v1" in instruction["body"]
+        assert (root / "capability.txt").read_text() == "adapter-v2 only\n"
+        result.update(verdict="CHANGES_REQUESTED", blocking=[dict(id="false-adapter", path="capability.txt", line=1,
+            reason="Task assumes adapter-v1; the pinned repository supports only adapter-v2")])
+        result["goal_review"]["assessments"]["task_correctness"].update(status="VIOLATION", evidence="capability.txt:1 contradicts task assumption")
+        result["goal_review"]["root_causes"] = [dict(finding_id="false-adapter", classification="TASK_ASSUMPTION_FALSE",
+            reproduction="Read capability.txt in the pinned candidate snapshot", observed="adapter-v2 only",
+            expected="The original task assumes adapter-v1 is available", requirement_refs=[instruction["name"]],
+            counterexample="capability.txt:1 declares adapter-v2 only", evidence_refs=["snapshot:capability.txt:1"])]
 if payload.get("read_protocol"):
     result["requested_reads"] = []
 if scenario.get("ignore_prior_findings"):
@@ -105,6 +133,11 @@ elif provider == "claude" and (scenario.get("quota") or name == "B"):
         result["blocking"] = [
             dict(id="carry-forward", path=name + ".txt", line=1, reason="Retain finding before quota interruption")
         ]
+        if "goal_review" in result:
+            result["goal_review"]["root_causes"] = [dict(finding_id="carry-forward", classification="IMPLEMENTATION_DEFECT",
+                reproduction="Inspect the fixture finding before quota", observed="Unresolved carry-forward finding",
+                expected="Finding resolved with evidence", requirement_refs=["task:contract"],
+                counterexample="carry-forward remains unresolved", evidence_refs=["snapshot:" + name + ".txt:1"])]
     print(json.dumps(dict(type="result", subtype="error_during_execution", is_error=True, structured_output=result)))
 else:
     print(

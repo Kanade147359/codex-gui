@@ -86,3 +86,34 @@ def test_markdown_upload_ui_to_planning_parallel_fix_and_integration(gui_url, gi
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
         page.screenshot(path=str(tmp_path / "autopilot-markdown-mobile.png"), full_page=True)
         browser.close()
+
+
+def test_goal_replanning_ui_owner_decision_graph_and_review(gui_url, git_repo, tmp_path):
+    from test_autopilot_goals import workflow, install_goal
+    playwright = pytest.importorskip("playwright.sync_api")
+    url, app = gui_url
+    install_goal(app.state.manager)
+    raw = workflow(git_repo, "propose_only")
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport=dict(width=390, height=844))
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(url + "/autopilot")
+        page.locator("#ap-manifest").fill(json.dumps(raw))
+        page.locator("#ap-preview").click()
+        page.wait_for_function("!document.querySelector('#ap-start').disabled")
+        page.locator("#ap-opt-in").check()
+        page.locator("#ap-start").click()
+        page.get_by_role("button", name="Owner approve new tasks", exact=True).wait_for(timeout=40000)
+        graph = page.locator("#ap-graph").inner_text()
+        assert "Goal Alignment" in graph and "TASK_ASSUMPTION_FALSE" in graph and "G-adapter" in graph
+        assert "R_adapter" in graph and "graph_before" in graph and "graph_after" in graph
+        assert "propose_only" in graph and "remaining_nodes" in graph
+        page.get_by_label("graph revision owner rationale").fill("Reviewed exact fixed input and replacement DAG")
+        page.get_by_role("button", name="Owner approve new tasks", exact=True).click()
+        page.wait_for_function("document.querySelector('#ap-workflows').textContent.includes('completed')", timeout=40000)
+        assert not errors
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+        page.screenshot(path=str(tmp_path / "autopilot-goal-replanning-mobile.png"), full_page=True)
+        browser.close()

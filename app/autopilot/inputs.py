@@ -82,7 +82,12 @@ async def requirements(ap, node, workflow):
             )
     for doc in docs:
         doc["digest"] = bytes_digest(doc["body"].encode())
-    result = dict(version=1, node=node["name"], instruction=spec["prompt"], documents=docs)
+    result = dict(version=2, node=node["name"], instruction=spec["prompt"], documents=docs,
+                  goals=plan.get("goals", []), goal_ids=spec.get("goal_ids", []),
+                  acceptance_ids=spec.get("acceptance_ids", []), contract=spec["contract"],
+                  distinctions={"global": "COMMON documents and explicit goals/invariants/prohibitions",
+                                "task_purpose": spec["prompt"], "acceptance": spec["contract"],
+                                "rules": "captured applicable base rules", "inferred_goals_owner_approved": False})
     result["digest"] = digest(result)
     return result
 

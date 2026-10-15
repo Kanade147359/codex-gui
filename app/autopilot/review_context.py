@@ -4,6 +4,7 @@ import codecs
 from pathlib import Path
 import re
 
+from . import goals
 from .git import git
 from .inputs import bytes_digest
 from .policy import canonical, digest, safe_path
@@ -113,7 +114,7 @@ async def prompt(candidate, root):
         if len(pages) != 1:
             raise ValueError("controller partition review required")
         context = dict(partition=pages[0], related=related)
-    return canonical(
+    encoded = canonical(
         dict(
             candidate_id=candidate["id"],
             run_generation=candidate["run_generation"],
@@ -131,6 +132,10 @@ async def prompt(candidate, root):
         )
     )
 
+    if len(encoded.encode()) > 1024 * 1024:
+        raise ValueError("fixed review context exceeds 1 MiB; split documents explicitly; no approval")
+    return encoded
+
 
 async def review_all(provider, candidate, policy, root, attempt, on_identity):
     """All partitions and a final whole-scope review are mandatory for large diffs."""
@@ -143,6 +148,7 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
         for round_number in range(5):
             part["payload"]["read_protocol"] = True
             part["payload"]["review_context"]["requested_code"] = reads
+            await prompt(part, root)  # Enforce complete bounded inputs even for injected adapters.
             result = await provider.start_review(part, policy, root, child, on_identity)
             if not result.get("requested_reads"):
                 return result
@@ -183,23 +189,7 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
         except ProviderFailure as error:
             error.findings += [f for entry in summaries for f in entry["result"]["blocking"]]
             raise
-        validate_result(
-            {
-                k: result[k]
-                for k in (
-                    "candidate_id",
-                    "run_generation",
-                    "scope",
-                    "verdict",
-                    "blocking",
-                    "nonblocking",
-                    "resolved",
-                    "coverage",
-                    "unverified",
-                )
-            },
-            part,
-        )
+        validate_result(goals.terminal_fields(result, part), part)
         summaries.append(dict(partition=page | {"diff": "[reviewed in partition]"}, result=result))
     if len(pages) == 1:
         return summaries[0]["result"]
@@ -227,6 +217,20 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
         result.update(verdict="INCONCLUSIVE", unverified=unverified + ["not all fixed partitions approved"])
     if any(entry["result"]["verdict"] == "NEEDS_HUMAN" for entry in summaries):
         result["verdict"] = "NEEDS_HUMAN"
+    if goals.required(candidate):
+        reports = [e["result"]["goal_review"] for e in summaries] + [result["goal_review"]]
+        for axis in goals.AXES:
+            worst = max((r["assessments"][axis] for r in reports),
+                        key=lambda a: {"ALIGNED": 0, "UNKNOWN": 1, "VIOLATION": 2}[a["status"]])
+            result["goal_review"]["assessments"][axis] = worst
+        causes = {canonical(c): c for r in reports for c in r["root_causes"]}
+        result["goal_review"]["root_causes"] = list(causes.values())
+        if result["verdict"] == "APPROVE" and any(
+            a["status"] != "ALIGNED" for a in result["goal_review"]["assessments"].values()
+        ):
+            result["verdict"] = "INCONCLUSIVE"
+            unverified.append("goal assessment incomplete in a partition")
+    result["unverified"] = unverified
     result["partition_evidence"] = [
         dict(
             index=i + 1,
@@ -235,6 +239,7 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
             digest=entry["partition"]["digest"],
             verdict=entry["result"]["verdict"],
             session=entry["result"].get("session"),
+            goal_review=entry["result"].get("goal_review"),
         )
         for i, entry in enumerate(summaries)
     ]

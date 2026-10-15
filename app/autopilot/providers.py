@@ -12,6 +12,7 @@ from app.appserver import AppServerClient, AppServerError, CLOSED
 from app.usage import quota_exhausted, parse_rate_limits
 from .runner import InfrastructureUnavailable, minimal_env, sandbox, run_bounded, redact
 from .policy import canonical
+from . import goals
 
 VERDICTS = ("APPROVE", "CHANGES_REQUESTED", "NEEDS_HUMAN", "INCONCLUSIVE")
 FINDING = dict(
@@ -62,11 +63,14 @@ REVIEW_SCHEMA = dict(
 def review_schema(candidate):
     """Constrain coverage to the fixed changed paths without relaxing the acceptance gate."""
     changed_paths = candidate["payload"].get("changed_paths", [])
-    if not changed_paths and not candidate["payload"].get("read_protocol"):
+    if not changed_paths and not candidate["payload"].get("read_protocol") and not goals.required(candidate):
         return REVIEW_SCHEMA
     if not isinstance(changed_paths, list) or any(not isinstance(path, str) for path in changed_paths):
         raise ValueError("invalid candidate changed paths")
     schema = copy.deepcopy(REVIEW_SCHEMA)
+    if goals.required(candidate):
+        schema["properties"]["goal_review"] = goals.GOAL_SCHEMA
+        schema["required"].append("goal_review")
     if changed_paths:
         schema["properties"]["coverage"]["items"]["enum"] = sorted(set(changed_paths))
     if candidate["payload"].get("read_protocol"):
@@ -99,6 +103,9 @@ Never promote an implementation's BLOCKED/PARTIAL/NEEDS_INPUT claim to SUCCESS. 
 """
 
 
+TRUSTED_POLICY += goals.REVIEW_INSTRUCTIONS
+
+
 def structured_json(text):
     def pairs(items):
         result = {}
@@ -112,7 +119,7 @@ def structured_json(text):
 
 
 def validate_result(value, candidate):
-    if not isinstance(value, dict) or set(value) - {"requested_reads"} != set(REVIEW_SCHEMA["required"]):
+    if not isinstance(value, dict) or set(value) - {"requested_reads"} != set(goals.fields(candidate)):
         raise ValueError("invalid structured review fields")
     reads = value.get("requested_reads", [])
     if (
@@ -163,6 +170,8 @@ def validate_result(value, candidate):
     changed_paths = set(candidate["payload"].get("changed_paths", []))
     if value["verdict"] == "APPROVE" and changed_paths and (set(value["coverage"]) != changed_paths):
         raise ValueError("APPROVE coverage must list exact changed paths, without descriptions")
+    if goals.required(candidate):
+        goals.validate(value, candidate)
     return value
 
 
@@ -471,8 +480,15 @@ class CodexProvider(ReviewProvider):
         )
 
     async def start_review(self, candidate, trusted_review_policy, root, attempt, on_identity):
+        return await self._start_isolated(candidate, trusted_review_policy, root, attempt, on_identity)
+
+    async def start_replan(self, candidate, policy, root, attempt, on_identity):
+        return await self._start_isolated(candidate, policy, root, attempt, on_identity, replan=True)
+
+    async def _start_isolated(self, candidate, trusted_review_policy, root, attempt, on_identity, replan=False):
+        from .replanning import REPLANNER_POLICY, REPLAN_SCHEMA
         cap = await self.probe_capabilities_and_auth(trusted_review_policy)
-        prompt = await review_prompt(candidate, root)
+        prompt = canonical(candidate["replan_input"]) if replan else await review_prompt(candidate, root)
         with tempfile.TemporaryDirectory(prefix="ap-codex-review-") as scratch:
             home = Path(scratch) / ".codex"
             home.mkdir(mode=0o700)
@@ -528,7 +544,7 @@ class CodexProvider(ReviewProvider):
                         sandbox="read-only",
                         approvalPolicy="never",
                         config=config,
-                        developerInstructions=TRUSTED_POLICY,
+                        developerInstructions=REPLANNER_POLICY if replan else TRUSTED_POLICY,
                         **({"model": model} if model else {}),
                     ),
                 )
@@ -539,19 +555,19 @@ class CodexProvider(ReviewProvider):
                 )
                 turn = await client.request(
                     "turn/start",
-                    dict(threadId=tid, input=[dict(type="text", text=prompt)], outputSchema=review_schema(candidate)),
+                    dict(threadId=tid, input=[dict(type="text", text=prompt)], outputSchema=REPLAN_SCHEMA if replan else review_schema(candidate)),
                 )
                 turn_id = turn["turn"]["id"]
                 self.active[attempt["id"]] = (client, tid, turn_id)
                 value = await asyncio.wait_for(
-                    self.consume_events(queue, candidate, turn_id, attempt.get("event_log")),
+                    self.consume_events(queue, candidate, turn_id, attempt.get("event_log"), replan=replan),
                     trusted_review_policy["review_timeout"],
                 )
                 return dict(
                     value,
                     provider="codex",
                     model=result.get("model") or model,
-                    version=cap["version"],
+                    **({"provider_version": cap["version"]} if replan else {"version": cap["version"]}),
                     session=tid,
                     independence="new independent thread; may use same model as implementation",
                 )
@@ -575,7 +591,7 @@ class CodexProvider(ReviewProvider):
                 await client.close()
                 self.active.pop(attempt["id"], None)
 
-    async def consume_events(self, queue, candidate, turn_id, event_log=None):
+    async def consume_events(self, queue, candidate, turn_id, event_log=None, replan=False):
         text = ""
         event_bytes = 0
         while True:
@@ -615,7 +631,11 @@ class CodexProvider(ReviewProvider):
                     }.get(error.get("codexErrorInfo"), "unknown")
                     raise ProviderFailure(kind, "Codex reviewer did not complete")
                 try:
-                    return validate_result(structured_json(text), candidate)
+                    value = structured_json(text)
+                    if replan:
+                        from .replanning import validate_proposal
+                        return validate_proposal(value, candidate["replan_input"])
+                    return validate_result(value, candidate)
                 except (ValueError, RecursionError) as e:
                     raise ProviderFailure("invalid_output", str(e)) from None
 

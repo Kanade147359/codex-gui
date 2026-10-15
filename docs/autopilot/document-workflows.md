@@ -137,3 +137,6 @@ The controller probes executables, registered toolchains and dependencies before
 implementation/repair and again before formal validation. Infrastructure absence
 blocks without consuming a fix round; owner Resume retries after correction.
 There is no network/sandbox bypass or automatic installation/billing change.
+
+Goal IDs, four-axis review and independently proposed dynamic task graphs are
+covered in [Goal-aware review and replanning](goal-aware-replanning.md).
