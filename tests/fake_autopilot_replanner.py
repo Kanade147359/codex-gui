@@ -26,6 +26,14 @@ assert p["requirements"]["digest"] == p["candidate"]["requirements_digest"]
 assert p["plan"]["nodes"] and p["authority"]["policy"]["max_per_node"] == 1
 for doc in p["requirements"]["documents"]:
     assert (root / ".autopilot-inputs" / doc["name"]).read_bytes().decode() == doc["body"]
+if scenario.get("accepted_prerequisite"):
+    assert p["accepted_inputs"][0]["node"] == "P"
+    assert any(
+        d["name"] == "handoff/P/P.txt"
+        and d["body"] == "good\n"
+        and d["head_sha"] == p["accepted_inputs"][0]["head_sha"]
+        for d in p["requirements"]["documents"]
+    )
 if scenario.get("replan_error"):
     print(json.dumps(dict(fixture_error=scenario["replan_error"])))
     sys.exit(0)

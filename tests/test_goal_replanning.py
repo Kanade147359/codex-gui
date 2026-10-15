@@ -751,3 +751,48 @@ def test_completed_ordinary_diagnosis_replays_repair_without_another_model_call(
         await m.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_accepted_prerequisite_is_readable_to_replanner_and_managed_sandbox(
+    make_manager, counterexample_repo
+):
+    async def scenario():
+        m = make_manager()
+        ap = install_goals(m, accepted_prerequisite=True)
+        raw = root_plan(counterexample_repo)
+        raw["nodes"].insert(0, plan(counterexample_repo, ("P",))["nodes"][0])
+        c = next(n for n in raw["nodes"] if n["id"] == "C")
+        c["depends_on"] = ["P"]
+        c["validation"]["commands"].insert(
+            0,
+            [
+                "python3",
+                "-c",
+                "from pathlib import Path; assert Path('.autopilot-inputs/handoff/P/P.txt').read_text() == 'good\\n'",
+            ],
+        )
+        d = next(n for n in raw["nodes"] if n["id"] == "D")
+        d["validation"]["commands"].append(
+            [
+                "python3",
+                "-c",
+                "from pathlib import Path; refs=list(Path('.autopilot-inputs/handoff').rglob('C.txt')); assert len(refs)==1 and refs[0].read_text()=='good\\n'",
+            ]
+        )
+        wid = await register(ap, raw)
+        await drive(m, lambda: ap.ledger.get("workflows", wid)["state"] == "completed")
+        nodes = {n["name"]: n for n in ap.ledger.view(wid)["nodes"]}
+        assert nodes["R"]["inputs"][0]["candidate_id"] == nodes["P"]["candidate_id"]
+        for name in ("R", "D"):
+            evidence = nodes[name]["candidates"][-1]["validation"][-1]["payload"]
+            assert evidence["state"] == "PASS" and all(
+                check["exit_status"] == 0 for check in evidence["checks"]
+            )
+        analysis = nodes["C"]["replans"][0]["payload"]["packet"]
+        assert (
+            analysis["accepted_inputs"][0]["head_sha"]
+            == nodes["P"]["candidates"][-1]["payload"]["scope"]["head_sha"]
+        )
+        await m.shutdown()
+
+    asyncio.run(scenario())
