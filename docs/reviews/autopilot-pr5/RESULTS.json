@@ -3,12 +3,17 @@
   "reviewed_at": "2026-10-15T04:06:15.646188+00:00",
   "repository": "Kanade147359/codex-gui",
   "review_submission": {
-    "status": "PREPARED",
+    "status": "COMPLETE",
     "independent_session": true,
     "other_ai_started": false,
     "artifacts_only": true,
-    "draft_pr": null,
-    "meaning": "レビュー提出の完了。元タスク・PR #5の承認ではない。"
+    "draft_pr": "https://github.com/Kanade147359/codex-gui/pull/6",
+    "meaning": "レビュー提出の完了。元タスク・PR #5の承認ではない。",
+    "draft": true,
+    "branch": "codex-gui/b910d878-kanade147359-codex-gui",
+    "initial_artifact_commit": "c681bbd48113bed6cf7d8a13fa1df73e25bcb35e",
+    "submitted_at": "2026-10-15T04:10:13.531847+00:00",
+    "normal_push": true
   },
   "code_verdict": "CHANGES_REQUIRED",
   "target": {
@@ -31,7 +36,8 @@
       "docs/autopilot/provider-compatibility.md"
     ],
     "original_task_id": "dd40fc8f",
-    "original_task_match": "repository, dedicated worktree id, GUI git log d395d23/a5a9daa and semantic result URL PR #5; metadata branch is stale"
+    "original_task_match": "repository, dedicated worktree id, GUI git log d395d23/a5a9daa and semantic result URL PR #5; metadata branch is stale",
+    "final_observation": "PR #5 still open/Draft with fixed submitted HEAD and base after review Draft PR #6 creation"
   },
   "needs_review": {
     "status": "CONFIRMED",

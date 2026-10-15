@@ -1,6 +1,8 @@
 PR #5 独立レビュー結果（2026-10-15）
 
 **コード判定：CHANGES_REQUIRED。main統合前にP1の2件を修正する必要がある。**
+レビュー成果物を専用branchへcommit・通常pushし、[レビュー用Draft PR #6](https://github.com/Kanade147359/codex-gui/pull/6)として提出した。
+
 このレビュー作業は実装者とは別のGUIタスク `b910d878` の専用worktree・既存の新規Reviewerスレッドで完了した。他AIは起動していない。提出状態とレビュー用Draft PRは [RESULTS.json](RESULTS.json) の `review_submission` を参照。本レビューのSUCCESSは「レビュー提出完了」であり、元タスク、PR #5、稼働反映の承認ではない。
 
 対象は [PR #5](https://github.com/Kanade147359/codex-gui/pull/5)。baseを `12dabe5385f130383b00cd2609dd6bff7360d68f`、提出HEADを `d395d232807203813b5052ae0df9ab926690d180`、提出者の検証コードを `a5a9daad8dc4c99b00a6655e68044fdd52cba6bc` に固定した。開始時と追試後のGitHub読取結果は同じbase・HEADで、open/Draft、GitHub reviewは0件だった。別SHAへの対象変更はしていない。
