@@ -1,6 +1,11 @@
 # Provider compatibility — 2026-10-14
 
 Historical bootstrap record; current [document workflow compatibility](document-workflow-verification.md) includes bounded snapshot reads and prepared toolchain support.
+The [2026-10-15 goal/replanning record](verification/goal-aware-replanning/verification.json)
+adds installed-CLI review-v2 and replanner-schema smoke, adapter version separation,
+fresh analyst sessions, bounded snapshot reads, cancellation and shared quota checks.
+These use local scripted responses and isolated auth metadata, not real models or
+measured quota exhaustion. Operational model acceptance remains NOT_RUN.
 
 Tested code: `6040c605a4e2578be072b6d991590474b8cb7d5a`.
 

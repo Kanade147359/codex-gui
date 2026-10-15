@@ -11,6 +11,10 @@ permissions, opt in, then **Start**. Multiple Markdown files or a ZIP can also b
 See [Markdown workflows](document-workflows.md) for Draft planning, handoffs, owner
 decisions, partitioned reviews and offline validation environments. Input bodies
 are materialized inside each worker/snapshot and supplied to reviewers.
+See [goal-aware review and root-cause replanning](goal-aware-replanning.md) for
+versioned global goal assessments, bounded independent diagnosis, dynamic graph
+revisions and exact owner decisions. Its [verification record](verification/goal-aware-replanning/verification.json)
+separates fixture execution, installed-CLI checks and unrun real-model acceptance.
 See [personal profile](personal-profile.json) for a minimal example. Change its
 repository and required commands to your project. No empty code profile is allowed.
 
