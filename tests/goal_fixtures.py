@@ -54,7 +54,7 @@ def goal_fields(candidate, result):
         goal_assessment=assessment,
         diagnosis=dict(
             version=1,
-            classification="IMPLEMENTATION_DEFECT",
+            classification="IMPLEMENTATION_DEFECT" if result["blocking"] else "NO_ISSUE",
             finding_ids=[f["id"] for f in result["blocking"]],
             reproduction="Inspect fixed candidate and run the registered validation profile.",
             observed="The actual candidate and fixed requirement bodies were inspected.",

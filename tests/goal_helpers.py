@@ -46,6 +46,7 @@ class GoalReviewer(FixtureProvider):
                 )
                 result["goal_assessment"]["architectural_consistency"]["status"] = "VIOLATION"
             result["diagnosis"]["finding_ids"] = [identity]
+            result["diagnosis"]["classification"] = "IMPLEMENTATION_DEFECT"
         elif not result["blocking"]:
             result["resolved"] = candidate["payload"].get("unresolved", [])
         return result

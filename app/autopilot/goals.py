@@ -18,6 +18,7 @@ CLASSIFICATIONS = (
     "MISSING_PREREQUISITE",
     "ENVIRONMENT_FAILURE",
     "INCONCLUSIVE",
+    "NO_ISSUE",
 )
 ROOT_CAUSES = set(CLASSIFICATIONS[1:4])
 
@@ -191,6 +192,8 @@ def validate_diagnosis(value):
             raise ValueError("invalid root-cause evidence anchor")
     if value["classification"] in ROOT_CAUSES and (not value["finding_ids"] or not value["anchors"]):
         raise ValueError("premise errors require findings and anchored counterexamples")
+    if value["classification"] == "NO_ISSUE" and value["finding_ids"]:
+        raise ValueError("clean diagnosis cannot contain adverse findings")
     return value
 
 
@@ -256,6 +259,8 @@ def validate_review(value, candidate):
         if value["verdict"] == "APPROVE" and a["status"] != "MATCH":
             raise ValueError("goal violation/unknown cannot be approved")
     validate_diagnosis(value.get("diagnosis"))
+    if value["diagnosis"]["classification"] == "NO_ISSUE" and value["blocking"]:
+        raise ValueError("clean diagnosis cannot contradict blocking findings")
     if value["verdict"] == "APPROVE" and value["diagnosis"]["classification"] in ROOT_CAUSES | {
         "ENVIRONMENT_FAILURE",
         "INCONCLUSIVE",

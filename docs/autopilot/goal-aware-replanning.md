@@ -60,6 +60,7 @@ workflows retain their prior contract; they are not silently opted into new requ
 
 Review diagnoses distinguish IMPLEMENTATION_DEFECT, TASK_ASSUMPTION_FALSE,
 TASK_CONTRACT_CONFLICT, MISSING_PREREQUISITE, ENVIRONMENT_FAILURE and INCONCLUSIVE.
+Clean reviews use NO_ISSUE with no adverse finding IDs.
 Adverse premise diagnoses require reproduction, observed/expected results, rationale,
 finding IDs and exact evidence anchors. The controller verifies source quotes against
 tracked fixed snapshot files, requirement quotes against the frozen originals, and

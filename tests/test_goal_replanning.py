@@ -29,6 +29,7 @@ def test_goal_schema_rejects_legacy_unknown_and_mismatched_digest(make_manager, 
         node = ap.ledger.view(wid)["nodes"][0]
         c = node["candidates"][0]
         result = c["reviews"][-1]["payload"]
+        assert result["diagnosis"]["classification"] == "NO_ISSUE"
         assert c["payload"]["requirements"]["goal_index"]["declared"] == []
         assert result["goal_assessment"]["goal_alignment"]["status"] == "MATCH"
         assert "partially" in result["goal_assessment"]["goal_alignment"]["evidence"][0]["reason"]

@@ -42,7 +42,12 @@ def read(root, path, start=1, end=240):
     if len(text.encode()) > PAGE:
         raise ValueError("requested source range exceeds page size")
     return dict(
-        path=path, start=start, end=start + len(lines) - 1, text=text, eof=eof, digest=bytes_digest(text.encode())
+        path=path,
+        start=start,
+        end=start + len(lines) - 1,
+        text=text,
+        eof=eof,
+        digest=bytes_digest(text.encode()),
     )
 
 
@@ -81,7 +86,13 @@ async def partitions(candidate, root):
             pieces.append(pending)
         for i, text in enumerate(pieces):
             pages.append(
-                dict(path=path, segment=i + 1, segments=len(pieces), diff=text, digest=bytes_digest(text.encode()))
+                dict(
+                    path=path,
+                    segment=i + 1,
+                    segments=len(pieces),
+                    diff=text,
+                    digest=bytes_digest(text.encode()),
+                )
             )
     if len(pages) > MAX_PARTITIONS:
         raise ValueError("review partition budget exceeded")
@@ -271,7 +282,7 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
                         verdict="INCONCLUSIVE",
                         unverified=result["unverified"] + ["Unresolved goal axis: " + axis],
                     )
-        root = next(
+        root_diagnosis = next(
             (
                 entry["result"]["diagnosis"]
                 for entry in summaries
@@ -284,8 +295,24 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
             ),
             None,
         )
-        if root:
-            result["diagnosis"] = root
+        if root_diagnosis:
+            result["diagnosis"] = root_diagnosis
+        elif result["diagnosis"]["classification"] == "NO_ISSUE" and result["verdict"] != "APPROVE":
+            adverse = next(
+                (
+                    entry["result"]["diagnosis"]
+                    for entry in summaries
+                    if entry["result"]["diagnosis"]["classification"] != "NO_ISSUE"
+                ),
+                None,
+            )
+            result["diagnosis"] = adverse or dict(
+                result["diagnosis"],
+                classification="IMPLEMENTATION_DEFECT" if blocking else "INCONCLUSIVE",
+                finding_ids=list(blocking),
+                observed="Fixed partitions contain adverse or incomplete findings",
+                rationale="Overall clean diagnosis cannot override partition evidence",
+            )
     result["partition_evidence"] = [
         dict(
             index=i + 1,

@@ -119,6 +119,7 @@ A task may implement only its assigned slice of a workflow goal. Do not reject m
 Reject changes contradicting global prohibitions, invariants, architecture or the task acceptance even if local tests pass.
 Use only declared IDs from goal_index; free prose remains source text, never an inferred owner-approved goal.
 Classify findings with reproducible expected/observed evidence. An implementation bug is IMPLEMENTATION_DEFECT, not a premise error.
+A clean review uses NO_ISSUE with empty finding_ids, never INCONCLUSIVE merely because there is no defect to diagnose.
 For a replan_lineage, retain original documents and explicit acceptance. Only its recorded invalidated assumptions are hypotheses corrected by this plan; never waive COMMON, gates or required tests.
 Style preferences are nonblocking.
 Never promote an implementation's BLOCKED/PARTIAL/NEEDS_INPUT claim to SUCCESS. Same-model independent threads are not cross-model verification.

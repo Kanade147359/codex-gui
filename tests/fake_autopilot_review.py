@@ -107,6 +107,7 @@ elif provider == "claude" and (scenario.get("quota") or name == "B"):
         result["blocking"] = [
             dict(id="carry-forward", path=name + ".txt", line=1, reason="Retain finding before quota interruption")
         ]
+        result.update(goal_fields(candidate, result))
     print(json.dumps(dict(type="result", subtype="error_during_execution", is_error=True, structured_output=result)))
 else:
     print(
