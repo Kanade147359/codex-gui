@@ -12,6 +12,9 @@
     <label for="ap-base">Base ref</label><input id="ap-base" value="main">
     <label><input id="ap-import-commit" type="checkbox"> 担当範囲内の変更をcontrollerがcommitすることを許可</label>
     <label><input id="ap-import-billing" type="checkbox"> 所有者が両subscriptionの追加従量利用無効化を確認済み（自動検証不可）</label>
+    <label for="ap-import-replanning">根本原因の再計画policy</label>
+    <select id="ap-import-replanning"><option value="propose_only">propose_only — 案を保存し所有者判断を待つ</option><option value="off">off — 再計画しない</option><option value="auto_within_envelope">auto_within_envelope — 許可済み範囲だけ追加・実行</option></select>
+    <p>新タスクは最大3件・元タスクごとに1回・深さ1段。COMMON・受入条件・権限を自動変更しません。</p>
     <div id="ap-documents"></div><div id="ap-import-nodes"></div>
     <button id="ap-convert" disabled>編集内容をmanifestへ変換・Dry-run</button>
   </fieldset>

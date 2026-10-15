@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS ap_provider_availability (
 CREATE TABLE IF NOT EXISTS ap_decisions (
  id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES ap_nodes(id), target TEXT NOT NULL,
  state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(node_id,target));
+CREATE TABLE IF NOT EXISTS ap_replans (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ source_node TEXT NOT NULL UNIQUE REFERENCES ap_nodes(id), source_candidate TEXT NOT NULL REFERENCES ap_candidates(id),
+ state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_graph_revisions (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ replan_id TEXT NOT NULL UNIQUE REFERENCES ap_replans(id), source_node TEXT NOT NULL REFERENCES ap_nodes(id),
+ state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ap_plan_revisions (
  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
  source_candidate TEXT NOT NULL UNIQUE, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -103,6 +111,8 @@ class Ledger:
             "provider_availability",
             "decisions",
             "plan_revisions",
+            "replans",
+            "graph_revisions",
         }:
             raise ValueError("unknown ledger table")
         with self.db._lock:
@@ -221,7 +231,10 @@ class Ledger:
                         "SELECT count(*) FROM ap_nodes WHERE state IN ('launching','integrating') AND json_extract(spec,'$.kind')='integration'"
                     ).fetchone()[0]
                 else:
-                    count = c.execute("SELECT count(*) FROM ap_nodes WHERE state=?", (new,)).fetchone()[0]
+                    if new in ("reviewing", "replanning"):
+                        count = c.execute("SELECT count(*) FROM ap_nodes WHERE state IN ('reviewing','replanning')").fetchone()[0]
+                    else:
+                        count = c.execute("SELECT count(*) FROM ap_nodes WHERE state=?", (new,)).fetchone()[0]
                 if count >= limit:
                     return False
             return (
@@ -268,7 +281,7 @@ class Ledger:
                 return False
             w = unpack(c.execute("SELECT * FROM ap_workflows WHERE id=?", (n["workflow_id"],)).fetchone())
             r = unpack(c.execute("SELECT * FROM ap_reviews WHERE id=?", (review["id"],)).fetchone())
-            evidence = [unpack(x) for x in c.execute("SELECT * FROM ap_validation WHERE candidate_id=?", (cid,))]
+            evidence = [unpack(x) for x in c.execute("SELECT * FROM ap_validation WHERE candidate_id=? ORDER BY rowid", (cid,))]
             task = c.execute("SELECT * FROM tasks WHERE id=?", (n["task_id"],)).fetchone()
             if not w or not task:
                 return False
@@ -283,6 +296,13 @@ class Ledger:
                     (task["id"],),
                 )
             ]
+            from . import goals
+            try:
+                if not goals.required(cand):
+                    return False  # Historical v1 reviews cannot satisfy the new acceptance gate.
+                goals.validate(r["payload"] if r else {}, cand)
+            except (ValueError, KeyError, TypeError):
+                return False
             approved = (
                 r
                 and r["candidate_id"] == cid
@@ -319,6 +339,7 @@ class Ledger:
                 or r["payload"].get("unverified")
                 or not prior_findings <= set(r["payload"].get("resolved", []))
                 or not set(p.get("changed_paths", [])) <= set(r["payload"].get("coverage", []))
+                or not evidence or evidence[-1]["state"] != "PASS"
                 or not any(
                     e["state"] == "PASS"
                     and e["payload"].get("scope") == current_scope
@@ -405,4 +426,10 @@ class Ledger:
         revisions = self.rows("plan_revisions", "workflow_id=?", (workflow_id,))
         for revision in revisions:
             revision["decision_target"] = digest(revision["payload"])
-        return dict(**w, nodes=nodes, plan_revisions=revisions)
+        graphs = self.rows("graph_revisions", "workflow_id=?", (workflow_id,))
+        for revision in graphs:
+            revision["decision_target"] = digest(revision["payload"])
+        replans = self.rows("replans", "workflow_id=?", (workflow_id,))
+        return dict(**w, nodes=nodes, plan_revisions=revisions, graph_revisions=graphs, replans=replans,
+                    replanning_limits=dict(max_tasks=3, max_source_replans=1, max_depth=1,
+                                           remaining_nodes=200-len(nodes), used_sources=len(replans)))

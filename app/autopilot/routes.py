@@ -79,6 +79,24 @@ async def revision_decision(request: Request, identity: str, revision_id: str, b
         raise error(e)
 
 
+@router.post("/api/autopilot/workflows/{identity}/graph-revisions/{revision_id}/decision")
+async def graph_revision_decision(request: Request, identity: str, revision_id: str, body: dict):
+    from . import planning
+    ap = controller(request)
+    try:
+        r = ap.ledger.get("graph_revisions", revision_id)
+        if (not r or r["workflow_id"] != identity or body.get("owner_action") is not True
+            or body.get("action") not in ("approve", "reject")):
+            raise ValueError("explicit owner decision for this graph revision required")
+        planning.apply_graph(ap, r, expected=body["expected_target"],
+                             approve=body["action"] == "approve", reject=body["action"] == "reject",
+                             note=body.get("note", ""))
+        ap.manager.scheduler.wake()
+        return ap.ledger.view(identity)
+    except (ValueError, TypeError, KeyError) as e:
+        raise error(e)
+
+
 def controller(request):
     return request.app.state.manager.autopilot
 

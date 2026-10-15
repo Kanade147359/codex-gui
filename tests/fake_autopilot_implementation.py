@@ -70,6 +70,8 @@ if node in ("I1", "I2"):
         (root / "integration-fixed.txt").write_text("good\n")
     if synthetic and (not (root / ".git/MERGE_HEAD").exists()):
         (root / "wiring.py").write_text("def integrated():\n    return 'COMMON-OK'\n")
+elif bundle and bundle.get("node", "").startswith("R_"):
+    (root / "A.txt").write_text("good\n" + ("COMMON-OK\n" if synthetic else ""))
 elif node != "00":
     text = "bad\n" if node == "A" and not resume and not synthetic else "good\n"
     if synthetic and (node != "A" or resume):

@@ -27,7 +27,7 @@
       }
       for (const node of data.nodes) {
         const card = document.createElement('fieldset'); card.append(text('legend',node.id)); const fields = {};
-        for (const key of ['id','depends_on','paths','validation','manual_gates','draft','envelope','integration_mode']) {
+        for (const key of ['id','depends_on','paths','validation','manual_gates','draft','envelope','integration_mode','goal_ids','acceptance_ids']) {
           const input = document.createElement(key === 'validation' || key === 'envelope' ? 'textarea' : 'input');
           input.value = ['id','integration_mode'].includes(key) ? (node[key] || 'merge-only') : JSON.stringify(node[key] ?? (key === 'envelope' ? {} : []));
           input.setAttribute('aria-label',`${node.id} ${key}`); input.oninput = invalidate;
@@ -38,11 +38,12 @@
       el('ap-convert').disabled = false; el('ap-message').textContent = '取込済み。本文・依存・編集範囲・検証・承認条件を確認してください。未実行です。';
     } catch(e) {showError(e);}
   };
+  el('ap-import-replanning').onchange = invalidate;
   el('ap-convert').onclick = async () => {
     try {
       const inputs = Object.fromEntries(documentEditors.map(({name,area}) => [name,area.value]));
       const nodes = nodeEditors.map(({node,fields}) => ({...node,...Object.fromEntries(Object.entries(fields).map(([key,input]) => [key,['id','integration_mode'].includes(key) ? input.value : JSON.parse(input.value)]))}));
-      const result = await api('/api/autopilot/import/convert',{...imported,inputs,nodes,repository:el('ap-repository').value,base_ref:el('ap-base').value,permissions:{commit_owned_changes:el('ap-import-commit').checked,publish_main:false},policy:{extra_usage_disabled_confirmed:el('ap-import-billing').checked}});
+      const result = await api('/api/autopilot/import/convert',{...imported,inputs,nodes,repository:el('ap-repository').value,base_ref:el('ap-base').value,permissions:{commit_owned_changes:el('ap-import-commit').checked,publish_main:false},policy:{extra_usage_disabled_confirmed:el('ap-import-billing').checked,replanning:el('ap-import-replanning').value}});
       el('ap-manifest').value = JSON.stringify(result.manifest,null,2); preview = result.preview;
       el('ap-preview-result').textContent = JSON.stringify(preview,null,2); el('ap-start').disabled = false; el('ap-opt-in').checked = false;
     } catch(e) {showError(e);}
@@ -69,6 +70,48 @@
       }
       if (selected) {
         const w = await api(`/api/autopilot/workflows/${selected}`); el('ap-graph').replaceChildren();
+        el('ap-graph').append(text('h3','全体目標 / Goal-Aware Review'),
+          text('pre',JSON.stringify({goals:w.plan.goals || [], policy:w.plan.policy.replanning || 'propose_only', limits:w.replanning_limits},null,2)));
+        for (const revision of w.graph_revisions || []) {
+          const card = text('article',`新タスク生成 / 根本原因の再計画: ${revision.state}`);
+          const p = revision.payload;
+          card.append(text('p',`元タスク: ${p.source_node} / 新タスク: ${p.added.join(', ')}`),
+            text('pre',JSON.stringify({root_cause:p.proposal.analysis, tasks:p.proposal.tasks,
+              graph_before:p.before, graph_after:p.plan.nodes.map(n => ({id:n.id,depends_on:n.depends_on})),
+              requires_owner:[...p.expansions,...p.owner_changes], digest:revision.decision_target},null,2)));
+          const comparison = document.createElement('table');
+          const heading = document.createElement('tr');
+          for (const value of ['タスク','変更前の依存','変更後の依存']) heading.append(text('th',value));
+          comparison.append(heading);
+          const oldNodes = new Map(w.plan.nodes.map(n => [n.id,n]));
+          for (const [id,spec] of Object.entries(p.before)) oldNodes.set(id,spec);
+          for (const spec of p.plan.nodes) {
+            const row = document.createElement('tr');
+            row.append(text('td',p.added.includes(spec.id) ? `${spec.id} (新規)` : spec.id),
+              text('td',p.added.includes(spec.id) ? '—' : (oldNodes.get(spec.id)?.depends_on || []).join(', ')),
+              text('td',spec.depends_on.join(', '))); comparison.append(row);
+          }
+          card.append(comparison);
+          if (revision.state === 'awaiting_owner' && w.state !== 'stopped') {
+            const note = document.createElement('input'); note.placeholder = '所有者判断の理由';
+            note.setAttribute('aria-label','graph revision owner rationale');
+            const key = `graph:${revision.id}:${revision.decision_target}`; note.value = ownerNotes.get(key) || '';
+            note.oninput = () => ownerNotes.set(key,note.value); card.append(note);
+            for (const action of ['approve','reject']) {
+              const button = text('button',`Owner ${action} new tasks`);
+              button.disabled = action === 'approve' && p.owner_changes.length > 0;
+              button.onclick = async () => {try {
+                await api(`/api/autopilot/workflows/${selected}/graph-revisions/${revision.id}/decision`,
+                  {owner_action:true,expected_target:revision.decision_target,action,note:note.value}); await refresh();
+              } catch(e) {showError(e);}}; card.append(button);
+            }
+          }
+          el('ap-graph').append(card);
+        }
+        for (const replan of w.replans || []) {
+          const details = document.createElement('details'); details.append(text('summary',`独立Codex再分析: ${replan.state}`),
+            text('pre',JSON.stringify(replan,null,2))); el('ap-graph').append(details);
+        }
         for (const revision of w.plan_revisions || []) {
           const card = text('article',`計画revision: ${revision.state}`); card.append(text('pre',JSON.stringify(revision.payload,null,2)));
           if (revision.state === 'awaiting_owner') for (const action of ['approve','reject']) {
@@ -79,6 +122,11 @@
         for (const node of w.nodes) {
           const card = document.createElement('article'); card.className = 'ap-node';
           card.append(text('h3',`${node.name} (${node.spec.kind}) — ${node.state}`),text('p',node.reason),text('p',`依存: ${node.spec.depends_on.join(', ')} / 修正残: ${w.plan.policy.max_fix_rounds-node.fix_rounds}`));
+          card.append(text('p',`目標ID: ${(node.spec.goal_ids || []).join(', ')} / 受入ID: ${(node.spec.acceptance_ids || []).join(', ')} / 再計画残: ${node.spec.replan || (w.replans || []).some(r => r.source_node === node.id) ? 0 : 1}`));
+          for (const cand of node.candidates) for (const review of cand.reviews) {
+            if (review.payload.goal_review) card.append(text('h4',`個別レビュー / Goal Alignment: ${review.payload.verdict}`),
+              text('pre',JSON.stringify(review.payload.goal_review,null,2)));
+          }
           if (node.state === 'blocked_decision') {
             const note = document.createElement('input'); note.placeholder = '所有者判断の理由'; note.setAttribute('aria-label',`${node.name} owner rationale`);
             const noteKey = `${node.id}:${node.decision_target}`; note.value = ownerNotes.get(noteKey) || ''; note.oninput = () => ownerNotes.set(noteKey,note.value);

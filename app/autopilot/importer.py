@@ -75,6 +75,25 @@ def documents(uploads):
 def prepare(inputs):
     """Optional YAML front matter describes metadata; Markdown body stays in inputs."""
     common = [p for p in inputs if PurePosixPath(p).name.upper() == "COMMON.MD"]
+    goals = []
+    for name in common:
+        body = inputs[name]
+        if body.startswith("---\n"):
+            match = re.match(r"\A---\n(.*?)\n---(?:\n|$)", body, re.S)
+            if not match:
+                raise ValueError("unclosed COMMON front matter")
+            try:
+                metadata = yaml.safe_load(match[1]) or {}
+            except yaml.YAMLError as error:
+                raise ValueError("invalid COMMON metadata") from error
+            if not isinstance(metadata, dict) or set(metadata) - {"goals"}:
+                raise ValueError("COMMON metadata supports explicit goals only")
+            explicit = metadata.get("goals", [])
+            if not isinstance(explicit, list) or any(not isinstance(g, dict) or "source" in g for g in explicit):
+                raise ValueError("invalid explicit COMMON goals")
+            goals.extend(dict(g, source=name) for g in explicit)
+    from .goals import normalize_goals
+    normalize_goals(goals, inputs)
     nodes = []
     for name, body in inputs.items():
         if name in common:
@@ -104,6 +123,8 @@ def prepare(inputs):
             "plan_artifact",
             "handoff",
             "review_files",
+            "goal_ids",
+            "acceptance_ids",
         }
         if set(meta) - allowed:
             raise ValueError("unknown task metadata")
@@ -119,7 +140,7 @@ def prepare(inputs):
         nodes.append(node)
     if not nodes:
         raise ValueError("at least one task instruction is required")
-    return dict(version=1, inputs=inputs, nodes=nodes, document_digest=digest(inputs), common=common)
+    return dict(version=1, inputs=inputs, nodes=nodes, document_digest=digest(inputs), common=common, goals=goals)
 
 
 def convert(body):
@@ -137,6 +158,7 @@ def convert(body):
         repository=body["repository"],
         base_ref=body.get("base_ref", "main"),
         inputs=inputs,
+        goals=body.get("goals", []),
         nodes=nodes,
         policy=body.get("policy", {}),
         permissions=body.get("permissions", {}),

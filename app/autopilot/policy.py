@@ -19,6 +19,7 @@ def input_digest(node, workflow):
         dict(
             dependencies=node["inputs"],
             bundle=workflow["plan"]["inputs"],
+            goals=workflow["plan"].get("goals", []),
             spec=node["spec"],
             rules=workflow["plan"].get("rules", {}),
         )
@@ -111,6 +112,7 @@ def manifest(value):
         "permissions",
         "inputs",
         "idempotency_key",
+        "goals",
     }:
         raise ValueError("invalid workflow manifest")
     if value.get("version") != 1:
@@ -132,6 +134,7 @@ def manifest(value):
         "automatic_acceptance",
         "review_timeout",
         "provider_backoff",
+        "replanning",
     }
     if set(policy) - allowed:
         raise ValueError("unknown policy fields")
@@ -160,6 +163,11 @@ def manifest(value):
         policy.setdefault(key, default)
         if type(policy[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
+    replanning = policy.setdefault("replanning", "propose_only")
+    if replanning not in ("off", "propose_only", "auto_within_envelope"):
+        raise ValueError("invalid replanning mode")
+    from .goals import normalize_goals
+    goals = normalize_goals(value.get("goals", []), value.get("inputs", {}))
     permissions = dict(value.get("permissions", {}))
     if set(permissions) - {"commit_owned_changes", "publish_main"}:
         raise ValueError("deploy, restart and billing permissions are outside Autopilot")
@@ -197,12 +205,26 @@ def manifest(value):
             "plan_artifact",
             "handoff",
             "review_files",
+            "goal_ids",
+            "acceptance_ids",
+            "replan",
         }:
             raise ValueError("invalid node fields")
         n = dict(raw)
         nid = n.get("id", "")
         if not isinstance(nid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", nid) or nid in by_id:
             raise ValueError("invalid or duplicate node id")
+        for key in ("goal_ids", "acceptance_ids"):
+            n.setdefault(key, [])
+            if not isinstance(n[key], list) or any(not isinstance(x, str) or not x for x in n[key]):
+                raise ValueError("invalid goal/acceptance references")
+        if set(n["goal_ids"]) - {g["id"] for g in goals}:
+            raise ValueError("unknown explicit goal ID")
+        lineage = n.get("replan")
+        if lineage is not None and (not isinstance(lineage, dict) or set(lineage) != {"parent", "depth", "revision"}
+                                    or lineage["depth"] != 1 or not isinstance(lineage["parent"], str)
+                                    or not isinstance(lineage["revision"], str)):
+            raise ValueError("invalid dynamic node lineage")
         n.setdefault("kind", "code")
         if n["kind"] not in ("code", "report", "integration"):
             raise ValueError("unknown artifact kind")
@@ -284,7 +306,9 @@ def manifest(value):
         if n["kind"] == "integration" and not code_parents:
             raise ValueError("integration requires accepted code inputs")
         for other in order[: order.index(nid)]:
-            if other in ancestors[nid] or by_id[other]["kind"] == "integration" or n["kind"] == "integration":
+            if (other in ancestors[nid] or by_id[other]["kind"] == "integration" or n["kind"] == "integration"
+                or n.get("replan", {}).get("parent") == other
+                or by_id[other].get("replan", {}).get("parent") == nid):
                 continue
             if any(
                 owns(p, by_id[other]["paths"]) or owns(q, n["paths"]) for p in n["paths"] for q in by_id[other]["paths"]
@@ -314,5 +338,6 @@ def manifest(value):
         policy=policy,
         permissions=permissions,
         inputs=inputs,
+        goals=goals,
         idempotency_key=request_key,
     )
