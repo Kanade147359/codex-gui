@@ -1,0 +1,25 @@
+Tested code: 654244a65dd30c0c670377005207e0d330db048d
+Stack base: d395d232807203813b5052ae0df9ab926690d180
+
+Focused Autopilot / goal / replanning / API / document / toolchain suites:
+90 passed, 1 skipped, 2 warnings in 39.78s
+
+Isolated localhost Chromium browser E2E:
+3 passed, 1 warning in 25.77s
+
+Installed Codex CLI 0.159.2; local scripted endpoint; no real model usage:
+4 passed in 2.86s
+
+Full repository, pinned implementation SHA:
+3 failed, 823 passed, 32 skipped, 2 warnings in 140.84s
+
+Failures (all reproduced at the stack base in a separate /tmp checkout):
+FAILED tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded
+FAILED tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model
+FAILED tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap
+Base test_ctx_e2e.py: 2 failed, 4 passed in 6.80s
+Base failing test_ctx_integration case: 1 failed in 4.18s
+
+Syntax and whitespace checks: PASS
+Production GUI / DB / main / existing tasks / PR #5: not modified
+Real subscription model implementation/review/replanner: NOT RUN

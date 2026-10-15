@@ -1,0 +1,1146 @@
+{
+  "version": 1,
+  "tested_code_sha": "654244a65dd30c0c670377005207e0d330db048d",
+  "base_sha": "d395d232807203813b5052ae0df9ab926690d180",
+  "method": "Real GUI API, SQLite, Git, TaskManager and bubblewrap validation; fixture implementation/review/replanner subprocesses",
+  "real_model_executed": false,
+  "workflow_state": "completed",
+  "policy": {
+    "account": "personal",
+    "automatic_acceptance": true,
+    "bucket": "included",
+    "claude_model": "",
+    "codex_model": "",
+    "extra_usage_disabled_confirmed": true,
+    "implementation_slots": 3,
+    "infra_retries": 2,
+    "integration_slots": 1,
+    "max_fix_rounds": 3,
+    "no_progress_limit": 2,
+    "provider_backoff": 1,
+    "replanning": "auto_within_envelope",
+    "review_slots": 1,
+    "review_timeout": 600,
+    "validator_slots": 1
+  },
+  "goals": [
+    {
+      "id": "G-adapter",
+      "kind": "goal",
+      "source": "COMMON.md",
+      "text": "Use adapter-v2."
+    }
+  ],
+  "nodes": [
+    {
+      "name": "A",
+      "state": "superseded",
+      "depends_on": [],
+      "inputs": [],
+      "goal_ids": [
+        "G-adapter"
+      ],
+      "acceptance_ids": [
+        "AC-A"
+      ],
+      "fix_rounds": 1,
+      "operations": [
+        {
+          "created_at": "2026-10-15T10:26:00Z",
+          "generation": 1,
+          "id": "75fb2f5905ca4955a5a37ad234cb3a91",
+          "kind": "fix",
+          "node_id": "addecc711fde46558f83f9989d861a91:A",
+          "payload": {
+            "candidate_id": "bf62eec77a574760a46a6315192f0d28",
+            "finished_at": "2026-10-15T10:26:00Z",
+            "implementation_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            },
+            "prompt_digest": "7278d38ec5c3124e59a4ec7933706f8fb82c58d86a43029b10c5c6cc459df631",
+            "thread": "implementation-ba47b5d646db4d1fa2660641a440dadd"
+          },
+          "state": "completed"
+        }
+      ],
+      "candidates": [
+        {
+          "id": "bf62eec77a574760a46a6315192f0d28",
+          "state": "submitted",
+          "generation": 1,
+          "scope": {
+            "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+            "diff_digest": "ea39b8c75eefba25aaf89aaa31af4252a5f1d701a0af090ca06db05ee3fe3be6",
+            "head_sha": "c9e3788f9a23760b4409f7c76adfef8a8ab2fbd8",
+            "tree_sha": "c997edf1b4f3fec04adb604a8382e8d2c0ace09b"
+          },
+          "requirements_digest": "f3d44181f50f52aa48db8a06fcaab79f97f57f55ec1260c3c7649400818e085a",
+          "validation": [
+            {
+              "candidate_id": "bf62eec77a574760a46a6315192f0d28",
+              "created_at": "2026-10-15T10:26:00Z",
+              "id": "357f1d19f9a24c00be92c1a843c30d21",
+              "payload": {
+                "checks": [
+                  {
+                    "artifact": "A.txt",
+                    "exit_status": 0
+                  },
+                  {
+                    "command": [
+                      "python3",
+                      "-c",
+                      "from pathlib import Path; assert Path('A.txt').exists()"
+                    ],
+                    "command_digest": "ae831f9b01ef3849856b67522d76261b2d84c04f4331c444838093cacbe5aa2c",
+                    "excerpt": "",
+                    "exit_status": 0,
+                    "finished_at": 1792059960.540207,
+                    "log": "/tmp/codex-goals-final-tests/test_api_auto_replan_executes_0/home/autopilot/logs/357f1d19f9a24c00be92c1a843c30d21/0.log",
+                    "started_at": 1792059960.5224664,
+                    "timed_out": false
+                  }
+                ],
+                "environment": "bwrap:allowlisted-runtime;network=off;source=read-only",
+                "environment_preflight": [
+                  {
+                    "command_digest": "b14f4adb5eede965f617a7825effb3ae9cef753e6c18e4a5fa243bb540f2384d",
+                    "exit_status": 0,
+                    "output": ""
+                  },
+                  {
+                    "command_digest": "622800edecf4eb899e28a62530f3432c775070f62ee877f45ba55915526a28e1",
+                    "exit_status": 0,
+                    "output": "Python 3.14.4\n"
+                  }
+                ],
+                "finished_at": 1792059960.5402718,
+                "profile_digest": "c3977233e404a34dbc7d1e4c40581e98482916c1b86f2f480823b9760bdc261d",
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "ea39b8c75eefba25aaf89aaa31af4252a5f1d701a0af090ca06db05ee3fe3be6",
+                  "head_sha": "c9e3788f9a23760b4409f7c76adfef8a8ab2fbd8",
+                  "tree_sha": "c997edf1b4f3fec04adb604a8382e8d2c0ace09b"
+                },
+                "started_at": 1792059960.522342,
+                "state": "PASS"
+              },
+              "state": "PASS"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "29ba66a512744982b6a20bd6b2c41dfa",
+              "state": "completed",
+              "provider": "claude",
+              "result": {
+                "candidate_id": "bf62eec77a574760a46a6315192f0d28",
+                "run_generation": 1,
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "ea39b8c75eefba25aaf89aaa31af4252a5f1d701a0af090ca06db05ee3fe3be6",
+                  "head_sha": "c9e3788f9a23760b4409f7c76adfef8a8ab2fbd8",
+                  "tree_sha": "c997edf1b4f3fec04adb604a8382e8d2c0ace09b"
+                },
+                "verdict": "CHANGES_REQUESTED",
+                "session": "review-e82ce14c3daf406e9e0bebc93cc549bb",
+                "model": "fake",
+                "version": "synthetic fixture",
+                "goal_review": {
+                  "assessments": {
+                    "architectural_consistency": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "evidence_completeness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "goal_alignment": {
+                      "evidence": "COMMON.md alone requires COMMON-OK; implementation omitted it",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "VIOLATION"
+                    },
+                    "task_correctness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    }
+                  },
+                  "requirements_digest": "f3d44181f50f52aa48db8a06fcaab79f97f57f55ec1260c3c7649400818e085a",
+                  "root_causes": [
+                    {
+                      "classification": "IMPLEMENTATION_DEFECT",
+                      "counterexample": "COMMON.md alone requires COMMON-OK; implementation omitted it",
+                      "evidence_refs": [
+                        "snapshot:A.txt:1"
+                      ],
+                      "expected": "Deliverable satisfies the fixed task and COMMON requirements",
+                      "finding_id": "COMMON-required",
+                      "observed": "COMMON.md alone requires COMMON-OK; implementation omitted it",
+                      "reproduction": "Inspect the pinned diff and deliverable against the original contract",
+                      "requirement_refs": [
+                        "task:contract"
+                      ]
+                    }
+                  ],
+                  "version": 2
+                },
+                "blocking": [
+                  {
+                    "id": "COMMON-required",
+                    "line": 1,
+                    "path": "A.txt",
+                    "reason": "COMMON.md alone requires COMMON-OK; implementation omitted it"
+                  }
+                ],
+                "resolved": [],
+                "unverified": [],
+                "coverage": [
+                  "A.txt"
+                ],
+                "partition_evidence": null
+              }
+            }
+          ],
+          "accepted": false
+        },
+        {
+          "id": "fb1136dfc127459a81377f69113fbdcb",
+          "state": "submitted",
+          "generation": 2,
+          "scope": {
+            "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+            "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+            "head_sha": "fe591a16dc07120ea886c9decdb8539d102be888",
+            "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+          },
+          "requirements_digest": "f3d44181f50f52aa48db8a06fcaab79f97f57f55ec1260c3c7649400818e085a",
+          "validation": [
+            {
+              "candidate_id": "fb1136dfc127459a81377f69113fbdcb",
+              "created_at": "2026-10-15T10:26:00Z",
+              "id": "19fcc71261de4f1287545641da97652a",
+              "payload": {
+                "checks": [
+                  {
+                    "artifact": "A.txt",
+                    "exit_status": 0
+                  },
+                  {
+                    "command": [
+                      "python3",
+                      "-c",
+                      "from pathlib import Path; assert Path('A.txt').exists()"
+                    ],
+                    "command_digest": "ae831f9b01ef3849856b67522d76261b2d84c04f4331c444838093cacbe5aa2c",
+                    "excerpt": "",
+                    "exit_status": 0,
+                    "finished_at": 1792059960.7515087,
+                    "log": "/tmp/codex-goals-final-tests/test_api_auto_replan_executes_0/home/autopilot/logs/19fcc71261de4f1287545641da97652a/0.log",
+                    "started_at": 1792059960.7319303,
+                    "timed_out": false
+                  }
+                ],
+                "environment": "bwrap:allowlisted-runtime;network=off;source=read-only",
+                "environment_preflight": [
+                  {
+                    "command_digest": "b14f4adb5eede965f617a7825effb3ae9cef753e6c18e4a5fa243bb540f2384d",
+                    "exit_status": 0,
+                    "output": ""
+                  },
+                  {
+                    "command_digest": "622800edecf4eb899e28a62530f3432c775070f62ee877f45ba55915526a28e1",
+                    "exit_status": 0,
+                    "output": "Python 3.14.4\n"
+                  }
+                ],
+                "finished_at": 1792059960.7515812,
+                "profile_digest": "c3977233e404a34dbc7d1e4c40581e98482916c1b86f2f480823b9760bdc261d",
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+                  "head_sha": "fe591a16dc07120ea886c9decdb8539d102be888",
+                  "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+                },
+                "started_at": 1792059960.7318015,
+                "state": "PASS"
+              },
+              "state": "PASS"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "1333603e93da4918bea2ed03500de1bd",
+              "state": "completed",
+              "provider": "claude",
+              "result": {
+                "candidate_id": "fb1136dfc127459a81377f69113fbdcb",
+                "run_generation": 1,
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+                  "head_sha": "fe591a16dc07120ea886c9decdb8539d102be888",
+                  "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+                },
+                "verdict": "CHANGES_REQUESTED",
+                "session": "review-728f7d64a57d44349ee0b61b95b01ba1",
+                "model": "fake",
+                "version": "synthetic fixture",
+                "goal_review": {
+                  "assessments": {
+                    "architectural_consistency": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "evidence_completeness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "goal_alignment": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "task_correctness": {
+                      "evidence": "capability.txt:1 contradicts task assumption",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "VIOLATION"
+                    }
+                  },
+                  "requirements_digest": "f3d44181f50f52aa48db8a06fcaab79f97f57f55ec1260c3c7649400818e085a",
+                  "root_causes": [
+                    {
+                      "classification": "TASK_ASSUMPTION_FALSE",
+                      "counterexample": "capability.txt:1 declares adapter-v2 only",
+                      "evidence_refs": [
+                        "snapshot:capability.txt:1"
+                      ],
+                      "expected": "The original task assumes adapter-v1 is available",
+                      "finding_id": "false-adapter",
+                      "observed": "adapter-v2 only",
+                      "reproduction": "Read capability.txt in the pinned candidate snapshot",
+                      "requirement_refs": [
+                        "documents/A.md"
+                      ]
+                    }
+                  ],
+                  "version": 2
+                },
+                "blocking": [
+                  {
+                    "id": "false-adapter",
+                    "line": 1,
+                    "path": "capability.txt",
+                    "reason": "Task assumes adapter-v1; the pinned repository supports only adapter-v2"
+                  }
+                ],
+                "resolved": [
+                  "COMMON-required"
+                ],
+                "unverified": [],
+                "coverage": [
+                  "A.txt"
+                ],
+                "partition_evidence": null
+              }
+            }
+          ],
+          "accepted": false
+        }
+      ]
+    },
+    {
+      "name": "C",
+      "state": "accepted",
+      "depends_on": [
+        "R_adapter"
+      ],
+      "inputs": [
+        {
+          "candidate_id": "0d8eddc18e3b410e942bd4d1397d42f9",
+          "head_sha": "b44ffe3d4a6c86b886dffabf44303b5ef56a0146",
+          "kind": "code",
+          "node": "R_adapter"
+        }
+      ],
+      "goal_ids": [
+        "G-adapter"
+      ],
+      "acceptance_ids": [
+        "AC-C"
+      ],
+      "fix_rounds": 0,
+      "operations": [],
+      "candidates": [
+        {
+          "id": "b776146592c144ae93a6b8a398a1144e",
+          "state": "accepted",
+          "generation": 1,
+          "scope": {
+            "base_sha": "b44ffe3d4a6c86b886dffabf44303b5ef56a0146",
+            "diff_digest": "13c5a1b9683751fb10d3e3aebc434f33cea723d8ec1c222d985df2e9ccc90702",
+            "head_sha": "03da5a9934c3b04ae293a7b19f7d6c3a6b2f87ed",
+            "tree_sha": "b076983d6b2dcde757847dfcd414e38c1d8d7d1d"
+          },
+          "requirements_digest": "3d82b91eb937a8f5c61a03526915b26628699a90cd3e8048dee4befc72ea68ca",
+          "validation": [
+            {
+              "candidate_id": "b776146592c144ae93a6b8a398a1144e",
+              "created_at": "2026-10-15T10:26:01Z",
+              "id": "0fe7018125c449fc9ad4c0035f5e55db",
+              "payload": {
+                "checks": [
+                  {
+                    "artifact": "C.txt",
+                    "exit_status": 0
+                  },
+                  {
+                    "command": [
+                      "python3",
+                      "-c",
+                      "from pathlib import Path; assert Path('C.txt').exists()"
+                    ],
+                    "command_digest": "bd4c0b1909756c82f5c64e62cd9bc6bad74c258cc3b36b9ea0868290acdda237",
+                    "excerpt": "",
+                    "exit_status": 0,
+                    "finished_at": 1792059961.287247,
+                    "log": "/tmp/codex-goals-final-tests/test_api_auto_replan_executes_0/home/autopilot/logs/0fe7018125c449fc9ad4c0035f5e55db/0.log",
+                    "started_at": 1792059961.2686024,
+                    "timed_out": false
+                  }
+                ],
+                "environment": "bwrap:allowlisted-runtime;network=off;source=read-only",
+                "environment_preflight": [
+                  {
+                    "command_digest": "b14f4adb5eede965f617a7825effb3ae9cef753e6c18e4a5fa243bb540f2384d",
+                    "exit_status": 0,
+                    "output": ""
+                  },
+                  {
+                    "command_digest": "622800edecf4eb899e28a62530f3432c775070f62ee877f45ba55915526a28e1",
+                    "exit_status": 0,
+                    "output": "Python 3.14.4\n"
+                  }
+                ],
+                "finished_at": 1792059961.2873847,
+                "profile_digest": "f7f89592113862350385b156666028f5e1c3dce409114d29345aaef299ae5058",
+                "scope": {
+                  "base_sha": "b44ffe3d4a6c86b886dffabf44303b5ef56a0146",
+                  "diff_digest": "13c5a1b9683751fb10d3e3aebc434f33cea723d8ec1c222d985df2e9ccc90702",
+                  "head_sha": "03da5a9934c3b04ae293a7b19f7d6c3a6b2f87ed",
+                  "tree_sha": "b076983d6b2dcde757847dfcd414e38c1d8d7d1d"
+                },
+                "started_at": 1792059961.2684596,
+                "state": "PASS"
+              },
+              "state": "PASS"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "d0e53842f15b4d6d97c6496b9c5de317",
+              "state": "completed",
+              "provider": "claude",
+              "result": {
+                "candidate_id": "b776146592c144ae93a6b8a398a1144e",
+                "run_generation": 1,
+                "scope": {
+                  "base_sha": "b44ffe3d4a6c86b886dffabf44303b5ef56a0146",
+                  "diff_digest": "13c5a1b9683751fb10d3e3aebc434f33cea723d8ec1c222d985df2e9ccc90702",
+                  "head_sha": "03da5a9934c3b04ae293a7b19f7d6c3a6b2f87ed",
+                  "tree_sha": "b076983d6b2dcde757847dfcd414e38c1d8d7d1d"
+                },
+                "verdict": "APPROVE",
+                "session": "review-a30281767db84ec4b2eac9a4e0993a69",
+                "model": "fake",
+                "version": "synthetic fixture",
+                "goal_review": {
+                  "assessments": {
+                    "architectural_consistency": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "evidence_completeness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "goal_alignment": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "task_correctness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    }
+                  },
+                  "requirements_digest": "3d82b91eb937a8f5c61a03526915b26628699a90cd3e8048dee4befc72ea68ca",
+                  "root_causes": [],
+                  "version": 2
+                },
+                "blocking": [],
+                "resolved": [],
+                "unverified": [],
+                "coverage": [
+                  "C.txt"
+                ],
+                "partition_evidence": null
+              }
+            }
+          ],
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "name": "X",
+      "state": "accepted",
+      "depends_on": [],
+      "inputs": [],
+      "goal_ids": [
+        "G-adapter"
+      ],
+      "acceptance_ids": [
+        "AC-X"
+      ],
+      "fix_rounds": 0,
+      "operations": [],
+      "candidates": [
+        {
+          "id": "87f7f12b5eab4b6fbfdf3734a9fdd5a7",
+          "state": "accepted",
+          "generation": 1,
+          "scope": {
+            "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+            "diff_digest": "bf41ae955c63c22e31ca3b640186e7be1ea4a7f96f60a3f06837ff1af80268c7",
+            "head_sha": "24addd8d0e63a73750dc7cd64283c2fe3f1fa4b3",
+            "tree_sha": "c6405952e2be29069cf0c04a40eb89951fe1635c"
+          },
+          "requirements_digest": "07735e546e832fa23e9e3256f348c5a2c8d179bf2d1cf921e47cfe2baab059f2",
+          "validation": [
+            {
+              "candidate_id": "87f7f12b5eab4b6fbfdf3734a9fdd5a7",
+              "created_at": "2026-10-15T10:26:00Z",
+              "id": "32b9cc0ad15b40d881f5c7970706e0a1",
+              "payload": {
+                "checks": [
+                  {
+                    "artifact": "X.txt",
+                    "exit_status": 0
+                  },
+                  {
+                    "command": [
+                      "python3",
+                      "-c",
+                      "from pathlib import Path; assert Path('X.txt').exists()"
+                    ],
+                    "command_digest": "c3fae83e3eae5037cf7555ff5f4ceda0b7b181bc6c77ca6540484a6696188aae",
+                    "excerpt": "",
+                    "exit_status": 0,
+                    "finished_at": 1792059960.5971563,
+                    "log": "/tmp/codex-goals-final-tests/test_api_auto_replan_executes_0/home/autopilot/logs/32b9cc0ad15b40d881f5c7970706e0a1/0.log",
+                    "started_at": 1792059960.5797462,
+                    "timed_out": false
+                  }
+                ],
+                "environment": "bwrap:allowlisted-runtime;network=off;source=read-only",
+                "environment_preflight": [
+                  {
+                    "command_digest": "b14f4adb5eede965f617a7825effb3ae9cef753e6c18e4a5fa243bb540f2384d",
+                    "exit_status": 0,
+                    "output": ""
+                  },
+                  {
+                    "command_digest": "622800edecf4eb899e28a62530f3432c775070f62ee877f45ba55915526a28e1",
+                    "exit_status": 0,
+                    "output": "Python 3.14.4\n"
+                  }
+                ],
+                "finished_at": 1792059960.5972085,
+                "profile_digest": "28f72fc32610c4b08ab71969f5d3707e491a0cb29f539fdc9cec81a1d62aad4a",
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "bf41ae955c63c22e31ca3b640186e7be1ea4a7f96f60a3f06837ff1af80268c7",
+                  "head_sha": "24addd8d0e63a73750dc7cd64283c2fe3f1fa4b3",
+                  "tree_sha": "c6405952e2be29069cf0c04a40eb89951fe1635c"
+                },
+                "started_at": 1792059960.5796065,
+                "state": "PASS"
+              },
+              "state": "PASS"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "105e1ca701084524814821cef52df644",
+              "state": "completed",
+              "provider": "claude",
+              "result": {
+                "candidate_id": "87f7f12b5eab4b6fbfdf3734a9fdd5a7",
+                "run_generation": 1,
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "bf41ae955c63c22e31ca3b640186e7be1ea4a7f96f60a3f06837ff1af80268c7",
+                  "head_sha": "24addd8d0e63a73750dc7cd64283c2fe3f1fa4b3",
+                  "tree_sha": "c6405952e2be29069cf0c04a40eb89951fe1635c"
+                },
+                "verdict": "APPROVE",
+                "session": "review-7c79e6fdbe3d42c0b7911835513f365b",
+                "model": "fake",
+                "version": "synthetic fixture",
+                "goal_review": {
+                  "assessments": {
+                    "architectural_consistency": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "evidence_completeness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "goal_alignment": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "task_correctness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    }
+                  },
+                  "requirements_digest": "07735e546e832fa23e9e3256f348c5a2c8d179bf2d1cf921e47cfe2baab059f2",
+                  "root_causes": [],
+                  "version": 2
+                },
+                "blocking": [],
+                "resolved": [],
+                "unverified": [],
+                "coverage": [
+                  "X.txt"
+                ],
+                "partition_evidence": null
+              }
+            }
+          ],
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "name": "R_adapter",
+      "state": "accepted",
+      "depends_on": [],
+      "inputs": [],
+      "goal_ids": [
+        "G-adapter"
+      ],
+      "acceptance_ids": [
+        "AC-A"
+      ],
+      "fix_rounds": 0,
+      "operations": [],
+      "candidates": [
+        {
+          "id": "0d8eddc18e3b410e942bd4d1397d42f9",
+          "state": "accepted",
+          "generation": 1,
+          "scope": {
+            "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+            "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+            "head_sha": "b44ffe3d4a6c86b886dffabf44303b5ef56a0146",
+            "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+          },
+          "requirements_digest": "973ef44b8d5799fe1f77e1a98ed65bf762f020c6823ed3d189db031e8acc4ffc",
+          "validation": [
+            {
+              "candidate_id": "0d8eddc18e3b410e942bd4d1397d42f9",
+              "created_at": "2026-10-15T10:26:00Z",
+              "id": "b5bcb7ad89ec40b09d101ecde4d4be7a",
+              "payload": {
+                "checks": [
+                  {
+                    "artifact": "A.txt",
+                    "exit_status": 0
+                  },
+                  {
+                    "command": [
+                      "python3",
+                      "-c",
+                      "from pathlib import Path; assert Path('A.txt').exists()"
+                    ],
+                    "command_digest": "ae831f9b01ef3849856b67522d76261b2d84c04f4331c444838093cacbe5aa2c",
+                    "excerpt": "",
+                    "exit_status": 0,
+                    "finished_at": 1792059961.023696,
+                    "log": "/tmp/codex-goals-final-tests/test_api_auto_replan_executes_0/home/autopilot/logs/b5bcb7ad89ec40b09d101ecde4d4be7a/0.log",
+                    "started_at": 1792059961.005037,
+                    "timed_out": false
+                  }
+                ],
+                "environment": "bwrap:allowlisted-runtime;network=off;source=read-only",
+                "environment_preflight": [
+                  {
+                    "command_digest": "b14f4adb5eede965f617a7825effb3ae9cef753e6c18e4a5fa243bb540f2384d",
+                    "exit_status": 0,
+                    "output": ""
+                  },
+                  {
+                    "command_digest": "622800edecf4eb899e28a62530f3432c775070f62ee877f45ba55915526a28e1",
+                    "exit_status": 0,
+                    "output": "Python 3.14.4\n"
+                  }
+                ],
+                "finished_at": 1792059961.0237622,
+                "profile_digest": "c3977233e404a34dbc7d1e4c40581e98482916c1b86f2f480823b9760bdc261d",
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+                  "head_sha": "b44ffe3d4a6c86b886dffabf44303b5ef56a0146",
+                  "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+                },
+                "started_at": 1792059961.004901,
+                "state": "PASS"
+              },
+              "state": "PASS"
+            }
+          ],
+          "reviews": [
+            {
+              "id": "9991a3fa07154b85aa12bd72a8cdae33",
+              "state": "completed",
+              "provider": "claude",
+              "result": {
+                "candidate_id": "0d8eddc18e3b410e942bd4d1397d42f9",
+                "run_generation": 1,
+                "scope": {
+                  "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+                  "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+                  "head_sha": "b44ffe3d4a6c86b886dffabf44303b5ef56a0146",
+                  "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+                },
+                "verdict": "APPROVE",
+                "session": "review-cc9a465a159746a08a76ccac5004b417",
+                "model": "fake",
+                "version": "synthetic fixture",
+                "goal_review": {
+                  "assessments": {
+                    "architectural_consistency": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "evidence_completeness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "goal_alignment": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    },
+                    "task_correctness": {
+                      "evidence": "Inspected fixed COMMON/rules and partition against task contract; partial goal delivery is allowed.",
+                      "goal_ids": [
+                        "G-adapter"
+                      ],
+                      "status": "ALIGNED"
+                    }
+                  },
+                  "requirements_digest": "973ef44b8d5799fe1f77e1a98ed65bf762f020c6823ed3d189db031e8acc4ffc",
+                  "root_causes": [],
+                  "version": 2
+                },
+                "blocking": [],
+                "resolved": [],
+                "unverified": [],
+                "coverage": [
+                  "A.txt"
+                ],
+                "partition_evidence": null
+              }
+            }
+          ],
+          "accepted": true
+        }
+      ]
+    }
+  ],
+  "graph_revisions": [
+    {
+      "state": "applied",
+      "decision_target": "b7cce38c6809455a4e376d3e2c11e5ae4b92f815104671d976586baddef6f1a5",
+      "added": [
+        "R_adapter"
+      ],
+      "before": {
+        "C": {
+          "acceptance_ids": [
+            "AC-C"
+          ],
+          "contract": {},
+          "depends_on": [
+            "A"
+          ],
+          "draft": false,
+          "envelope": {
+            "paths": [
+              "C.txt"
+            ],
+            "validation_profiles": []
+          },
+          "goal_ids": [
+            "G-adapter"
+          ],
+          "handoff": [],
+          "id": "C",
+          "input_files": [],
+          "integration_mode": "merge-only",
+          "kind": "code",
+          "manual_gates": [],
+          "paths": [
+            "C.txt"
+          ],
+          "prompt": "fixture C",
+          "review_files": [],
+          "validation": {
+            "artifacts": [
+              "C.txt"
+            ],
+            "commands": [
+              [
+                "python3",
+                "-c",
+                "from pathlib import Path; assert Path('C.txt').exists()"
+              ]
+            ],
+            "network": false,
+            "outputs": [],
+            "timeout": 300
+          }
+        }
+      },
+      "after": [
+        {
+          "id": "A",
+          "depends_on": [],
+          "lineage": null
+        },
+        {
+          "id": "R_adapter",
+          "depends_on": [],
+          "lineage": {
+            "depth": 1,
+            "parent": "A",
+            "revision": "e5416c31ad2a41ada848f0da95589eb6"
+          }
+        },
+        {
+          "id": "C",
+          "depends_on": [
+            "R_adapter"
+          ],
+          "lineage": null
+        },
+        {
+          "id": "X",
+          "depends_on": [],
+          "lineage": null
+        }
+      ],
+      "source_candidate": "fb1136dfc127459a81377f69113fbdcb",
+      "source_scope": {
+        "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+        "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+        "head_sha": "fe591a16dc07120ea886c9decdb8539d102be888",
+        "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+      },
+      "source_state": "superseded; original candidate never accepted",
+      "requirements_digest": "f3d44181f50f52aa48db8a06fcaab79f97f57f55ec1260c3c7649400818e085a",
+      "expected_plan": "da58c8ea6fd80d5db530f240c43e508be2cbaaf6e5c8c8d4247503c5e01e0323",
+      "expansions": [],
+      "owner_changes": []
+    }
+  ],
+  "replans": [
+    {
+      "state": "proposed",
+      "source_node": "addecc711fde46558f83f9989d861a91:A",
+      "input_digest": "ea994fab921f44dad3d0039512e866d4b6893128be639e98bcc91f7eb51ee964",
+      "candidate_sha": "fe591a16dc07120ea886c9decdb8539d102be888",
+      "expected_plan": "da58c8ea6fd80d5db530f240c43e508be2cbaaf6e5c8c8d4247503c5e01e0323",
+      "requirements": {
+        "acceptance_ids": [
+          "AC-A"
+        ],
+        "contract": {},
+        "digest": "f3d44181f50f52aa48db8a06fcaab79f97f57f55ec1260c3c7649400818e085a",
+        "distinctions": {
+          "acceptance": {},
+          "global": "COMMON documents and explicit goals/invariants/prohibitions",
+          "inferred_goals_owner_approved": false,
+          "rules": "captured applicable base rules",
+          "task_purpose": "fixture A"
+        },
+        "documents": [
+          {
+            "body": "Task assumption: adapter-v1 is available. Deliver A.txt with COMMON-OK.\n",
+            "digest": "f29d14db6e537d8d0dd76d49610b84b08a027e7ef5f8c4ecb34cd8bf112f8926",
+            "name": "documents/A.md",
+            "origin": "owner input"
+          },
+          {
+            "body": "Every deliverable must contain COMMON-OK. Use adapter-v2.\n",
+            "digest": "39fa612ae024e0547b4bc5de4e25ff9758f24324ddfca5502da31c236a63d680",
+            "name": "documents/COMMON.md",
+            "origin": "owner input"
+          }
+        ],
+        "goal_ids": [
+          "G-adapter"
+        ],
+        "goals": [
+          {
+            "id": "G-adapter",
+            "kind": "goal",
+            "source": "COMMON.md",
+            "text": "Use adapter-v2."
+          }
+        ],
+        "instruction": "fixture A",
+        "node": "A",
+        "version": 2
+      },
+      "causes": [
+        {
+          "classification": "TASK_ASSUMPTION_FALSE",
+          "counterexample": "capability.txt:1 declares adapter-v2 only",
+          "evidence_refs": [
+            "snapshot:capability.txt:1"
+          ],
+          "expected": "The original task assumes adapter-v1 is available",
+          "finding_id": "false-adapter",
+          "observed": "adapter-v2 only",
+          "reproduction": "Read capability.txt in the pinned candidate snapshot",
+          "requirement_refs": [
+            "documents/A.md"
+          ]
+        }
+      ],
+      "evidence": {
+        "19fcc71261de4f1287545641da97652a": {
+          "candidate_id": "fb1136dfc127459a81377f69113fbdcb",
+          "created_at": "2026-10-15T10:26:00Z",
+          "id": "19fcc71261de4f1287545641da97652a",
+          "payload": {
+            "checks": [
+              {
+                "artifact": "A.txt",
+                "exit_status": 0
+              },
+              {
+                "command": [
+                  "python3",
+                  "-c",
+                  "from pathlib import Path; assert Path('A.txt').exists()"
+                ],
+                "command_digest": "ae831f9b01ef3849856b67522d76261b2d84c04f4331c444838093cacbe5aa2c",
+                "excerpt": "",
+                "exit_status": 0,
+                "finished_at": 1792059960.7515087,
+                "log": "/tmp/codex-goals-final-tests/test_api_auto_replan_executes_0/home/autopilot/logs/19fcc71261de4f1287545641da97652a/0.log",
+                "started_at": 1792059960.7319303,
+                "timed_out": false
+              }
+            ],
+            "environment": "bwrap:allowlisted-runtime;network=off;source=read-only",
+            "environment_preflight": [
+              {
+                "command_digest": "b14f4adb5eede965f617a7825effb3ae9cef753e6c18e4a5fa243bb540f2384d",
+                "exit_status": 0,
+                "output": ""
+              },
+              {
+                "command_digest": "622800edecf4eb899e28a62530f3432c775070f62ee877f45ba55915526a28e1",
+                "exit_status": 0,
+                "output": "Python 3.14.4\n"
+              }
+            ],
+            "finished_at": 1792059960.7515812,
+            "profile_digest": "c3977233e404a34dbc7d1e4c40581e98482916c1b86f2f480823b9760bdc261d",
+            "scope": {
+              "base_sha": "e95e5c55616e8e0e2bc6b0cd3a284c5d82f250d7",
+              "diff_digest": "e1f969ec26423132b8b910ba6f1f248d29aee00c27235146b9869023f99599fd",
+              "head_sha": "fe591a16dc07120ea886c9decdb8539d102be888",
+              "tree_sha": "fd8dcfb9fa9168dab5d63071706675a269b9519d"
+            },
+            "started_at": 1792059960.7318015,
+            "state": "PASS"
+          },
+          "state": "PASS"
+        },
+        "requirement:documents/A.md": {
+          "body": "Task assumption: adapter-v1 is available. Deliver A.txt with COMMON-OK.\n",
+          "digest": "f29d14db6e537d8d0dd76d49610b84b08a027e7ef5f8c4ecb34cd8bf112f8926"
+        },
+        "requirement:documents/COMMON.md": {
+          "body": "Every deliverable must contain COMMON-OK. Use adapter-v2.\n",
+          "digest": "39fa612ae024e0547b4bc5de4e25ff9758f24324ddfca5502da31c236a63d680"
+        },
+        "snapshot:capability.txt:1": {
+          "digest": "5a67c63cbbe1fc34c0954650fd692f03c5d3a65c49127e3cbbd905dc977c3a3d",
+          "end": 1,
+          "eof": true,
+          "path": "capability.txt",
+          "start": 1,
+          "text": "adapter-v2 only\n"
+        }
+      },
+      "accepted_inputs": [],
+      "history": [
+        {
+          "created_at": "2026-10-15T10:26:00Z",
+          "generation": 1,
+          "id": "75fb2f5905ca4955a5a37ad234cb3a91",
+          "kind": "fix",
+          "node_id": "addecc711fde46558f83f9989d861a91:A",
+          "payload": {
+            "candidate_id": "bf62eec77a574760a46a6315192f0d28",
+            "finished_at": "2026-10-15T10:26:00Z",
+            "implementation_result": {
+              "reason": "Fixture implementation complete",
+              "status": "SUCCESS"
+            },
+            "prompt_digest": "7278d38ec5c3124e59a4ec7933706f8fb82c58d86a43029b10c5c6cc459df631",
+            "thread": "implementation-ba47b5d646db4d1fa2660641a440dadd"
+          },
+          "state": "completed"
+        }
+      ],
+      "envelope": {
+        "paths": [
+          "A.txt"
+        ],
+        "validation_profiles": []
+      },
+      "permissions": {
+        "commit_owned_changes": true,
+        "publish_main": false
+      },
+      "limits": {
+        "depth": 1,
+        "source_replans": 1,
+        "tasks": 3,
+        "workflow_nodes": 200
+      },
+      "proposal": {
+        "analysis": "Pinned capability.txt disproves the adapter-v1 assumption. Deliver the original contract using adapter-v2.",
+        "candidate_sha": "fe591a16dc07120ea886c9decdb8539d102be888",
+        "confirmed_causes": [
+          "false-adapter"
+        ],
+        "evidence_refs": [
+          "snapshot:capability.txt:1"
+        ],
+        "input_digest": "ea994fab921f44dad3d0039512e866d4b6893128be639e98bcc91f7eb51ee964",
+        "owner_changes": [],
+        "tasks": [
+          {
+            "completion_conditions": [
+              "Original A contract and mandatory validation pass; retain COMMON-OK"
+            ],
+            "depends_on": [],
+            "finding_id": "false-adapter",
+            "goal_ids": [
+              "G-adapter"
+            ],
+            "implementation": "Write the original A deliverable using adapter-v2 and COMMON-OK.",
+            "parent_task": "A",
+            "paths": [
+              "A.txt"
+            ],
+            "purpose": "Resolve the disproven adapter-v1 premise",
+            "rationale": "Use the capability confirmed in the fixed snapshot without expanding permissions",
+            "relation": "replace",
+            "root_cause": "Only adapter-v2 is available",
+            "task_id": "R_adapter",
+            "title": "Use available adapter",
+            "validation_profile": 0
+          }
+        ],
+        "version": 1
+      },
+      "session": "replanner-ee2d56c45682414f86c80a57dbeed6d4"
+    }
+  ],
+  "verification": {
+    "focused": {
+      "passed": 90,
+      "skipped": 1
+    },
+    "browser": {
+      "passed": 3
+    },
+    "installed_cli": {
+      "passed": 4,
+      "endpoint": "local scripted fixture"
+    },
+    "full_suite": {
+      "passed": 823,
+      "skipped": 32,
+      "failed": 3,
+      "failures_reproduced_at_base": true
+    },
+    "real_model_executed": false
+  }
+}
