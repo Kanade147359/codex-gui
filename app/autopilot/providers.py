@@ -94,6 +94,8 @@ When requested_reads is available, request specific snapshot paths and line rang
 Return INCONCLUSIVE until those reads arrive. The controller supplies only registered tracked snapshot code; no shell is provided.
 Return only the requested review schema. A blocking finding must concern the requested acceptance scope or a new safety regression.
 Check weakened tests, skips, missing artifacts and validation evidence. Retain prior blocking finding IDs; resolve only with evidence.
+For each implementation defect, explain the concrete repair and the evidence needed to verify it in the finding reason.
+Use CHANGES_REQUESTED for repairable technical defects within the fixed requirements. Reserve NEEDS_HUMAN for a missing owner decision, specification or authorization; an internal needs_review status alone is not such a decision.
 The supplied changed_paths are the exact file paths to review. The coverage array MUST contain only those literal relative paths,
 e.g. ["src/a.py", "src/b.py"]. Include each reviewed changed path exactly, without descriptions, explanations, quotes, or test results.
 Do not put review observations or validator statements in coverage. Missing/uninspected paths belong in unverified, not coverage.
@@ -268,7 +270,18 @@ def validate_codex_route(config):
 async def review_prompt(candidate, root):
     from .review_context import prompt
 
-    return await prompt(candidate, root)
+    body = await prompt(candidate, root)
+    if candidate.get("mentor_context"):
+        body = canonical(dict(json.loads(body), mentor_context=candidate["mentor_context"]))
+        if len(body.encode()) > 1024 * 1024:
+            raise ValueError("fixed mentor context exceeds 1 MiB")
+    return body
+
+
+def reviewer_policy(candidate):
+    from .mentoring import MENTOR_POLICY
+
+    return TRUSTED_POLICY + (MENTOR_POLICY if candidate.get("mentor_context") else "")
 
 
 class ReviewProvider:
@@ -354,7 +367,7 @@ class ClaudeProvider(ReviewProvider):
                 "--disable-slash-commands",
                 "--no-session-persistence",
                 "--system-prompt",
-                TRUSTED_POLICY,
+                reviewer_policy(candidate),
             ]
             if trusted_review_policy["claude_model"]:
                 argv += ["--model", trusted_review_policy["claude_model"]]
@@ -544,7 +557,7 @@ class CodexProvider(ReviewProvider):
                         sandbox="read-only",
                         approvalPolicy="never",
                         config=config,
-                        developerInstructions=REPLANNER_POLICY if replan else TRUSTED_POLICY,
+                        developerInstructions=REPLANNER_POLICY if replan else reviewer_policy(candidate),
                         **({"model": model} if model else {}),
                     ),
                 )
@@ -555,7 +568,10 @@ class CodexProvider(ReviewProvider):
                 )
                 turn = await client.request(
                     "turn/start",
-                    dict(threadId=tid, input=[dict(type="text", text=prompt)], outputSchema=REPLAN_SCHEMA if replan else review_schema(candidate)),
+                    dict(threadId=tid, input=[dict(type="text", text=prompt)],
+                         **({"effort": trusted_review_policy.get("reasoning_effort", "high")}
+                            if trusted_review_policy.get("reasoning_effort", "high") != "default" else {}),
+                         outputSchema=REPLAN_SCHEMA if replan else review_schema(candidate)),
                 )
                 turn_id = turn["turn"]["id"]
                 self.active[attempt["id"]] = (client, tid, turn_id)

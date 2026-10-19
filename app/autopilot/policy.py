@@ -135,6 +135,10 @@ def manifest(value):
         "review_timeout",
         "provider_backoff",
         "replanning",
+        "implementation_model",
+        "reasoning_effort",
+        "mentor_enabled",
+        "mentor_max_rounds",
     }
     if set(policy) - allowed:
         raise ValueError("unknown policy fields")
@@ -148,18 +152,24 @@ def manifest(value):
         ("integration_slots", 1, 1),
         ("review_timeout", 600, 3600),
         ("provider_backoff", 60, 3600),
+        ("mentor_max_rounds", 2, 5),
     ):
         policy.setdefault(key, default)
         if (
             type(policy[key]) is not int
-            or not (0 if key in ("max_fix_rounds", "infra_retries") else 1) <= policy[key] <= maximum
+            or not (0 if key in ("max_fix_rounds", "infra_retries", "mentor_max_rounds") else 1) <= policy[key] <= maximum
         ):
             raise ValueError(f"invalid {key}")
     for key, default in (("account", "personal"), ("bucket", "included"), ("claude_model", ""), ("codex_model", "")):
         policy.setdefault(key, default)
         if not isinstance(policy[key], str) or policy[key].startswith("-"):
             raise ValueError(f"invalid {key}")
-    for key, default in (("extra_usage_disabled_confirmed", False), ("automatic_acceptance", True)):
+    from .execution import validate_settings, resolve_execution
+
+    execution = validate_settings(dict(model=policy.get("implementation_model", ""),
+                                       reasoning_effort=policy.get("reasoning_effort", "high")), allow_empty_model=True)
+    policy.update(implementation_model=execution["model"], reasoning_effort=execution["reasoning_effort"])
+    for key, default in (("extra_usage_disabled_confirmed", False), ("automatic_acceptance", True), ("mentor_enabled", True)):
         policy.setdefault(key, default)
         if type(policy[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
@@ -208,9 +218,12 @@ def manifest(value):
             "goal_ids",
             "acceptance_ids",
             "replan",
+            "model",
+            "reasoning_effort",
         }:
             raise ValueError("invalid node fields")
         n = dict(raw)
+        n.update(validate_settings(n, allow_empty_model=True))
         nid = n.get("id", "")
         if not isinstance(nid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", nid) or nid in by_id:
             raise ValueError("invalid or duplicate node id")
@@ -273,6 +286,7 @@ def manifest(value):
             raise ValueError("manual gates require named owner decisions")
         if any(p not in inputs for p in n["input_files"]):
             raise ValueError("missing input bundle reference")
+        resolve_execution(n, dict(policy=policy, inputs=inputs))
         by_id[nid] = n
     order, visiting = [], set()
 

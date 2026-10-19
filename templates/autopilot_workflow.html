@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ workflow.plan.name }} — Autopilot — Codex GUI{% endblock %}
+{% block page %}autopilot-workflow{% endblock %}
+{% block bodyattrs %}data-workflow-id="{{ workflow.id }}"{% endblock %}
+{% block content %}
+<section class="panel ap-panel" id="ap-overview">
+  <p class="crumb"><a href="/autopilot">Autopilot</a> / 大タスク詳細</p>
+  <div class="title-row"><h1 id="ap-workflow-name">{{ workflow.plan.name }}</h1><span id="ap-workflow-state" class="status">{{ workflow.state }}</span></div>
+  <div id="ap-workflow-progress" aria-live="polite"></div>
+  <div id="ap-workflow-controls" class="ap-actions"></div>
+  <p id="ap-message" role="status" aria-live="polite"></p>
+  <nav class="ap-section-links" aria-label="大タスク詳細"><a href="#ap-graph">進捗・子タスク</a><a href="#ap-addition">追加指示・追加タスク</a><a href="#ap-history">履歴</a><a href="#ap-inputs">固定入力</a></nav>
+  <dl id="ap-workflow-meta" class="meta"></dl>
+</section>
+<section class="panel ap-panel"><div id="ap-graph"></div></section>
+<section class="panel ap-panel" id="ap-addition">
+  <h2>追加指示・追加タスク</h2>
+  <p>大タスクのメモを残すか、子タスクを選んで既存のthreadへ追加指示を送れます。</p>
+  <form id="ap-instruction-form">
+    <label for="ap-instruction-node">追加指示の対象<select id="ap-instruction-node"><option value="">大タスクのメモとして保存（実行しない）</option></select></label>
+    <label for="ap-instruction-prompt">追加指示<textarea id="ap-instruction-prompt" rows="4" required placeholder="現在の状況に対する補足や、次に進めてほしい内容"></textarea></label>
+    <button type="submit" id="ap-instruction-send" class="primary">メモを保存</button>
+  </form>
+  <details id="ap-add-node-details"><summary>この大タスクに子タスクを追加</summary>
+    <form id="ap-node-form">
+      <div class="ap-form-grid">
+        <label for="ap-node-name">タスクID<input id="ap-node-name" required pattern="[A-Za-z0-9_.-]+" placeholder="followup_1"></label>
+        <label for="ap-node-kind">種類<select id="ap-node-kind"><option value="code">実装</option><option value="report">文書・調査</option><option value="integration">統合</option></select></label>
+      </div>
+      <label for="ap-node-prompt">タスクの指示<textarea id="ap-node-prompt" rows="4" required></textarea></label>
+      <label for="ap-node-dependencies">依存する子タスク<select id="ap-node-dependencies" multiple size="4"></select></label>
+      <p class="muted">選択した子タスクの成功後に実行します。依存なしなら選択を空にしてください。</p>
+      <label for="ap-node-paths">編集範囲（1行1パス、Repositoryからの相対パス）<textarea id="ap-node-paths" rows="3" required placeholder="src/feature.py"></textarea></label>
+      <label for="ap-node-validation">検証コマンド（argv配列のJSON）<textarea id="ap-node-validation" rows="3" spellcheck="false" placeholder='[["python3", "-m", "pytest", "tests/test_feature.py"]]'>[]</textarea></label>
+      <label for="ap-node-artifacts">必要な成果物（1行1パス）<textarea id="ap-node-artifacts" rows="2" placeholder="docs/result.md"></textarea></label>
+      <button type="submit" id="ap-node-add" class="primary">子タスクを追加</button>
+      <p class="muted">入力を検証して追加します。大タスクの開始・再開操作で実行を進められます。</p>
+    </form>
+  </details>
+</section>
+<section class="panel ap-panel" id="ap-history"><h2>履歴</h2><div id="ap-workflow-history"></div></section>
+<section class="panel ap-panel" id="ap-inputs"><h2>固定入力・実行設定</h2><div id="ap-workflow-inputs"></div></section>
+<script src="{{ static_url('autopilot-common.js') }}" defer></script>
+<script src="{{ static_url('autopilot-workflow.js') }}" defer></script>
+{% endblock %}

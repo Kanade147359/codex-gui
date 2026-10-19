@@ -37,12 +37,14 @@ def test_fixture_workflow_ui_candidates_fallback_findings_and_task_details(gui_u
         else:
             raise AssertionError("browser fixture workflow did not complete")
         page.wait_for_function("document.querySelector('#ap-graph').textContent.includes('accepted')")
+        # Historical provider evidence is deliberately folded behind the readable workflow summary.
+        page.locator("#ap-graph details").evaluate_all("elements => elements.forEach(element => element.open = true)")
         graph = page.locator("#ap-graph").inner_text()
         assert "A-value" in graph and "confirmed Claude included quota" in graph and "codex" in graph
         assert not errors
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
         page.screenshot(path=str(tmp_path / "autopilot-mobile.png"), full_page=True)
-        page.locator("#ap-graph a").first.click()
+        page.get_by_role("link", name="Task詳細", exact=True).first.click()
         page.wait_for_function("!document.querySelector('#ap-task-review').hidden")
         assert "AI review accepted" in page.locator("#ap-task-review").inner_text()
         assert not errors
@@ -81,6 +83,7 @@ def test_markdown_upload_ui_to_planning_parallel_fix_and_integration(gui_url, gi
             state = page.request.get(url + "/api/autopilot/workflows/" + workflows[0]["id"]).json()
             raise AssertionError([(n["name"], n["state"], n["reason"]) for n in state["nodes"]])
         page.wait_for_function("document.querySelector('#ap-graph').textContent.includes('COMMON-required')")
+        page.locator("#ap-graph details").evaluate_all("elements => elements.forEach(element => element.open = true)")
         assert "計画revision: applied" in page.locator("#ap-graph").inner_text()
         assert not errors
         assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
@@ -106,6 +109,7 @@ def test_goal_replanning_ui_owner_decision_graph_and_review(gui_url, git_repo, t
         page.locator("#ap-opt-in").check()
         page.locator("#ap-start").click()
         page.get_by_role("button", name="Owner approve new tasks", exact=True).wait_for(timeout=40000)
+        page.locator("#ap-graph details").evaluate_all("elements => elements.forEach(element => element.open = true)")
         graph = page.locator("#ap-graph").inner_text()
         assert "Goal Alignment" in graph and "TASK_ASSUMPTION_FALSE" in graph and "G-adapter" in graph
         assert "R_adapter" in graph and "graph_before" in graph and "graph_after" in graph

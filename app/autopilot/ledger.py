@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS ap_graph_revisions (
 CREATE TABLE IF NOT EXISTS ap_plan_revisions (
  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
  source_candidate TEXT NOT NULL UNIQUE, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_workflow_events (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL,
+ request_key TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(workflow_id,request_key));
 """
 
 
@@ -113,6 +118,7 @@ class Ledger:
             "plan_revisions",
             "replans",
             "graph_revisions",
+            "workflow_events",
         }:
             raise ValueError("unknown ledger table")
         with self.db._lock:
@@ -407,6 +413,27 @@ class Ledger:
         self.db._notify(n["task_id"], "completed", "completed")
         return True
 
+    def overview(self, workflow):
+        """List status from current evidence, without loading every historical candidate or task turn."""
+        from .review_summary import summarize, progress
+        from .decisions import target
+
+        nodes = self.rows("nodes", "workflow_id=?", (workflow["id"],))
+        for node in nodes:
+            node["candidates"] = []
+            if node["state"].startswith(("blocked_", "reconciling")) and node["candidate_id"]:
+                candidate = self.get("candidates", node["candidate_id"])
+                if candidate:
+                    candidate["reviews"] = self.rows("reviews", "candidate_id=?", (candidate["id"],))
+                    node["candidates"].append(candidate)
+            node["decision_target"] = target(node, workflow)
+        view = dict(workflow, nodes=nodes)
+        for key in ("plan_revisions", "graph_revisions"):
+            view[key] = self.rows(key, "workflow_id=? AND state IN ('awaiting_owner','stale')", (workflow["id"],))
+            for revision in view[key]:
+                revision["decision_target"] = digest(revision["payload"])
+        return dict(workflow, progress=progress(nodes), review_summary=summarize(view))
+
     def view(self, workflow_id):
         w = self.get("workflows", workflow_id)
         if not w:
@@ -423,6 +450,24 @@ class Ledger:
 
             n["decision_target"] = target(n, w)
             n["decisions"] = self.rows("decisions", "node_id=?", (n["id"],))
+            task = self.db.get_task(n["task_id"]) if n["task_id"] else None
+            if task:
+                from app.models import BUSY_STATUSES
+
+                n["task"] = {key: task.get(key) for key in (
+                    "id", "name", "status", "task_outcome", "completion_pending", "codex_thread_id",
+                    "model", "reasoning_effort", "branch", "worktree", "outcome_reason",
+                )}
+                n["task"]["thread_busy"] = task["status"] in BUSY_STATUSES or bool(task["completion_pending"])
+            else:
+                n["task"] = None
+            from .execution import resolve_execution
+
+            n["execution_settings"] = resolve_execution(n["spec"], w["plan"])
+            turns = self.db.list_turns(n["task_id"]) if task else []
+            reported = next((turn for turn in reversed(turns) if turn.get("model")), None)
+            n["execution_settings"]["actual_model"] = reported["model"] if reported else None
+            n["execution_settings"]["actual_reasoning_effort"] = reported.get("reasoning_effort") if reported else None
         revisions = self.rows("plan_revisions", "workflow_id=?", (workflow_id,))
         for revision in revisions:
             revision["decision_target"] = digest(revision["payload"])
@@ -430,6 +475,12 @@ class Ledger:
         for revision in graphs:
             revision["decision_target"] = digest(revision["payload"])
         replans = self.rows("replans", "workflow_id=?", (workflow_id,))
-        return dict(**w, nodes=nodes, plan_revisions=revisions, graph_revisions=graphs, replans=replans,
-                    replanning_limits=dict(max_tasks=3, max_source_replans=1, max_depth=1,
-                                           remaining_nodes=200-len(nodes), used_sources=len(replans)))
+        result = dict(**w, nodes=nodes, plan_revisions=revisions, graph_revisions=graphs, replans=replans,
+                      replanning_limits=dict(max_tasks=3, max_source_replans=1, max_depth=1,
+                                             remaining_nodes=200-len(nodes), used_sources=len(replans)))
+        from .review_summary import summarize, progress
+        from .workflow_controls import control_target
+
+        result.update(review_summary=summarize(result), progress=progress(nodes), control_target=control_target(w),
+                      events=self.rows("workflow_events", "workflow_id=?", (workflow_id,)))
+        return result

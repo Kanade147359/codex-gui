@@ -140,9 +140,15 @@ async def run_bounded(argv, *, cwd=None, env=None, timeout=300, stdin=None, on_s
 
 class Validator:
     async def validate(self, candidate, root, profile, log_dir, on_start=None):
-        from .environment import preflight, mounts, env
+        from .environment import mounts
 
-        preflight_evidence = await preflight(root, profile)
+        with mounts(profile.get("environment", {})) as runtime:
+            return await self._validate(candidate, root, profile, log_dir, runtime, on_start)
+
+    async def _validate(self, candidate, root, profile, log_dir, runtime, on_start):
+        from .environment import preflight, env
+
+        preflight_evidence = await preflight(root, profile, runtime_mounts=runtime)
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         began = time.time()
@@ -158,7 +164,7 @@ class Validator:
                 command_started = time.time()
                 argv = (
                     sandbox(root, scratch, profile["outputs"])
-                    + mounts(profile.get("environment", {}))
+                    + runtime
                     + ["--", *command]
                 )
                 rc, output, timeout = await run_bounded(

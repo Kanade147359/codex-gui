@@ -1,4 +1,4 @@
-# Autopilot (opt-in, unmerged)
+# Autopilot (opt-in)
 
 Autopilot runs an explicit JSON/YAML DAG through submission, managed validation,
 independent review, bounded repair, integration and pinned successor execution.
@@ -8,6 +8,9 @@ It never deploys, restarts a service, changes billing or purchases/consumes cred
 
 Open `/autopilot`, paste a manifest, run **Dry-run**, inspect the fixed plan and
 permissions, opt in, then **Start**. Multiple Markdown files or a ZIP can also be uploaded and edited before conversion.
+Each workflow has a permanent detail page with progress, consolidated review decisions,
+child-task instructions and explicit task additions. See [workflow controls](workflow-controls.md)
+for model selection, default High reasoning, Markdown overrides and bounded mentor advice.
 See [Markdown workflows](document-workflows.md) for Draft planning, handoffs, owner
 decisions, partitioned reviews and offline validation environments. Input bodies
 are materialized inside each worker/snapshot and supplied to reviewers.

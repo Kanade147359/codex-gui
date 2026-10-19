@@ -8,6 +8,21 @@ from . import git
 from .policy import canonical, digest, manifest, owns
 
 
+def _requirement_changes(old, proposed):
+    """Changes to fixed owner inputs need approval even in an authorized edit envelope."""
+    changes = []
+    for key, label in (("input_files", "assigned instructions"), ("handoff", "required handoff"),
+                       ("review_files", "review inputs")):
+        removed = sorted(set(old.get(key, [])) - set(proposed.get(key, [])))
+        if removed:
+            changes.append(old["id"] + ": " + label + " removed: " + ", ".join(removed))
+    if proposed["manual_gates"] != old["manual_gates"] or proposed["contract"] != old["contract"]:
+        changes.append(old["id"] + ": approval contract change")
+    if old["prompt"].strip() not in proposed["prompt"]:
+        changes.append(old["id"] + ": original task instructions replaced")
+    return changes
+
+
 async def propose(ap, planner):
     w = ap.ledger.get("workflows", planner["workflow_id"])
     candidate = ap.ledger.get("candidates", planner["candidate_id"])
@@ -56,13 +71,19 @@ async def propose(ap, planner):
         selected = profile(spec["validation"], spec["kind"])
         if selected not in envelope["validation_profiles"]:
             expansions.append(nid + ": unapproved validation profile")
-        if spec["manual_gates"] != old["manual_gates"] or spec["contract"] != old["contract"]:
-            expansions.append(nid + ": approval contract change")
         nodes[nid] = spec
         changed.append(nid)
     plan["nodes"] = list(nodes.values())
     normalized = manifest({k: v for k, v in plan.items() if k not in ("base_sha", "rules")})
     normalized.update(base_sha=plan["base_sha"], rules=plan.get("rules", {}))
+    before = {n["id"]: n for n in w["plan"]["nodes"]}
+    for spec in normalized["nodes"]:
+        if spec["id"] in changed:
+            original = before[spec["id"]]
+            if original["prompt"].strip() not in spec["prompt"]:
+                spec["prompt"] = (original["prompt"] + "\n\nPlanning refinement (original instructions remain binding):\n"
+                                  + spec["prompt"])
+            expansions.extend(_requirement_changes(original, spec))
     payload = dict(
         expected_plan=digest(w["plan"]),
         plan=normalized,
@@ -140,10 +161,20 @@ def apply(ap, revision, *, expected=None, approve=False, reject=False):
                 return
         if r["state"] != "ready" and not (r["state"] == "awaiting_owner" and approve):
             raise ValueError("plan expansion requires an explicit owner decision")
+        proposed = {n["id"]: n for n in r["payload"]["plan"]["nodes"]}
+        requirement_changes = []
         for name in r["payload"]["changed"]:
             n = unpack(c.execute("SELECT * FROM ap_nodes WHERE workflow_id=? AND name=?", (w["id"], name)).fetchone())
             if not n or n["task_id"] or n["candidate_id"] or n["generation"] or n["state"] != "draft":
                 raise ValueError("executed or consumed inputs cannot be rewritten")
+            requirement_changes.extend(_requirement_changes(n["spec"], proposed[name]))
+        if requirement_changes and not approve:
+            # Recheck persisted ready revisions created by older versions before any node changes.
+            payload = dict(r["payload"], expansions=list(dict.fromkeys(
+                r["payload"].get("expansions", []) + requirement_changes)))
+            c.execute("UPDATE ap_plan_revisions SET state='awaiting_owner',payload=? WHERE id=?",
+                      (canonical(payload), r["id"]))
+            return
         for spec in r["payload"]["plan"]["nodes"]:
             if spec["id"] in r["payload"]["changed"]:
                 c.execute(
@@ -199,6 +230,9 @@ def propose_graph(ap, source, replan, fixed, proposal, session):
                     replan=dict(parent=source["name"], depth=1, revision=revision_id))
         if old.get("plan_artifact"):
             spec["plan_artifact"] = old["plan_artifact"]
+        for key in ("model", "reasoning_effort"):
+            if key in old:
+                spec[key] = old[key]
         added.append(spec)
     names = {n["id"] for n in added}
     for spec in added:

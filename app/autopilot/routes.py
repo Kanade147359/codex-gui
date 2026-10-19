@@ -105,6 +105,29 @@ def error(e):
     return HTTPException(400, detail=dict(message=redact(str(e))))
 
 
+def execution_manifest(body):
+    """UI defaults fill missing policy values; authored manifest/Markdown remain authoritative."""
+    raw = body.get("manifest")
+    defaults = body.get("execution_defaults")
+    if defaults is None:
+        return raw
+    allowed = {"implementation_model", "reasoning_effort", "mentor_enabled", "mentor_max_rounds"}
+    if not isinstance(defaults, dict) or set(defaults) - allowed:
+        raise ValueError("invalid execution defaults")
+    if isinstance(raw, str):
+        import yaml
+
+        if len(raw) > 1024 * 1024:
+            raise ValueError("manifest too large")
+        try:
+            raw = yaml.safe_load(raw)
+        except yaml.YAMLError as exc:
+            raise ValueError("invalid safe YAML manifest") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("policy", {}), dict):
+        raise ValueError("manifest and policy must be mappings")
+    return dict(raw, policy={**defaults, **raw.get("policy", {})})
+
+
 @router.get("/autopilot", response_class=HTMLResponse)
 async def page(request: Request):
     from app.routes import TEMPLATES
@@ -112,10 +135,22 @@ async def page(request: Request):
     return TEMPLATES.TemplateResponse(request=request, name="autopilot.html", context={})
 
 
+@router.get("/autopilot/workflows/{identity}", response_class=HTMLResponse)
+async def workflow_page(request: Request, identity: str):
+    from app.routes import TEMPLATES
+
+    workflow = controller(request).ledger.get("workflows", identity)
+    if not workflow:
+        raise HTTPException(404, detail="workflow not found")
+    return TEMPLATES.TemplateResponse(
+        request=request, name="autopilot_workflow.html", context={"workflow": workflow}
+    )
+
+
 @router.post("/api/autopilot/dry-run")
 async def dry_run(request: Request, body: dict):
     try:
-        return await controller(request).dry_run(body.get("manifest"))
+        return await controller(request).dry_run(execution_manifest(body))
     except (ValueError, TypeError, KeyError) as e:
         raise error(e)
     except Exception as e:
@@ -131,7 +166,7 @@ async def register(request: Request, body: dict):
     try:
         if body.get("opt_in") is not True:
             raise ValueError("explicit workflow opt-in is required")
-        result = await controller(request).register(body.get("manifest"), body.get("expected_digest"))
+        result = await controller(request).register(execution_manifest(body), body.get("expected_digest"))
         if body.get("start") is True:
             return await controller(request).control(result["id"], "start")
         return result
@@ -142,11 +177,17 @@ async def register(request: Request, body: dict):
 @router.get("/api/autopilot/workflows")
 async def workflows(request: Request):
     ap = controller(request)
+    rows = []
+    for stored in ap.ledger.rows("workflows"):
+        w = ap.ledger.overview(stored)
+        rows.append(dict(
+            id=w["id"], name=w["plan"]["name"], state=w["state"], reason=w["reason"],
+            generation=w["generation"], repository=w["plan"]["repository"], created_at=w["created_at"],
+            progress=w.get("progress", {}), review_summary=w.get("review_summary", {}),
+            url=f"/autopilot/workflows/{w['id']}",
+        ))
     return dict(
-        workflows=[
-            dict(id=w["id"], name=w["plan"]["name"], state=w["state"], reason=w["reason"], generation=w["generation"])
-            for w in ap.ledger.rows("workflows")
-        ]
+        workflows=rows
     )
 
 
@@ -156,6 +197,30 @@ async def workflow(request: Request, identity: str):
         return controller(request).ledger.view(identity)
     except ValueError as e:
         raise HTTPException(404, detail=str(e))
+
+
+@router.post("/api/autopilot/workflows/{identity}/instructions")
+async def add_instruction(request: Request, identity: str, body: dict):
+    from . import workflow_controls
+    from app.routes import api_error
+    from app.task_manager import TaskError
+
+    try:
+        return await workflow_controls.add_instruction(controller(request), identity, body)
+    except TaskError as e:
+        raise api_error(e)
+    except (ValueError, TypeError, KeyError) as e:
+        raise error(e)
+
+
+@router.post("/api/autopilot/workflows/{identity}/nodes")
+async def add_node(request: Request, identity: str, body: dict):
+    from . import workflow_controls
+
+    try:
+        return workflow_controls.add_node(controller(request), identity, body)
+    except (ValueError, TypeError, KeyError) as e:
+        raise error(e)
 
 
 @router.post("/api/autopilot/workflows/{identity}/{action}")
@@ -269,7 +334,9 @@ async def task_review(request: Request, task_id: str):
     return dict(
         autopilot=True,
         workflow_id=w["id"],
+        workflow_url=f"/autopilot/workflows/{w['id']}",
         workflow_state=w["state"],
+        review_summary=w.get("review_summary", {}),
         node=next(x for x in w["nodes"] if x["id"] == n["id"]),
         approval_kind="AI review accepted; separate from manual override and GitHub PR approval"
         if n["state"] == "accepted"

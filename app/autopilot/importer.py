@@ -86,8 +86,8 @@ def prepare(inputs):
                 metadata = yaml.safe_load(match[1]) or {}
             except yaml.YAMLError as error:
                 raise ValueError("invalid COMMON metadata") from error
-            if not isinstance(metadata, dict) or set(metadata) - {"goals"}:
-                raise ValueError("COMMON metadata supports explicit goals only")
+            if not isinstance(metadata, dict) or set(metadata) - {"goals", "model", "reasoning_effort"}:
+                raise ValueError("COMMON metadata supports explicit goals and execution settings only")
             explicit = metadata.get("goals", [])
             if not isinstance(explicit, list) or any(not isinstance(g, dict) or "source" in g for g in explicit):
                 raise ValueError("invalid explicit COMMON goals")
@@ -125,6 +125,8 @@ def prepare(inputs):
             "review_files",
             "goal_ids",
             "acceptance_ids",
+            "model",
+            "reasoning_effort",
         }
         if set(meta) - allowed:
             raise ValueError("unknown task metadata")
@@ -137,6 +139,9 @@ def prepare(inputs):
         node.setdefault("draft", not node["paths"] or not node["validation"])
         node["prompt"] = "Read and implement the fixed assigned instructions: " + name
         node["input_files"] = [*common, name]
+        from .execution import resolve_execution
+
+        resolve_execution(node, dict(inputs=inputs))
         nodes.append(node)
     if not nodes:
         raise ValueError("at least one task instruction is required")
