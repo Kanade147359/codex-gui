@@ -175,8 +175,10 @@
     children.push(goals, text('h2', '子タスク'));
     for (const node of workflow.nodes) {
       const card = document.createElement('article'); card.className = 'ap-node'; card.id = `ap-node-${node.name}`;
-      card.append(text('h3', `${node.name} (${node.spec.kind}) — ${node.state}`));
-      if (node.reason && !node.state.startsWith('blocked_')) card.append(text('p', node.reason));
+      const repairLabel = {fix_queued: '自動修復待機', reserving_fix: '自動修復を準備中', fixing: '自動修復中'}[node.state];
+      card.append(text('h3', `${node.name} (${node.spec.kind}) — ${repairLabel || node.state}`));
+      if (repairLabel) card.append(text('p', 'LLMが停止理由と既存の成果を確認し、同じタスクで修正・再検証を進めます。'));
+      else if (node.reason && !node.state.startsWith('blocked_')) card.append(text('p', node.reason));
       card.append(text('p', `依存: ${node.spec.depends_on.join(', ') || 'なし'} · 修正残: ${Math.max(0, workflow.plan.policy.max_fix_rounds - node.fix_rounds)}`),
         text('p', `実行: ${settingsLabel(node.execution_settings)} · 目標ID: ${(node.spec.goal_ids || []).join(', ') || '—'}`));
       if (node.task_id) card.append(link('Task詳細', `/tasks/${encodeURIComponent(node.task_id)}`));
@@ -195,6 +197,12 @@
           }
         }
       }
+      for (const operation of node.operations || []) if (operation.payload?.semantic_recovery) {
+        const result = operation.payload.implementation_result;
+        const outcome = result || operation.payload.source_result || {};
+        history.append(text('p', `LLM自動修復 ${operation.generation}: ${operation.state} — ${result ? '修復結果' : '開始理由'}: ${outcome.status || ''} ${outcome.reason || ''}`));
+      }
+      if (repairLabel && node.reason) history.append(details('現在の修正指示', node.reason, `repair:${node.id}`));
       for (const mentor of node.mentors || []) history.append(text('p', `メンター: ${mentor.provider || ''} / ${mentor.state} — ${brief(mentor.payload)}`));
       history.append(details('固定入力・レビュー・操作の詳細データ', {pinned_inputs: node.inputs, candidates: node.candidates,
         operations: node.operations, owner_decisions: node.decisions, mentors: node.mentors, execution_settings: node.execution_settings}, `node-raw:${node.id}`));

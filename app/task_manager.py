@@ -1863,6 +1863,9 @@ class TaskManager:
         (interrupted, waiting-for-quota) keeps it running too: resuming it continues this same turn."""
         task = self.db.get_task(row["task_id"])
         node=self.autopilot.ledger.node_for_task(row["task_id"])
+        if (task and task["status"] == "completed" and task["task_outcome"] in ("incomplete", "blocked", "needs_input")
+            and node and node["state"] in ("implementing", "submitting", "fix_queued", "reserving_fix", "fixing", "conflict", "integrating")):
+            return  # Semantic correction is still part of this instruction; keep its serial thread reservation.
         if task and task["status"]=="completed" and task["task_outcome"]=="needs_review" and node and node["state"] not in ("blocked_budget","blocked_no_progress","blocked_result","blocked_scope","stopped"):
             return  # The turn finished; its managed validation/independent acceptance is still pending.
         if task is None:

@@ -139,6 +139,7 @@ def manifest(value):
         "reasoning_effort",
         "mentor_enabled",
         "mentor_max_rounds",
+        "semantic_recovery",
     }
     if set(policy) - allowed:
         raise ValueError("unknown policy fields")
@@ -169,7 +170,8 @@ def manifest(value):
     execution = validate_settings(dict(model=policy.get("implementation_model", ""),
                                        reasoning_effort=policy.get("reasoning_effort", "high")), allow_empty_model=True)
     policy.update(implementation_model=execution["model"], reasoning_effort=execution["reasoning_effort"])
-    for key, default in (("extra_usage_disabled_confirmed", False), ("automatic_acceptance", True), ("mentor_enabled", True)):
+    for key, default in (("extra_usage_disabled_confirmed", False), ("automatic_acceptance", True),
+                         ("mentor_enabled", True), ("semantic_recovery", True)):
         policy.setdefault(key, default)
         if type(policy[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
