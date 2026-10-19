@@ -19,6 +19,7 @@ from .providers import ClaudeProvider, CodexProvider, ProviderFailure, validate_
 from .runner import Validator, InfrastructureUnavailable, redact
 
 log = logging.getLogger(__name__)
+REVIEW_RETRY_ERRORS = frozenset({"transient", "invalid_output", "timeout", "max_turns", "context", "unknown"})
 BLOCKED = {
     "blocked_decision",
     "blocked_infrastructure",
@@ -1064,56 +1065,27 @@ class Autopilot:
                     raise ProviderFailure("invalid_output", "mentor must use a session independent of previous reviews")
             await self._snapshot(candidate)  # Detect unexpected host-side snapshot changes as well as sandbox writes.
             result = json.loads(redact(canonical(result)))
-            self.ledger.finish("reviews", record["id"], "mentored" if mentor_source else "completed", dict(record["payload"], **result))
+            payload = dict(record["payload"], **result)
+            if mentor_source:
+                payload = mentoring.preserve_findings(mentor_source, payload)
+            self.ledger.finish("reviews", record["id"], "mentored" if mentor_source else "completed", payload)
         except ProviderFailure as e:
             payload = dict(
-                record["payload"], error_kind=e.kind, reason=redact(str(e)), findings=e.findings, reset_at=e.reset_at
+                record["payload"], error_kind=e.kind, reason=redact(str(e)), findings=e.findings,
+                reset_at=e.reset_at, failed_at=time.time()
             )
+            if mentor_source:
+                payload = mentoring.preserve_findings(mentor_source, payload)
             self.ledger.finish("reviews", record["id"], "incomplete", payload)
             self._retain_findings(candidate, e.findings)
-            if e.kind == "included_quota":
-                key = self._availability_key(provider, w)
-                with self.ledger.transaction() as c:
-                    c.execute(
-                        "INSERT INTO ap_provider_availability VALUES(?,?, 'included_quota',?,NULL,?) ON CONFLICT(key) DO UPDATE SET state='included_quota',recheck_at=excluded.recheck_at,probe_owner=NULL,payload=excluded.payload",
-                        (
-                            key,
-                            provider,
-                            e.reset_at
-                            if e.reset_at and e.reset_at > time.time()
-                            else time.time() + w["plan"]["policy"]["provider_backoff"],
-                            canonical(payload),
-                        ),
-                    )
-                self.ledger.transition(n["id"], "reviewing", "review_queued", reason=payload["reason"])
-            elif e.kind in ("transient", "invalid_output", "timeout", "max_turns", "context", "unknown"):
-                failures = (
-                    sum(
-                        r["payload"].get("error_kind")
-                        in ("transient", "invalid_output", "timeout", "max_turns", "context", "unknown")
-                        for r in attempts
-                    )
-                    + 1
-                )
-                if failures <= w["plan"]["policy"]["infra_retries"]:
-                    payload["retry_at"] = time.time() + w["plan"]["policy"]["provider_backoff"]
-                    self.ledger.finish("reviews", record["id"], "incomplete", payload)
-                    self.ledger.transition(n["id"], "reviewing", "review_queued", reason=payload["reason"])
-                else:
-                    self.ledger.transition(
-                        n["id"],
-                        "reviewing",
-                        "blocked_infrastructure",
-                        reason="Review retry budget exhausted: " + payload["reason"],
-                    )
-            else:
-                state = "blocked_auth" if e.kind == "auth" else "blocked_configuration"
-                self.ledger.transition(n["id"], "reviewing", state, reason=payload["reason"])
+            self._apply_review_failure(n, self.ledger.get("reviews", record["id"]))
             return
         except Exception as e:
-            payload = dict(record["payload"], error_kind="infrastructure", reason=redact(str(e)))
+            payload = dict(record["payload"], error_kind="infrastructure", reason=redact(str(e)), failed_at=time.time())
+            if mentor_source:
+                payload = mentoring.preserve_findings(mentor_source, payload)
             self.ledger.finish("reviews", record["id"], "incomplete", payload)
-            self.ledger.transition(n["id"], "reviewing", "blocked_infrastructure", reason=payload["reason"][:1000])
+            self._apply_review_failure(n, self.ledger.get("reviews", record["id"]))
             return
         finally:
             self.processes.pop(record["id"], None)
@@ -1153,6 +1125,43 @@ class Autopilot:
                 and current["state"] == "reviewing" and current["generation"] == n["generation"]
                 and current["candidate_id"] == n["candidate_id"] == record["candidate_id"])
 
+    def _apply_review_failure(self, n, record):
+        """Replay the saved failure, never an older verdict, including a crash before its node transition."""
+        if not self._review_is_current(n, record):
+            return
+        workflow = self.ledger.get("workflows", n["workflow_id"])
+        policy = workflow["plan"]["policy"]
+        payload = dict(record["payload"])
+        kind = payload.get("error_kind")
+        reason = payload.get("reason", "Recorded independent review did not complete")
+        if kind == "included_quota":
+            now = time.time()
+            payload.setdefault("recheck_at", payload.get("reset_at")
+                               if payload.get("reset_at") and payload["reset_at"] > now
+                               else payload.get("failed_at", now) + policy["provider_backoff"])
+            key = self._availability_key(record["provider"], workflow)
+            with self.ledger.transaction() as c:
+                c.execute(
+                    "INSERT INTO ap_provider_availability VALUES(?,?, 'included_quota',?,NULL,?) ON CONFLICT(key) DO UPDATE SET state='included_quota',recheck_at=excluded.recheck_at,probe_owner=NULL,payload=excluded.payload",
+                    (key, record["provider"], payload["recheck_at"], canonical(payload)),
+                )
+            state = "review_queued"
+        elif kind in REVIEW_RETRY_ERRORS:
+            attempts = self.ledger.rows("reviews", "candidate_id=?", (record["candidate_id"],))
+            failures = sum(r["payload"].get("error_kind") in REVIEW_RETRY_ERRORS for r in attempts)
+            payload["retry_failures"] = failures
+            if failures <= policy["infra_retries"]:
+                payload.setdefault("retry_at", payload.get("failed_at", time.time()) + policy["provider_backoff"])
+                state = "review_queued"
+            else:
+                state = "blocked_infrastructure"
+                reason = "Review retry budget exhausted: " + reason
+        else:
+            state = ("blocked_auth" if kind == "auth" else "blocked_infrastructure"
+                     if kind in (None, "infrastructure") else "blocked_configuration")
+        self.ledger.finish("reviews", record["id"], "incomplete", dict(payload, failure_state=state))
+        self.ledger.transition(n["id"], "reviewing", state, reason=reason[:1000])
+
     def _finish_mentor(self, n, record, source=None):
         if not self._review_is_current(n, record):
             return
@@ -1183,6 +1192,15 @@ class Autopilot:
         for r in self.ledger.rows(
             "reviews", "candidate_id IN (SELECT id FROM ap_candidates WHERE node_id=?)", (node_id,)
         ):
+            if r["payload"].get("purpose") == "mentor":
+                # Read older raw-only mentor rows too. A mentor can add advice, never replace its source finding.
+                source = self.ledger.get("reviews", r["payload"].get("source_review_id", ""))
+                original = source["payload"].get("blocking", []) if source else r["payload"].get("original_findings", [])
+                for finding in original:
+                    found.setdefault(finding["id"], dict(finding))
+                found = {f["id"]: f for f in mentoring.merge_findings(
+                    found.values(), r["payload"].get("blocking", []) + r["payload"].get("findings", []))}
+                continue
             for f in r["payload"].get("blocking", []) + r["payload"].get("findings", []):
                 found[f["id"]] = f
             if r["state"] == "completed":
@@ -1576,6 +1594,8 @@ class Autopilot:
                         "reconciling",
                         reason="Review/validator outcome unknown; no duplicate launch or stale acceptance",
                     )
+                elif state == "reviewing" and records and records[-1]["state"] == "incomplete":
+                    self._apply_review_failure(n, records[-1])
                 elif complete:
                     latest = complete[-1]
                     if state == "validating" and latest["state"] == "PASS":

@@ -64,15 +64,34 @@ def context(source):
                 prior_verdict=source["payload"]["verdict"], purpose="concrete repair advice only")
 
 
+def merge_findings(original, advice):
+    """Keep the primary location/reason and append each distinct piece of mentor advice."""
+    merged = {f["id"]: dict(f) for f in original}
+    for finding in advice:
+        if finding["id"] in merged:
+            current = merged[finding["id"]]
+            addition = "\nMentor guidance: " + finding["reason"]
+            if finding["reason"] != current["reason"] and addition not in current["reason"]:
+                current["reason"] += addition
+        else:
+            merged[finding["id"]] = dict(finding)
+    return list(merged.values())
+
+
+def preserve_findings(source, payload):
+    """Record immutable primary findings separately from the provider's raw blocking output."""
+    original = [dict(f) for f in source["payload"]["blocking"]]
+    advice = payload.get("blocking", []) + payload.get("findings", [])
+    return dict(payload, original_findings=original, repair_findings=merge_findings(original, advice))
+
+
 def repair_findings(node, source, advice):
     """Retain every primary finding verbatim; append actionable advice within frozen ownership."""
     original = {f["id"]: dict(f) for f in source["payload"]["blocking"]}
     for finding in advice.get("blocking", []):
-        if finding["path"] and not owns(finding["path"], node["spec"]["paths"]):
+        # A primary finding may cite read-only evidence outside the edit ownership.
+        # Retaining that same ID/path does not authorize edits to the evidence file.
+        inherited_path = finding["id"] in original and finding["path"] == original[finding["id"]]["path"]
+        if finding["path"] and not inherited_path and not owns(finding["path"], node["spec"]["paths"]):
             raise ValueError("mentor repair exceeds the approved edit ownership")
-        if finding["id"] in original:
-            if finding["reason"] != original[finding["id"]]["reason"]:
-                original[finding["id"]]["reason"] += "\nMentor guidance: " + finding["reason"]
-        else:
-            original[finding["id"]] = dict(finding)
-    return list(original.values())
+    return merge_findings(original.values(), advice.get("blocking", []))

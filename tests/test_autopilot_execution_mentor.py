@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+import time
 
 import pytest
 
@@ -388,3 +389,178 @@ def test_unsupported_high_is_configuration_error_without_downgrade(make_manager,
         await manager.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("legacy_row", [False, True])
+def test_mentor_preserves_primary_reason_in_history_and_next_review(make_manager, git_repo, controlled_install, monkeypatch, legacy_row):
+    class RewordingMentor(MentorFixture):
+        async def start_review(self, candidate, policy, root, attempt, on_identity):
+            result = await super().start_review(candidate, policy, root, attempt, on_identity)
+            if candidate.get("mentor_context"):
+                result["blocking"][0]["reason"] = "Independent mentor advice without the original wording"
+            return result
+
+    async def scenario():
+        manager = make_manager()
+        provider = RewordingMentor()
+        ap = controlled_install(manager, provider, changing=True)
+        finish = ap._finish_mentor
+        inspected = []
+
+        def inspect_record(node, record, source=None):
+            payload = record["payload"]
+            assert payload["blocking"][0]["reason"] == "Independent mentor advice without the original wording"
+            assert payload["original_findings"][0]["reason"] == "Required correction 2"
+            assert "Required correction 2\nMentor guidance: Independent mentor advice" in payload["repair_findings"][0]["reason"]
+            inspected.append(record["id"])
+            if legacy_row:
+                # Existing versions saved only raw advice and a source_review_id.
+                payload = {key: value for key, value in payload.items()
+                           if key not in ("original_findings", "repair_findings")}
+                ap.ledger.finish("reviews", record["id"], "mentored", payload)
+                record = ap.ledger.get("reviews", record["id"])
+            return finish(node, record, source)
+
+        monkeypatch.setattr(ap, "_finish_mentor", inspect_record)
+        identity = await register(ap, plan(git_repo))
+        await drive(manager, lambda: ap.ledger.view(identity)["state"] == "completed")
+        assert len(inspected) == 1
+        final_input = provider.calls[-1]["received"]
+        carried = next(f for f in final_input["prior_findings"] if f["id"] == "persistent")
+        assert carried["reason"].startswith("Required correction 2\nMentor guidance: ")
+        assert "Independent mentor advice without the original wording" in carried["reason"]
+        mentor = ap.ledger.get("reviews", inspected[0])
+        source = ap.ledger.get("reviews", mentor["payload"]["source_review_id"])
+        assert source["payload"]["blocking"][0]["reason"] == "Required correction 2"
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("error_kind,infra_retries,failed_attempts,expected", [
+    ("auth", 2, 1, "blocked_auth"),
+    ("configuration", 2, 1, "blocked_configuration"),
+    ("timeout", 0, 1, "blocked_infrastructure"),
+    ("timeout", 1, 2, "blocked_infrastructure"),
+    ("generic_exception", 2, 1, "blocked_infrastructure"),
+])
+def test_incomplete_mentor_crash_preserves_fatal_and_retry_limits(make_manager, git_repo, controlled_install, monkeypatch,
+                                                                error_kind, infra_retries, failed_attempts, expected):
+    class FailingMentor(MentorFixture):
+        async def start_review(self, candidate, policy, root, attempt, on_identity):
+            result = await super().start_review(candidate, policy, root, attempt, on_identity)
+            if candidate.get("mentor_context") and error_kind == "generic_exception":
+                raise RuntimeError("Synthetic mentor infrastructure failure")
+            return result
+
+    async def scenario():
+        manager = make_manager()
+        provider = FailingMentor(mentor_error=None if error_kind == "generic_exception" else error_kind)
+        ap = controlled_install(manager, provider, changing=True)
+        finish = ap.ledger.finish
+        crash = []
+
+        def save_then_crash(table, identity, state, payload):
+            finish(table, identity, state, payload)
+            if table == "reviews" and state == "incomplete" and payload.get("purpose") == "mentor":
+                failures = ap.ledger.rows("reviews", "candidate_id=? AND state='incomplete'",
+                                          (ap.ledger.get("reviews", identity)["candidate_id"],))
+                if len(failures) == failed_attempts:
+                    crash.append(identity)
+                    raise asyncio.CancelledError()
+
+        monkeypatch.setattr(ap.ledger, "finish", save_then_crash)
+        raw = plan(git_repo)
+        raw["policy"].update(infra_retries=infra_retries, provider_backoff=1)
+        identity = await register(ap, raw)
+        await drive(manager, lambda: bool(crash))
+        node = ap.ledger.view(identity)["nodes"][0]
+        assert node["state"] == "reviewing"
+        latest = ap.ledger.get("reviews", crash[-1])
+        assert latest["state"] == "incomplete" and "failure_state" not in latest["payload"]
+        before = len(ap.ledger.rows("reviews"))
+        await ap.shutdown()
+        replacement_provider = MentorFixture()
+        fallback = FixtureProvider("codex")
+        replacement = controlled_install(manager, replacement_provider, fallback, changing=True)
+        replacement.reconcile(identity)
+        assert replacement.ledger.view(identity)["nodes"][0]["state"] == expected
+        for _ in range(3):
+            manager.tick()
+        assert len(replacement.ledger.rows("reviews")) == before
+        assert not replacement_provider.calls and not fallback.calls
+        saved = replacement.ledger.get("reviews", crash[-1])["payload"]
+        assert saved["failure_state"] == expected
+        if error_kind == "timeout":
+            assert saved["retry_failures"] == failed_attempts
+        assert replacement.ledger.view(identity)["nodes"][0]["fix_rounds"] == 1
+        assert not replacement.ledger.rows("acceptances")
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("error_kind", ["timeout", "included_quota"])
+def test_incomplete_mentor_crash_restores_backoff_or_quota_wait(make_manager, git_repo, controlled_install, monkeypatch, error_kind):
+    async def scenario():
+        manager = make_manager()
+        ap = controlled_install(manager, MentorFixture(mentor_error=error_kind), changing=True)
+        finish = ap.ledger.finish
+        crash = []
+
+        def save_then_crash(table, identity, state, payload):
+            finish(table, identity, state, payload)
+            if table == "reviews" and state == "incomplete" and payload.get("purpose") == "mentor":
+                crash.append(identity)
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(ap.ledger, "finish", save_then_crash)
+        raw = plan(git_repo)
+        raw["policy"].update(infra_retries=1, provider_backoff=60)
+        identity = await register(ap, raw)
+        await drive(manager, lambda: bool(crash))
+        assert not ap.ledger.rows("provider_availability")
+        latest = ap.ledger.get("reviews", crash[0])
+        assert "retry_at" not in latest["payload"] and "recheck_at" not in latest["payload"]
+        before = len(ap.ledger.rows("reviews"))
+        await ap.shutdown()
+        replacement = controlled_install(manager, MentorFixture(), changing=True)
+        replacement.reconcile(identity)
+        node = replacement.ledger.view(identity)["nodes"][0]
+        assert node["state"] == "review_queued"
+        saved = replacement.ledger.get("reviews", crash[0])["payload"]
+        if error_kind == "timeout":
+            assert saved["retry_failures"] == 1
+            assert saved["retry_at"] == latest["payload"]["failed_at"] + 60 > time.time()
+            workflow = replacement.ledger.get("workflows", identity)
+            assert replacement._select_provider(node, workflow) is None
+            # Another restart cannot erase or extend the already saved backoff.
+            assert replacement.ledger.transition(node["id"], "review_queued", "reviewing")
+            replacement.reconcile(identity)
+            assert replacement.ledger.get("reviews", crash[0])["payload"]["retry_at"] == saved["retry_at"]
+        else:
+            rows = replacement.ledger.rows("provider_availability")
+            assert len(rows) == 1 and rows[0]["state"] == "included_quota"
+            assert rows[0]["provider"] == "claude" and rows[0]["recheck_at"] == saved["recheck_at"]
+            assert replacement._select_provider(node, replacement.ledger.get("workflows", identity)) == "codex"
+        assert len(replacement.ledger.rows("reviews")) == before
+        assert not replacement.providers["claude"].calls and not replacement.providers["codex"].calls
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_existing_finding_evidence_path_does_not_expand_edit_ownership():
+    node = dict(spec=dict(paths=["A.txt"]))
+    original = dict(id="false-adapter", path="capability.txt", line=1, reason="Pinned evidence contradicts the task assumption")
+    source = dict(payload=dict(blocking=[original]))
+    advice = dict(blocking=[dict(original, reason="Use the same immutable capability evidence while correcting the owned deliverable")])
+    findings = mentoring.repair_findings(node, source, advice)
+    assert findings[0]["path"] == "capability.txt"
+    assert findings[0]["reason"].startswith(original["reason"] + "\nMentor guidance: ")
+    assert node["spec"]["paths"] == ["A.txt"]
+    assert source["payload"]["blocking"] == [original]
+    with pytest.raises(ValueError, match="ownership"):
+        mentoring.repair_findings(node, source, dict(blocking=[dict(original, path="other-source.txt")]))
+    with pytest.raises(ValueError, match="ownership"):
+        mentoring.repair_findings(node, source, dict(blocking=[dict(original, id="new-outside-finding")]))
