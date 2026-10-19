@@ -89,6 +89,10 @@ async def partitions(candidate, root):
     # local import references can be obtained via bounded, snapshot-only reads.
     related = []
     requested = set(p.get("review_files", []))
+    # Required deliverables often support each other (report, results, handoff).
+    # A partition must receive their contents, not just validator existence checks.
+    # Reads remain bounded; eof=False requires follow-up through the read protocol.
+    requested.update(p.get("contract", {}).get("required_paths", []))
     for page in pages:
         path = Path(page["path"])
         if path.suffix == ".py":
@@ -100,6 +104,9 @@ async def partitions(candidate, root):
         raise ValueError("related code read budget exceeded; declare review_files explicitly")
     for path in sorted(requested):
         if (Path(root) / path).is_file():
+            _, tracked, _ = await git(root, "ls-files", "--error-unmatch", "--", safe_path(path))
+            if tracked.strip() != path:
+                raise ValueError("review requested unregistered source")
             related.append(read(root, path))
     if not pages:
         pages = [dict(path="", segment=1, segments=1, diff="", digest=digest(""))]
