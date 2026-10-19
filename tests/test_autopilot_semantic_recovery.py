@@ -88,6 +88,122 @@ def hold_repair_preflight(monkeypatch, ap, *, ignore_cancel=False):
     return ready, release
 
 
+def integration_plan(repo):
+    raw = plan(repo)
+    raw["nodes"].append(dict(
+        id="I1", kind="integration", prompt="fixture I1", paths=["."], depends_on=["C"],
+        validation=dict(commands=[[
+            "python3", "-c", "from pathlib import Path; assert Path('C.txt').exists()",
+        ]]),
+    ))
+    return raw
+
+
+def stage_legacy_integration_pending(monkeypatch, ap, state, *, owner_instruction=False):
+    from app.task_manager import _Turn
+
+    ready, staged = asyncio.Event(), []
+
+    async def before_fix(node):
+        task = ap.manager.db.get_task(node["task_id"])
+        prompt = "Unrelated owner instruction must not be discarded" if owner_instruction else task["last_prompt"]
+        pending = _Turn(prompt, trigger="instruction" if owner_instruction else "initial").to_json()
+        task = ap.manager.db.update_task(task["id"], pending_turn=pending)
+        assert ap.ledger.transition(node["id"], "reserving_fix", state)
+        staged.append(task)
+        ready.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ap, "_fix", before_fix)
+    return ready, staged
+
+
+@pytest.mark.parametrize("restart_state", [None, "fix_queued", "reserving_fix"])
+def test_mechanical_integration_review_fix_starts_first_thread_in_existing_task(
+    make_manager, git_repo, fake_codex_state, controlled_install, monkeypatch, restart_state,
+):
+    async def scenario():
+        manager = make_manager()
+        ap = controlled_install(manager, FixtureProvider("claude", dict(integration_changes=True)))
+        observed = []
+        def inspect(ap):
+            original_fix = ap._fix
+
+            async def inspect_fix(node):
+                observed.append(manager.db.get_task(node["task_id"]))
+                await original_fix(node)
+
+            monkeypatch.setattr(ap, "_fix", inspect_fix)
+
+        inspect(ap)
+        try:
+            if restart_state:
+                ready, staged = stage_legacy_integration_pending(monkeypatch, ap, restart_state)
+            identity = await register(ap, integration_plan(git_repo))
+            if restart_state:
+                await drive(manager, ready.is_set)
+                assert not staged[0]["codex_thread_id"] and not manager.db.list_turns(staged[0]["id"])
+                await ap.shutdown()
+                ap = controlled_install(manager, FixtureProvider("claude", dict(integration_changes=True)))
+                inspect(ap)
+            await drive(manager, lambda: (
+                ap.ledger.view(identity)["state"] == "completed"
+                or ap.ledger.get("nodes", identity + ":I1")["state"] in ("blocked_result", "reconciling")
+            ))
+            node = next(node for node in ap.ledger.view(identity)["nodes"] if node["name"] == "I1")
+            assert node["state"] == "accepted", node["reason"]
+            assert len(observed) == 1 and observed[0]["status"] == "completed"
+            assert not observed[0]["codex_thread_id"]
+            task = manager.db.get_task(node["task_id"])
+            assert task["id"] == observed[0]["id"] and task["worktree"] == observed[0]["worktree"]
+            assert task["codex_thread_id"] and not task["pending_turn"]
+            assert node["fix_rounds"] == 1 and len(node["candidates"]) == 2
+            assert len(manager.db.list_tasks()) == 2 and len(manager.db.list_turns(task["id"])) == 1
+            turns = [json.loads(line) for line in
+                     (fake_codex_state / "autopilot-implementations.jsonl").read_text().splitlines()]
+            integration_turns = [turn for turn in turns if turn["node"] == "I1"]
+            assert len(integration_turns) == 1 and integration_turns[0]["resume"] is None
+            assert integration_turns[0]["cwd"] == task["worktree"]
+            assert (Path(task["worktree"]) / "integration-fixed.txt").read_text() == "good\n"
+            operation = next(op for op in node["operations"] if op["kind"] == "integration")
+            assert operation["payload"]["accepted_head_sha"] == node["candidates"][-1]["payload"]["scope"]["head_sha"]
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("restart_state,expected", [
+    ("fix_queued", "blocked_result"), ("reserving_fix", "reconciling"),
+])
+def test_mechanical_integration_repair_never_discards_other_pending_instruction(
+    make_manager, git_repo, fake_codex_state, controlled_install, monkeypatch, restart_state, expected,
+):
+    async def scenario():
+        manager = make_manager()
+        ap = controlled_install(manager, FixtureProvider("claude", dict(integration_changes=True)))
+        ready, staged = stage_legacy_integration_pending(monkeypatch, ap, restart_state, owner_instruction=True)
+        try:
+            identity = await register(ap, integration_plan(git_repo))
+            await drive(manager, ready.is_set)
+            await ap.shutdown()
+            replacement = controlled_install(manager, FixtureProvider("claude", dict(integration_changes=True)))
+            await drive(manager, lambda: replacement.ledger.get("nodes", identity + ":I1")["state"] == expected)
+            node = replacement.ledger.get("nodes", identity + ":I1")
+            task = manager.db.get_task(node["task_id"])
+            assert task["pending_turn"] == staged[0]["pending_turn"]
+            assert not task["codex_thread_id"] and not manager.db.list_turns(task["id"])
+            assert node["fix_rounds"] == 0
+            assert not replacement.ledger.rows("operations", "node_id=? AND kind='fix'", (node["id"],))
+            turns = [json.loads(line) for line in
+                     (fake_codex_state / "autopilot-implementations.jsonl").read_text().splitlines()]
+            assert not any(turn["node"] == "I1" for turn in turns)
+        finally:
+            await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_semantic_recovery_policy_is_enabled_by_default_and_requires_boolean(git_repo):
     raw = semantic_plan(git_repo)
     assert manifest(raw)["policy"]["semantic_recovery"] is True

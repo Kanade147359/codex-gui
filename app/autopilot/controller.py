@@ -670,6 +670,7 @@ class Autopilot:
                     )
                 ),
                 task_outcome="needs_review",
+                pending_turn=None,
                 finished_at=now_iso(),
             )
         self.ledger.transition(n["id"], "launching", "implementing")
@@ -1307,6 +1308,32 @@ class Autopilot:
                       (state, reason, fingerprint, recorded_progress, int(state == "fix_queued"), n["id"]))
         return True
 
+    def _unused_integration_turn(self, n, task, connection):
+        """Recognize only the initial prompt retained by older completed mechanical merges."""
+        from app.task_manager import _Turn
+
+        if (n["spec"]["kind"] != "integration" or n["spec"].get("integration_mode", "merge-only") != "merge-only"
+            or n["fix_rounds"] or not n["candidate_id"] or task["status"] != "completed" or task.get("codex_thread_id")):
+            return False
+        turn = _Turn.from_json(task.get("pending_turn"))
+        result = completion.parse_result(task.get("semantic_result"))
+        if (not turn or turn.kind != "turn" or turn.trigger != "initial" or turn.started
+            or turn.resume_thread or turn.thread_id or turn.prompt != task["last_prompt"]
+            or not result or result["status"] != "SUCCESS"
+            or connection.execute("SELECT 1 FROM turns WHERE task_id=? LIMIT 1", (task["id"],)).fetchone()
+            or connection.execute("SELECT 1 FROM task_attempts WHERE task_id=? LIMIT 1", (task["id"],)).fetchone()):
+            return False
+        operations = connection.execute(
+            "SELECT * FROM ap_operations WHERE node_id=? AND kind='integration' AND state='merged' AND generation=?",
+            (n["id"], n["generation"] - 1),  # Capturing its first candidate advances the node once.
+        ).fetchall()
+        return any(
+            (payload := unpack(operation)["payload"]).get("task_id") == task["id"]
+            and payload.get("integration_mode", "merge-only") == "merge-only"
+            and payload.get("initial_implementation_prompt") == digest(turn.prompt)
+            for operation in operations
+        )
+
     async def _fix(self, n):
         from app.task_manager import _Turn
 
@@ -1366,7 +1393,8 @@ class Autopilot:
                 c.execute("UPDATE ap_nodes SET state='implementing',pending_no_progress=0,reason='Repair source changed; inspecting the latest turn' WHERE id=?",
                           (n["id"],))
                 return
-            if (task["status"] != "completed" or task["completion_pending"] or task["pending_turn"]
+            if (task["status"] != "completed" or task["completion_pending"]
+                or (task["pending_turn"] and not self._unused_integration_turn(current, task, c))
                 or task["id"] in self.manager._jobs or task.get("stop_reason")):
                 c.execute("UPDATE ap_nodes SET state='blocked_result',pending_no_progress=0,reason='Repair requires an idle, resumable implementation turn' WHERE id=?",
                           (n["id"],))
@@ -1603,7 +1631,8 @@ class Autopilot:
                     reserved = c.execute("SELECT 1 FROM ap_operations WHERE node_id=? AND kind='fix' AND generation=?",
                                          (n["id"], n["fix_rounds"] + 1)).fetchone()
                     safe = (task and task["status"] == "completed" and not task["completion_pending"]
-                            and not task["pending_turn"] and not reserved)
+                            and (not task["pending_turn"] or self._unused_integration_turn(current, dict(task), c))
+                            and not reserved)
                     c.execute("UPDATE ap_nodes SET state=? WHERE id=?",
                               ("fix_queued" if safe else "reconciling", n["id"]))
                 continue
@@ -1789,7 +1818,7 @@ class Autopilot:
             if state["state"] not in ("running", "paused") or state["generation"] != workflow["generation"]:
                 return
             c.execute(
-                "UPDATE tasks SET status='completed',task_outcome='needs_review',completion_pending=0,pid=NULL,proc_identity=NULL,claimed_by=NULL,claimed_at=NULL,semantic_result=?,finished_at=? WHERE id=?",
+                "UPDATE tasks SET status='completed',task_outcome='needs_review',completion_pending=0,pending_turn=NULL,pid=NULL,proc_identity=NULL,claimed_by=NULL,claimed_at=NULL,semantic_result=?,finished_at=? WHERE id=?",
                 (
                     canonical(
                         dict(
