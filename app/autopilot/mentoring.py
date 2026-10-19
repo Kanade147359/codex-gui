@@ -1,11 +1,12 @@
 """Bounded independent repair advice. Mentor output never grants acceptance or permissions."""
 
+from . import decisions
 from .ledger import unpack
 from .policy import canonical, digest, owns
 
 
 MENTOR_POLICY = """
-This is a MENTOR CONSULTATION after a corrective turn, not an acceptance decision.
+This is a MENTOR CONSULTATION to diagnose a blocked review or remaining defect and plan a bounded repair.
 The original independent review's required findings remain binding. Explain the smallest concrete
 repair and verification steps in each finding's reason; keep original finding IDs. Use supplied
 fixed requirements, pinned code and validator evidence. Do not invent missing specifications,
@@ -15,6 +16,8 @@ If a specification, authorization, credential, quota or owner decision is missin
 An APPROVE response from this consultation cannot approve the candidate or discard prior findings;
 the implementation must still be corrected and pass new managed validation and independent review.
 """
+
+REVIEW_STOPS = {"blocked_decision": "NEEDS_HUMAN", "blocked_infrastructure": "INCONCLUSIVE"}
 
 
 def pending(ap, node):
@@ -29,39 +32,80 @@ def pending(ap, node):
 
 
 def queue(ap, node, source):
-    workflow = ap.ledger.get("workflows", node["workflow_id"])
-    policy = workflow["plan"]["policy"]
-    if (not policy.get("mentor_enabled", True) or node["fix_rounds"] < 1
-        or source["payload"].get("verdict") != "CHANGES_REQUESTED"
-        or node["spec"]["manual_gates"] or node["spec"]["contract"].get("manual_approval")):
+    return _queue(ap, node, source, recovering=False)
+
+
+def recover(ap, node):
+    """Inspect a saved review stop once; later mentor/failure records remain authoritative."""
+    verdict = REVIEW_STOPS.get(node["state"])
+    if not verdict or not node["candidate_id"]:
         return False
-    # Advice shares the exact existing fix/no-progress limits. New wording cannot replenish either.
-    if (node["fix_rounds"] >= policy["max_fix_rounds"]
-        or (node["last_failure"] == digest(source["payload"]["blocking"])
-            and node["no_progress"] + 1 >= policy["no_progress_limit"])):
+    records = ap.ledger.rows("reviews", "candidate_id=?", (node["candidate_id"],))
+    if not records or records[-1]["payload"].get("verdict") != verdict:
         return False
-    prior = ap.ledger.rows("reviews", "candidate_id IN (SELECT id FROM ap_candidates WHERE node_id=?)", (node["id"],))
-    rounds = {r["candidate_id"] for r in prior if r["payload"].get("mentor_requested")}
-    if len(rounds) >= policy.get("mentor_max_rounds", 2) or node["candidate_id"] in rounds:
+    return _queue(ap, node, records[-1], recovering=True)
+
+
+def _queue(ap, node, source, *, recovering):
+    if not recovering and node["state"] != "reviewing":
         return False
     with ap.ledger.transaction() as connection:
-        live = unpack(connection.execute("SELECT * FROM ap_workflows WHERE id=?", (workflow["id"],)).fetchone())
+        live = unpack(connection.execute("SELECT * FROM ap_workflows WHERE id=?", (node["workflow_id"],)).fetchone())
         current = unpack(connection.execute("SELECT * FROM ap_nodes WHERE id=?", (node["id"],)).fetchone())
-        if (live["state"] not in ("running", "paused")
-            or live["generation"] != source["payload"].get("run_generation")
-            or current["state"] != "reviewing" or current["generation"] != node["generation"]
-            or current["candidate_id"] != source["candidate_id"]):
+        candidate = unpack(connection.execute("SELECT * FROM ap_candidates WHERE id=?", (node["candidate_id"],)).fetchone())
+        latest = unpack(connection.execute(
+            "SELECT * FROM ap_reviews WHERE candidate_id=? ORDER BY rowid DESC LIMIT 1", (node["candidate_id"],)
+        ).fetchone())
+        if (not live or not current or not candidate or not latest
+            or live["state"] not in ("running", "paused")
+            or current["state"] != node["state"] or current["generation"] != node["generation"]
+            or current["candidate_id"] != node["candidate_id"]
+            or candidate["node_id"] != current["id"] or candidate["generation"] != current["generation"]
+            or live["generation"] != candidate["run_generation"]
+            or live["generation"] != latest["payload"].get("run_generation")
+            or latest["id"] != source["id"] or latest["state"] != "completed"
+            or latest["payload"].get("purpose", "review") != "review"
+            or latest["payload"].get("error_kind") or latest["payload"].get("mentor_requested")):
+            return False
+        policy, spec, payload = live["plan"]["policy"], current["spec"], latest["payload"]
+        semantic = policy.get("semantic_recovery", True)
+        verdict = payload.get("verdict")
+        semantic_verdict = verdict in ("NEEDS_HUMAN", "INCONCLUSIVE")
+        if (not policy.get("mentor_enabled", True)
+            or (spec["manual_gates"] and not decisions.gate_approved(ap.ledger, current, live, connection))
+            or (recovering and (not semantic or verdict != REVIEW_STOPS.get(current["state"])))
+            or (semantic_verdict and not semantic)
+            or (not semantic_verdict and (verdict != "CHANGES_REQUESTED" or current["fix_rounds"] < 1))):
+            return False
+        prior = [unpack(row) for row in connection.execute(
+            "SELECT * FROM ap_reviews WHERE candidate_id IN (SELECT id FROM ap_candidates WHERE node_id=?)",
+            (current["id"],),
+        )]
+        rounds = {r["candidate_id"] for r in prior
+                  if r["payload"].get("mentor_requested") or r["payload"].get("purpose") == "mentor"}
+        if (current["fix_rounds"] >= policy["max_fix_rounds"]
+            or len(rounds) >= policy.get("mentor_max_rounds", 2) or current["candidate_id"] in rounds):
+            return False
+        # One first diagnosis may explain a repeated failure at the no-progress boundary.
+        # The ensuing repair still uses the primary fingerprint and unchanged shared limits.
+        at_no_progress_limit = (current["last_failure"] == digest(payload["blocking"])
+                                and current["no_progress"] + 1 >= policy["no_progress_limit"])
+        if at_no_progress_limit and (not semantic or rounds):
             return False
         connection.execute("UPDATE ap_reviews SET payload=? WHERE id=? AND state='completed'",
-                           (canonical(dict(source["payload"], mentor_requested=True)), source["id"]))
-        connection.execute("UPDATE ap_nodes SET state='review_queued',reason=? WHERE id=? AND state='reviewing'",
-                           ("Independent mentor queued to explain the remaining repair; original findings stay required", node["id"]))
+                           (canonical(dict(payload, mentor_requested=True)), latest["id"]))
+        connection.execute("UPDATE ap_nodes SET state='review_queued',reason=? WHERE id=? AND state=?",
+                           ("Independent mentor queued to diagnose the blocker; original findings stay required",
+                            current["id"], current["state"]))
     return True
 
 
 def context(source):
     return dict(source_review_id=source["id"], original_findings=source["payload"]["blocking"],
-                prior_verdict=source["payload"]["verdict"], purpose="concrete repair advice only")
+                prior_verdict=source["payload"]["verdict"],
+                prior_unverified=source["payload"].get("unverified", []),
+                prior_goal_review=source["payload"].get("goal_review", {}),
+                purpose="concrete repair advice only")
 
 
 def merge_findings(original, advice):

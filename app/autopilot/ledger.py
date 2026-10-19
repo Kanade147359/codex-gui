@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS ap_nodes (
  spec TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', task_id TEXT UNIQUE,
  generation INTEGER NOT NULL DEFAULT 0, candidate_id TEXT, fix_rounds INTEGER NOT NULL DEFAULT 0,
  no_progress INTEGER NOT NULL DEFAULT 0, last_failure TEXT NOT NULL DEFAULT '',
+ pending_no_progress INTEGER NOT NULL DEFAULT 0,
  reason TEXT NOT NULL DEFAULT '', inputs TEXT NOT NULL DEFAULT '[]', ready_at TEXT NOT NULL,
  UNIQUE(workflow_id,name));
 CREATE TABLE IF NOT EXISTS ap_edges (
@@ -76,6 +77,9 @@ def migrate(db):
         node_columns = {r["name"] for r in db._conn.execute("PRAGMA table_info(ap_nodes)")}
         if "decision_epoch" not in node_columns:
             db._conn.execute("ALTER TABLE ap_nodes ADD COLUMN decision_epoch INTEGER NOT NULL DEFAULT 0")
+        if "pending_no_progress" not in node_columns:
+            # Older queued repairs have already charged no_progress; default zero preserves that charge.
+            db._conn.execute("ALTER TABLE ap_nodes ADD COLUMN pending_no_progress INTEGER NOT NULL DEFAULT 0")
         db._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS ap_request_key ON ap_workflows(request_key) WHERE request_key!=''"
         )
@@ -220,9 +224,14 @@ class Ledger:
             )
         return self.get(table, fields["id"])
 
-    def claim(self, node_id, old, new, limit=None):
+    def claim(self, node_id, old, new, limit=None, *, expected_generation=None, expected_candidate_id=None):
         """Resource caps and state claim commit together, including concurrent scheduler callers."""
         with self.transaction() as c:
+            if expected_generation is not None and not c.execute(
+                "SELECT 1 FROM ap_nodes WHERE id=? AND generation=? AND candidate_id IS ?",
+                (node_id, expected_generation, expected_candidate_id),
+            ).fetchone():
+                return False
             if (
                 new == "launching"
                 and c.execute(

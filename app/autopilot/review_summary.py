@@ -7,7 +7,7 @@ from .runner import redact
 
 ACTIVE = {
     "launching", "implementing", "submitting", "validating", "reviewing", "mentoring",
-    "fixing", "integrating", "integration_implementing", "publishing", "replanning",
+    "fix_queued", "reserving_fix", "fixing", "integrating", "integration_implementing", "publishing", "replanning",
     "planning", "probing_implementation",
 }
 WAITING = {"pending", "draft", "blocked_dependencies", "awaiting_replacement"}

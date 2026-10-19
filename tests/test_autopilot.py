@@ -12,6 +12,7 @@ from app.autopilot.policy import manifest, digest
 from app.autopilot.providers import ClaudeProvider, ProviderFailure, claude_error
 from app.autopilot.runner import Validator
 from autopilot_helpers import FixtureProvider, drive, install, plan, register
+from test_autopilot_execution_mentor import controlled_install
 
 
 def test_T03_T23_manifest_validation(git_repo):
@@ -869,14 +870,17 @@ def test_T10_owner_leaf_instruction_resumes_same_thread_and_gets_new_candidate(m
 @pytest.mark.parametrize(
     "status,outcome", [("PARTIAL", "incomplete"), ("BLOCKED", "blocked"), ("NEEDS_INPUT", "needs_input")]
 )
-def test_semantic_failures_keep_their_original_outcome_without_review(make_manager, git_repo, status, outcome):
+def test_semantic_failures_keep_original_outcome_when_recovery_disabled(
+    make_manager, git_repo, status, outcome, controlled_install,
+):
     async def scenario():
         from conftest import FakeRunner
 
         m = make_manager()
-        ap = install(m)
+        ap = controlled_install(m)
         m.runner = FakeRunner()
         raw = plan(git_repo)
+        raw["policy"]["semantic_recovery"] = False
         raw["nodes"][0].update(prompt="semantic " + status + " Explicit semantic result", paths=["out.txt"])
         identity = await register(ap, raw)
         await drive(m, lambda: ap.ledger.view(identity)["nodes"][0]["state"] == "blocked_result")

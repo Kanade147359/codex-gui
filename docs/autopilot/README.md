@@ -105,6 +105,37 @@ main must have no live checkout. Publication uses compare-and-swap update-ref,
 never force push or checkout mutation. A changed target/live checkout stops with
 the candidate retained. Deploy/restart is always separate.
 
+## Automatic semantic recovery
+
+`policy.semantic_recovery` defaults true. Autopilot inspects a child's saved
+`needs_review`, `incomplete` or repairable `blocked` result and schedules a bounded
+corrective turn in its existing worktree/thread. The turn receives the latest
+result, required findings and fixed acceptance conditions; it must inspect the
+existing work before continuing. A correction returns through managed validation
+and independent review before acceptance or downstream release.
+
+An independent review returning `NEEDS_HUMAN` or `INCONCLUSIVE` can receive an
+independent mentor consultation before stopping, including on the first candidate.
+Previously stopped nodes with these saved review outcomes are eligible on the next
+controller tick. The mentor receives the original findings and unverified evidence
+and can propose concrete repairs within the existing contract. If it confirms an
+owner decision is needed, the node remains blocked without another consultation
+loop. An advisory `APPROVE` cannot accept the candidate or erase the original findings.
+
+Recovery retains `max_fix_rounds`, `no_progress_limit` and `mentor_max_rounds` across
+candidate generations and restarts. One first diagnosis can run at the no-progress
+boundary, but its advice cannot authorize an additional repair after that budget
+is exhausted. Unapproved manual start gates, authentication/configuration failures,
+unknown external operations and user stops remain protected. An existing start-gate
+approval permits repair only while its requirements and authorization still match;
+a `manual_approval` contract continues to require owner acceptance after successful
+validation and review. Quota waits use the existing provider availability policy.
+Other eligible DAG branches continue while a node requires owner input.
+
+Set `semantic_recovery: false` to retain the previous stop behavior for semantic
+outcomes. `mentor_enabled: false` or `mentor_max_rounds: 0` disables mentor
+consultations without changing independent acceptance requirements.
+
 ## Existing Needs Review
 
 1. Load **Dry-run分類** or `GET /api/autopilot/backlog`. Categories separate manual
