@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 
 from app.autopilot.controller import Autopilot
-from app.autopilot.providers import ClaudeProvider, ProviderFailure
+from app.autopilot.providers import ClaudeProvider, ProviderFailure, review_prompt
 from app.autopilot.runner import run_bounded
 from app.codex_runner import CodexRunner
 
@@ -26,7 +26,8 @@ class FixtureProvider(ClaudeProvider):
         return dict(version="fixture", auth="fake; no real account", fixture=True)
 
     async def start_review(self, candidate, policy, root, attempt, on_identity):
-        self.calls.append(dict(candidate=candidate["id"], attempt=attempt["id"]))
+        received = json.loads(await review_prompt(candidate, root))
+        self.calls.append(dict(candidate=candidate["id"], attempt=attempt["id"], received=received))
 
         def started(proc):
             self.processes[attempt["id"]] = proc
@@ -38,7 +39,13 @@ class FixtureProvider(ClaudeProvider):
             _, output, _ = await run_bounded(
                 [sys.executable, str(Path(__file__).with_name("fake_autopilot_review.py"))],
                 stdin=json.dumps(
-                    dict(candidate=candidate, provider=self.provider, scenario=self.scenario, root=str(root))
+                    dict(
+                        candidate=candidate,
+                        provider=self.provider,
+                        scenario=self.scenario,
+                        root=str(root),
+                        received=received,
+                    )
                 ),
                 on_start=started,
                 timeout=15,

@@ -1,0 +1,15 @@
+Code: a5a9daad8dc4c99b00a6655e68044fdd52cba6bc
+
+full: 3 failed, 799 passed, 29 skipped, 2 warnings in 131.02s (0:02:11)
+log sha256: 2d81abd08a9277dce8489c49da828933637479f62e93ee95fc2ad7c005a9a628
+focused: 71 passed, 2 warnings in 33.69s
+log sha256: d9cf2d5bf4d21e2b33e71373ba25ce00b2551a6a7594118c7f2403ca7cea3b95
+browser: 4 passed, 9 deselected, 1 warning in 30.74s
+log sha256: 9313215d84500952fcde98b95928f9af97a20d2a3301badf0df34c583fbb2e77
+baseline: 3 failed in 6.28s
+log sha256: 32ef61cb06b49e7339b907dd0d535843300284b0c7fa24d26879532a6611b787
+
+Existing failures reproduced on unchanged base main:
+tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded
+tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model
+tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap

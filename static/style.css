@@ -475,3 +475,41 @@ body.graph-wide .graph-shell { grid-template-columns:minmax(0,1fr); height:calc(
 .ap-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; }
 .ap-panel button { margin: .3rem; }
 .ap-node { border: 1px solid var(--border, #555); padding: .8rem; margin: .8rem 0; }
+.ap-panel { min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 6px; }
+.ap-panel h2 { text-transform: none; letter-spacing: 0; }
+.ap-panel h3 { margin: .5rem 0; font-size: 14px; }
+.ap-panel fieldset { min-width: 0; border: 1px solid var(--border); margin: 1rem 0; padding: 1rem; }
+.ap-panel label { display: block; margin: .7rem 0 .3rem; }
+.ap-panel .ap-check { display: flex; gap: .6rem; align-items: flex-start; }
+.ap-panel .ap-check input { width: auto; flex: none; margin-top: .2rem; }
+.ap-panel .ap-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .7rem 1rem; }
+.ap-panel [hidden] { display: none !important; }
+.ap-panel details { margin: .65rem 0; }
+.ap-panel details > summary { padding: .45rem 0; }
+.ap-panel input, .ap-panel select { min-width: 0; }
+.ap-panel select[multiple] { min-height: 7rem; }
+.ap-panel .repo-row input { flex: 1; min-width: 0; }
+.ap-panel .repo-row button { flex: none; }
+.ap-actions, .ap-section-links { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; }
+.ap-section-links { margin: 1rem 0; }
+.ap-review-summary { border-left: 3px solid var(--yellow); background: #1e1d19; padding: 1rem; }
+.ap-review-text { white-space: pre-wrap; line-height: 1.8; }
+.ap-workflow-row { border-bottom: 1px solid var(--border); padding: .9rem 0; }
+.ap-workflow-row:last-child { border-bottom: 0; }
+.ap-progress progress { display: block; width: 100%; height: .65rem; accent-color: var(--green); }
+.ap-progress p { color: var(--muted); }
+.ap-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin: .7rem 0; }
+.ap-table th, .ap-table td { border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; padding: .5rem; overflow-wrap: anywhere; }
+.ap-history-entry { border-bottom: 1px solid var(--border); padding: .8rem 0; }
+#ap-picker .picker-list button.name { text-align: left; border: 0; background: transparent; min-width: 0; overflow-wrap: anywhere; }
+#ap-picker input { min-width: 0; }
+@media (max-width: 700px) {
+  body[data-page^="autopilot"] main { padding: .5rem .4rem 2rem; }
+  .ap-panel { margin: .5rem 0; padding: .75rem; }
+  .ap-panel fieldset { padding: .65rem; }
+  .ap-panel .ap-form-grid { grid-template-columns: minmax(0,1fr); gap: 0; }
+  .ap-panel dl.meta { grid-template-columns: minmax(0,1fr); gap: .25rem; }
+  .ap-panel dl.meta dd { margin-bottom: .5rem; }
+  .ap-panel button, #ap-picker button { min-height: 40px; }
+  .ap-review-summary { padding: .75rem; }
+}

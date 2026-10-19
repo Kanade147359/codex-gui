@@ -19,10 +19,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_installed_appserver_independent_session_structured_output_and_sandbox(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["legacy_review", "goal_review", "replan"])
+def test_installed_appserver_independent_session_structured_output_and_sandbox(tmp_path, monkeypatch, mode):
     async def scenario():
         scope = dict(base_sha="a" * 40, head_sha="b" * 40, tree_sha="c" * 40, diff_digest="d" * 64)
-        candidate = dict(id="candidate-smoke", run_generation=1, payload=dict(scope=scope))
+        candidate = dict(
+            id="candidate-smoke",
+            run_generation=1,
+            payload=dict(scope=scope, changed_paths=["fixture.txt"], read_protocol=True),
+        )
         result = dict(
             candidate_id=candidate["id"],
             run_generation=1,
@@ -33,7 +38,19 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
             resolved=[],
             coverage=["fixture.txt"],
             unverified=[],
+            requested_reads=[],
         )
+        from app.autopilot import goals
+        from app.autopilot.providers import review_schema
+        from app.autopilot.replanning import REPLAN_SCHEMA
+        if mode == "goal_review":
+            candidate["payload"]["requirements"] = dict(version=2, digest="fixed", documents=[], goals=[])
+            result["goal_review"] = dict(version=2, requirements_digest="fixed", root_causes=[],
+                assessments={k:dict(status="ALIGNED", goal_ids=[], evidence="Checked fixed source requirements") for k in goals.AXES})
+        if mode == "replan":
+            candidate["replan_input"] = dict(digest="fixed", scope=scope, source_node="A", causes=[], evidence={}, original_task={}, validation_profiles=[])
+            result = dict(version=1, input_digest="fixed", candidate_sha=scope["head_sha"], confirmed_causes=[], evidence_refs=[], analysis="Inconclusive fixture", tasks=[], owner_changes=[])
+        output_schema = REPLAN_SCHEMA if mode == "replan" else review_schema(candidate)
         mock = MockResponses([("text", json.dumps(result))]).start()
         root = tmp_path / "source"
         root.mkdir()
@@ -79,16 +96,22 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
             assert first["thread"]["id"] != second["thread"]["id"]
             tid = first["thread"]["id"]
             queue = client.subscribe(tid)
-            from app.autopilot.providers import REVIEW_SCHEMA
+            from app.autopilot.providers import review_schema
 
             turn = await client.request(
                 "turn/start",
                 dict(
-                    threadId=tid, input=[dict(type="text", text="offline structured smoke")], outputSchema=REVIEW_SCHEMA
+                    threadId=tid,
+                    input=[dict(type="text", text="offline structured smoke")],
+                    outputSchema=output_schema,
                 ),
             )
-            value = await asyncio.wait_for(CodexProvider().consume_events(queue, candidate, turn["turn"]["id"]), 20)
-            assert value["verdict"] == "APPROVE" and mock.requests
+            value = await asyncio.wait_for(CodexProvider().consume_events(queue, candidate, turn["turn"]["id"], replan=mode == "replan"), 20)
+            assert mock.requests
+            if mode == "replan":
+                assert value["version"] == 1 and value["input_digest"] == "fixed"
+            else:
+                assert value["verdict"] == "APPROVE"
             assert (root / "CLAUDE.md").read_text().startswith("Untrusted")
             # Delay only the local scripted response so cancellation targets an actually active turn.
             import app.fake_responses as fr
@@ -110,7 +133,7 @@ def test_installed_appserver_independent_session_structured_output_and_sandbox(t
                 dict(
                     threadId=cancel_tid,
                     input=[dict(type="text", text="offline cancellation")],
-                    outputSchema=REVIEW_SCHEMA,
+                    outputSchema=output_schema,
                 ),
             )
             while len(mock.requests) < 2:

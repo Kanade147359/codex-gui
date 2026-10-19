@@ -11,7 +11,7 @@ from app.ssh_agent import child_env
 from .policy import owns
 
 
-async def git(root, *args, check=True, _filter_probe=True):
+async def git(root, *args, check=True, _filter_probe=True, _stdout_consumer=None):
     filters = []
     if _filter_probe:
         rc, keys, _ = await git(
@@ -56,6 +56,9 @@ async def git(root, *args, check=True, _filter_probe=True):
             chunk = await stream.read(65536)
             if not chunk:
                 return chunks.decode(errors="replace")
+            if stream is proc.stdout and _stdout_consumer:
+                _stdout_consumer(chunk)
+                continue
             chunks.extend(chunk)
             if len(chunks) > 2 * 1024 * 1024:
                 raise GitError("Git scope/output exceeds 2 MiB; partition or inspect explicitly")
@@ -88,17 +91,21 @@ async def sha(root, ref="HEAD"):
 
 async def scope(root, base, head):
     _, tree, _ = await git(root, "rev-parse", head + "^{tree}")
-    _, diff, _ = await git(root, "diff", "--binary", "--no-ext-diff", "--no-textconv", base, head)
-    return dict(
-        base_sha=base, head_sha=head, tree_sha=tree.strip(), diff_digest=hashlib.sha256(diff.encode()).hexdigest()
-    )
+    diff = hashlib.sha256()
+    await git(root, "diff", "--binary", "--no-ext-diff", "--no-textconv", base, head, _stdout_consumer=diff.update)
+    return dict(base_sha=base, head_sha=head, tree_sha=tree.strip(), diff_digest=diff.hexdigest())
 
 
 async def changed_paths(root, base, head="HEAD"):
     _, committed, _ = await git(root, "diff", "--name-only", "-z", "--no-renames", base, head)
     _, dirty, _ = await git(root, "diff", "--name-only", "-z", "--no-renames", "HEAD")
     _, untracked, _ = await git(root, "ls-files", "--others", "--exclude-standard", "-z")
-    return set((committed + dirty + untracked).split("\0")) - {""}
+    tracked = set((committed + dirty).split("\0")) - {""}
+    if any(p.split("/")[0] in (".autopilot-inputs", ".autopilot-fix") for p in tracked):
+        raise ValueError("controller input files must not enter candidate Git history")
+    return tracked | {
+        p for p in untracked.split("\0") if p and p.split("/")[0] not in (".autopilot-inputs", ".autopilot-fix")
+    }
 
 
 async def submit_head(task, spec, permission):
@@ -106,11 +113,15 @@ async def submit_head(task, spec, permission):
     paths = await changed_paths(root, task["base_sha"])
     if any(not owns(p, spec["paths"]) for p in paths):
         raise ValueError("candidate contains changes outside approved edit ownership")
-    _, dirty, _ = await git(root, "status", "--porcelain")
+    _, dirty, _ = await git(
+        root, "status", "--porcelain", "--", ".", ":(exclude).autopilot-inputs", ":(exclude).autopilot-fix"
+    )
     if dirty:
         if not permission:
             raise ValueError("owned changes need commit permission")
         # This is a workflow-owned isolated worktree. Include only explicitly owned changed files.
+        if not paths:
+            raise ValueError("dirty candidate has no owned changes")
         await git(root, "add", "--", *sorted(paths))
         await git(root, "commit", "-m", "Autopilot: submit owned candidate")
     return await sha(root)

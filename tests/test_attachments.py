@@ -3,6 +3,7 @@ import asyncio
 import io
 import json
 import sqlite3
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -240,6 +241,15 @@ def test_scheduled_followup_and_dependent_initial_images_survive_restart(setting
         thread = done(c, target)["codex_thread_id"]
         dep = c.post("/api/tasks", json={"repository": str(git_repo), "prompt": "sleep"}).json()["id"]
         wait_status(c, dep, "running")
+        # Process startup precedes thread.started. This scenario resumes an existing session after restart.
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            started = c.get(f"/api/tasks/{dep}").json()
+            if started["codex_thread_id"]:
+                break
+            time.sleep(.025)
+        assert started["status"] == "running" and started["codex_thread_id"], started
+        dep_thread = started["codex_thread_id"]
         scheduled = c.post(f"/api/tasks/{target}/scheduled", json={"prompt": "ok", "depends_on": [dep],
                                                                  "attachment_ids": [b["id"], a["id"]]}).json()
         waiting = c.post("/api/tasks", json={"repository": str(git_repo), "prompt": "ok", "depends_on": [dep],
@@ -249,10 +259,11 @@ def test_scheduled_followup_and_dependent_initial_images_survive_restart(setting
     with TestClient(create_app(settings, runner)) as c:
         row = c.get(f"/api/tasks/{target}").json()["scheduled_instructions"][0]
         assert [a["id"] for a in row["attachments"]] == [b["id"], a["id"]]
-        assert c.post(f"/api/tasks/{dep}/messages", json={"prompt": "ok"}).status_code == 200
-        done(c, dep)
+        assert c.get(f"/api/tasks/{dep}").json()["codex_thread_id"] == dep_thread
+        response = c.post(f"/api/tasks/{dep}/messages", json={"prompt": "ok"})
+        assert response.status_code == 200, response.text
+        assert done(c, dep)["codex_thread_id"] == dep_thread
         wait_status(c, waiting, "completed")
-        import time
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             row = c.get(f"/api/tasks/{target}").json()["scheduled_instructions"][0]

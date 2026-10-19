@@ -1,5 +1,7 @@
 # Provider compatibility — 2026-10-14
 
+Historical bootstrap record; current [document workflow compatibility](document-workflow-verification.md) includes bounded snapshot reads and prepared toolchain support.
+
 Tested code: `6040c605a4e2578be072b6d991590474b8cb7d5a`.
 
 | Component | Observed result | Boundary |

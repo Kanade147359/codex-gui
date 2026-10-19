@@ -16,7 +16,13 @@ def digest(value):
 
 def input_digest(node, workflow):
     return digest(
-        dict(dependencies=node["inputs"], bundle=workflow["plan"]["inputs"], references=node["spec"]["input_files"])
+        dict(
+            dependencies=node["inputs"],
+            bundle=workflow["plan"]["inputs"],
+            goals=workflow["plan"].get("goals", []),
+            spec=node["spec"],
+            rules=workflow["plan"].get("rules", {}),
+        )
     )
 
 
@@ -25,9 +31,11 @@ def safe_path(value):
         not isinstance(value, str)
         or not value
         or "\x00" in value
+        or any(ord(char) < 32 for char in value)
         or "\\" in value
         or PurePosixPath(value).is_absolute()
         or any(p in ("..", ".git") for p in value.split("/"))
+        or ":" in value
     ):
         raise ValueError("paths must be relative and outside .git")
     return str(PurePosixPath(value))
@@ -38,7 +46,14 @@ def owns(path, paths):
 
 
 def profile(value, kind):
-    if not isinstance(value, dict) or set(value) - {"commands", "artifacts", "timeout", "outputs", "network"}:
+    if not isinstance(value, dict) or set(value) - {
+        "commands",
+        "artifacts",
+        "timeout",
+        "outputs",
+        "network",
+        "environment",
+    }:
         raise ValueError("invalid validation profile")
     for key in ("commands", "artifacts", "outputs"):
         if key in value and not isinstance(value[key], list):
@@ -62,7 +77,16 @@ def profile(value, kind):
         raise ValueError("build outputs cannot replace the source root or required artifacts")
     if value.get("network", False):
         raise ValueError("v1 validation has no tool network; preinstall dependencies in the host runtime")
-    return dict(commands=commands, artifacts=artifacts, timeout=timeout, outputs=outputs, network=False)
+    environment = value.get("environment", {})
+    if not isinstance(environment, dict) or set(environment) - {"toolchains", "mounts", "env", "offline"}:
+        raise ValueError("invalid validation environment")
+    from .environment import normalize
+
+    environment = normalize(environment)
+    result = dict(commands=commands, artifacts=artifacts, timeout=timeout, outputs=outputs, network=False)
+    if environment:
+        result["environment"] = environment
+    return result
 
 
 def manifest(value):
@@ -88,6 +112,7 @@ def manifest(value):
         "permissions",
         "inputs",
         "idempotency_key",
+        "goals",
     }:
         raise ValueError("invalid workflow manifest")
     if value.get("version") != 1:
@@ -109,6 +134,11 @@ def manifest(value):
         "automatic_acceptance",
         "review_timeout",
         "provider_backoff",
+        "replanning",
+        "implementation_model",
+        "reasoning_effort",
+        "mentor_enabled",
+        "mentor_max_rounds",
     }
     if set(policy) - allowed:
         raise ValueError("unknown policy fields")
@@ -122,21 +152,32 @@ def manifest(value):
         ("integration_slots", 1, 1),
         ("review_timeout", 600, 3600),
         ("provider_backoff", 60, 3600),
+        ("mentor_max_rounds", 2, 5),
     ):
         policy.setdefault(key, default)
         if (
             type(policy[key]) is not int
-            or not (0 if key in ("max_fix_rounds", "infra_retries") else 1) <= policy[key] <= maximum
+            or not (0 if key in ("max_fix_rounds", "infra_retries", "mentor_max_rounds") else 1) <= policy[key] <= maximum
         ):
             raise ValueError(f"invalid {key}")
     for key, default in (("account", "personal"), ("bucket", "included"), ("claude_model", ""), ("codex_model", "")):
         policy.setdefault(key, default)
         if not isinstance(policy[key], str) or policy[key].startswith("-"):
             raise ValueError(f"invalid {key}")
-    for key, default in (("extra_usage_disabled_confirmed", False), ("automatic_acceptance", True)):
+    from .execution import validate_settings, resolve_execution
+
+    execution = validate_settings(dict(model=policy.get("implementation_model", ""),
+                                       reasoning_effort=policy.get("reasoning_effort", "high")), allow_empty_model=True)
+    policy.update(implementation_model=execution["model"], reasoning_effort=execution["reasoning_effort"])
+    for key, default in (("extra_usage_disabled_confirmed", False), ("automatic_acceptance", True), ("mentor_enabled", True)):
         policy.setdefault(key, default)
         if type(policy[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
+    replanning = policy.setdefault("replanning", "propose_only")
+    if replanning not in ("off", "propose_only", "auto_within_envelope"):
+        raise ValueError("invalid replanning mode")
+    from .goals import normalize_goals
+    goals = normalize_goals(value.get("goals", []), value.get("inputs", {}))
     permissions = dict(value.get("permissions", {}))
     if set(permissions) - {"commit_owned_changes", "publish_main"}:
         raise ValueError("deploy, restart and billing permissions are outside Autopilot")
@@ -145,7 +186,11 @@ def manifest(value):
         if type(permissions[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
     inputs = value.get("inputs", {})
-    if not isinstance(inputs, dict) or any(not isinstance(s, str) or len(s) > 262144 for s in inputs.values()):
+    if (
+        not isinstance(inputs, dict)
+        or any(not isinstance(s, str) or len(s.encode()) > 262144 for s in inputs.values())
+        or sum(len(s.encode()) for s in inputs.values()) > 4 * 1024 * 1024
+    ):
         raise ValueError("inputs must be a map of immutable Markdown texts")
     inputs = {safe_path(p): s for p, s in inputs.items()}
     nodes = value.get("nodes", [])
@@ -164,12 +209,35 @@ def manifest(value):
             "manual_gates",
             "task_id",
             "input_files",
+            "draft",
+            "envelope",
+            "integration_mode",
+            "plan_artifact",
+            "handoff",
+            "review_files",
+            "goal_ids",
+            "acceptance_ids",
+            "replan",
+            "model",
+            "reasoning_effort",
         }:
             raise ValueError("invalid node fields")
         n = dict(raw)
+        n.update(validate_settings(n, allow_empty_model=True))
         nid = n.get("id", "")
         if not isinstance(nid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", nid) or nid in by_id:
             raise ValueError("invalid or duplicate node id")
+        for key in ("goal_ids", "acceptance_ids"):
+            n.setdefault(key, [])
+            if not isinstance(n[key], list) or any(not isinstance(x, str) or not x for x in n[key]):
+                raise ValueError("invalid goal/acceptance references")
+        if set(n["goal_ids"]) - {g["id"] for g in goals}:
+            raise ValueError("unknown explicit goal ID")
+        lineage = n.get("replan")
+        if lineage is not None and (not isinstance(lineage, dict) or set(lineage) != {"parent", "depth", "revision"}
+                                    or lineage["depth"] != 1 or not isinstance(lineage["parent"], str)
+                                    or not isinstance(lineage["revision"], str)):
+            raise ValueError("invalid dynamic node lineage")
         n.setdefault("kind", "code")
         if n["kind"] not in ("code", "report", "integration"):
             raise ValueError("unknown artifact kind")
@@ -180,9 +248,34 @@ def manifest(value):
             if key in n and not isinstance(n[key], list):
                 raise ValueError(f"{key} must be a list")
         n["paths"] = [safe_path(p) for p in n.get("paths", [])]
-        if not n["paths"]:
+        n.setdefault("draft", False)
+        if type(n["draft"]) is not bool:
+            raise ValueError("draft must be boolean")
+        if any(p == ".autopilot-inputs" or p.startswith(".autopilot-inputs/") for p in n["paths"]):
+            raise ValueError("input bundle is controller-owned")
+        if not n["paths"] and not n["draft"]:
             raise ValueError("explicit edit ownership is required")
-        n["validation"] = profile(n.get("validation", {}), n["kind"])
+        n["validation"] = profile(n.get("validation", {}), n["kind"]) if not n["draft"] else n.get("validation", {})
+        if n["draft"] and not isinstance(n["validation"], dict):
+            raise ValueError("draft validation must be an object")
+        envelope = n.get("envelope", {})
+        if not isinstance(envelope, dict) or set(envelope) - {"paths", "validation_profiles"}:
+            raise ValueError("invalid planning authorization envelope")
+        n["envelope"] = dict(
+            paths=[safe_path(p) for p in envelope.get("paths", n["paths"])],
+            validation_profiles=[profile(p, n["kind"]) for p in envelope.get("validation_profiles", [])],
+        )
+        n.setdefault("integration_mode", "merge-only")
+        if n["integration_mode"] not in ("merge-only", "merge-then-implement") or (
+            n["kind"] != "integration" and n["integration_mode"] != "merge-only"
+        ):
+            raise ValueError("invalid integration mode")
+        for key in ("handoff", "review_files"):
+            n[key] = [safe_path(p) for p in n.get(key, [])]
+        if n.get("plan_artifact"):
+            n["plan_artifact"] = safe_path(n["plan_artifact"])
+            if n["plan_artifact"] not in n["validation"].get("artifacts", []):
+                raise ValueError("plan revision must be a required artifact")
         from app.completion import contract
 
         n["contract"] = contract(n.get("contract", {}))
@@ -193,6 +286,7 @@ def manifest(value):
             raise ValueError("manual gates require named owner decisions")
         if any(p not in inputs for p in n["input_files"]):
             raise ValueError("missing input bundle reference")
+        resolve_execution(n, dict(policy=policy, inputs=inputs))
         by_id[nid] = n
     order, visiting = [], set()
 
@@ -226,7 +320,9 @@ def manifest(value):
         if n["kind"] == "integration" and not code_parents:
             raise ValueError("integration requires accepted code inputs")
         for other in order[: order.index(nid)]:
-            if other in ancestors[nid] or by_id[other]["kind"] == "integration" or n["kind"] == "integration":
+            if (other in ancestors[nid] or by_id[other]["kind"] == "integration" or n["kind"] == "integration"
+                or n.get("replan", {}).get("parent") == other
+                or by_id[other].get("replan", {}).get("parent") == nid):
                 continue
             if any(
                 owns(p, by_id[other]["paths"]) or owns(q, n["paths"]) for p in n["paths"] for q in by_id[other]["paths"]
@@ -256,5 +352,6 @@ def manifest(value):
         policy=policy,
         permissions=permissions,
         inputs=inputs,
+        goals=goals,
         idempotency_key=request_key,
     )

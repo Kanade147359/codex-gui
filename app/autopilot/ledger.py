@@ -45,6 +45,25 @@ CREATE TABLE IF NOT EXISTS ap_operations (
 CREATE TABLE IF NOT EXISTS ap_provider_availability (
  key TEXT PRIMARY KEY, provider TEXT NOT NULL, state TEXT NOT NULL, recheck_at REAL NOT NULL,
  probe_owner TEXT, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_decisions (
+ id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES ap_nodes(id), target TEXT NOT NULL,
+ state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(node_id,target));
+CREATE TABLE IF NOT EXISTS ap_replans (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ source_node TEXT NOT NULL UNIQUE REFERENCES ap_nodes(id), source_candidate TEXT NOT NULL REFERENCES ap_candidates(id),
+ state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_graph_revisions (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ replan_id TEXT NOT NULL UNIQUE REFERENCES ap_replans(id), source_node TEXT NOT NULL REFERENCES ap_nodes(id),
+ state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_plan_revisions (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ source_candidate TEXT NOT NULL UNIQUE, state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ap_workflow_events (
+ id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES ap_workflows(id),
+ kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL,
+ request_key TEXT NOT NULL, created_at TEXT NOT NULL,
+ UNIQUE(workflow_id,request_key));
 """
 
 
@@ -54,6 +73,9 @@ def migrate(db):
         have = {r["name"] for r in db._conn.execute("PRAGMA table_info(ap_workflows)")}
         if "request_key" not in have:
             db._conn.execute("ALTER TABLE ap_workflows ADD COLUMN request_key TEXT NOT NULL DEFAULT ''")
+        node_columns = {r["name"] for r in db._conn.execute("PRAGMA table_info(ap_nodes)")}
+        if "decision_epoch" not in node_columns:
+            db._conn.execute("ALTER TABLE ap_nodes ADD COLUMN decision_epoch INTEGER NOT NULL DEFAULT 0")
         db._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS ap_request_key ON ap_workflows(request_key) WHERE request_key!=''"
         )
@@ -92,6 +114,11 @@ class Ledger:
             "acceptances",
             "operations",
             "provider_availability",
+            "decisions",
+            "plan_revisions",
+            "replans",
+            "graph_revisions",
+            "workflow_events",
         }:
             raise ValueError("unknown ledger table")
         with self.db._lock:
@@ -139,8 +166,16 @@ class Ledger:
             for n in plan["nodes"]:
                 nid = identity + ":" + n["id"]
                 c.execute(
-                    "INSERT INTO ap_nodes(id,workflow_id,name,spec,task_id,ready_at) VALUES(?,?,?,?,?,?)",
-                    (nid, identity, n["id"], canonical(n), n.get("task_id"), stamp),
+                    "INSERT INTO ap_nodes(id,workflow_id,name,spec,task_id,ready_at,state) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        nid,
+                        identity,
+                        n["id"],
+                        canonical(n),
+                        n.get("task_id"),
+                        stamp,
+                        "draft" if n.get("draft") else "pending",
+                    ),
                 )
                 for parent in n["depends_on"]:
                     c.execute("INSERT INTO ap_edges VALUES(?,?)", (nid, identity + ":" + parent))
@@ -165,6 +200,7 @@ class Ledger:
                 c.execute(
                     "UPDATE ap_nodes SET state=?"
                     + "".join(f", {k}=?" for k in fields)
+                    + (", decision_epoch=decision_epoch+1" if new == "blocked_decision" and old != new else "")
                     + " WHERE id=? AND state=? AND EXISTS(SELECT 1 FROM ap_workflows w WHERE w.id=ap_nodes.workflow_id AND w.state IN ('running','paused'))",
                     (new, *fields.values(), node_id, old),
                 ).rowcount
@@ -201,7 +237,10 @@ class Ledger:
                         "SELECT count(*) FROM ap_nodes WHERE state IN ('launching','integrating') AND json_extract(spec,'$.kind')='integration'"
                     ).fetchone()[0]
                 else:
-                    count = c.execute("SELECT count(*) FROM ap_nodes WHERE state=?", (new,)).fetchone()[0]
+                    if new in ("reviewing", "replanning"):
+                        count = c.execute("SELECT count(*) FROM ap_nodes WHERE state IN ('reviewing','replanning')").fetchone()[0]
+                    else:
+                        count = c.execute("SELECT count(*) FROM ap_nodes WHERE state=?", (new,)).fetchone()[0]
                 if count >= limit:
                     return False
             return (
@@ -248,7 +287,7 @@ class Ledger:
                 return False
             w = unpack(c.execute("SELECT * FROM ap_workflows WHERE id=?", (n["workflow_id"],)).fetchone())
             r = unpack(c.execute("SELECT * FROM ap_reviews WHERE id=?", (review["id"],)).fetchone())
-            evidence = [unpack(x) for x in c.execute("SELECT * FROM ap_validation WHERE candidate_id=?", (cid,))]
+            evidence = [unpack(x) for x in c.execute("SELECT * FROM ap_validation WHERE candidate_id=? ORDER BY rowid", (cid,))]
             task = c.execute("SELECT * FROM tasks WHERE id=?", (n["task_id"],)).fetchone()
             if not w or not task:
                 return False
@@ -263,6 +302,13 @@ class Ledger:
                     (task["id"],),
                 )
             ]
+            from . import goals
+            try:
+                if not goals.required(cand):
+                    return False  # Historical v1 reviews cannot satisfy the new acceptance gate.
+                goals.validate(r["payload"] if r else {}, cand)
+            except (ValueError, KeyError, TypeError):
+                return False
             approved = (
                 r
                 and r["candidate_id"] == cid
@@ -273,6 +319,10 @@ class Ledger:
                 0
             ]
             prior_findings = set(p.get("unresolved", []))
+            from .decisions import gate_approved, candidate_approved
+
+            manual_satisfied = gate_approved(self, n, w, c)
+            final_owner_satisfied = candidate_approved(self, n, w, c)
             for previous in c.execute(
                 "SELECT payload FROM ap_reviews WHERE candidate_id=? AND id!=?", (cid, review["id"])
             ):
@@ -295,6 +345,7 @@ class Ledger:
                 or r["payload"].get("unverified")
                 or not prior_findings <= set(r["payload"].get("resolved", []))
                 or not set(p.get("changed_paths", [])) <= set(r["payload"].get("coverage", []))
+                or not evidence or evidence[-1]["state"] != "PASS"
                 or not any(
                     e["state"] == "PASS"
                     and e["payload"].get("scope") == current_scope
@@ -305,10 +356,12 @@ class Ledger:
                     and all(x.get("exit_status") == 0 and not x.get("timed_out") for x in e["payload"]["checks"])
                     for e in evidence
                 )
-                or not w["plan"]["policy"]["automatic_acceptance"]
-                or n["spec"]["manual_gates"]
-                or n["spec"]["contract"].get("manual_approval")
-                or p["contract"].get("manual_approval")
+                or (not w["plan"]["policy"]["automatic_acceptance"] and not final_owner_satisfied)
+                or (n["spec"]["manual_gates"] and not manual_satisfied)
+                or (
+                    (n["spec"]["contract"].get("manual_approval") or p["contract"].get("manual_approval"))
+                    and not final_owner_satisfied
+                )
                 or not result
                 or result["status"] != "SUCCESS"
                 or task["status"] != "completed"
@@ -334,6 +387,7 @@ class Ledger:
                             review_id=r["id"],
                             policy_digest=p["policy_digest"],
                             reason="AI review accepted",
+                            owner_candidate_accepted=final_owner_satisfied,
                         )
                     ),
                     now_iso(),
@@ -359,6 +413,27 @@ class Ledger:
         self.db._notify(n["task_id"], "completed", "completed")
         return True
 
+    def overview(self, workflow):
+        """List status from current evidence, without loading every historical candidate or task turn."""
+        from .review_summary import summarize, progress
+        from .decisions import target
+
+        nodes = self.rows("nodes", "workflow_id=?", (workflow["id"],))
+        for node in nodes:
+            node["candidates"] = []
+            if node["state"].startswith(("blocked_", "reconciling")) and node["candidate_id"]:
+                candidate = self.get("candidates", node["candidate_id"])
+                if candidate:
+                    candidate["reviews"] = self.rows("reviews", "candidate_id=?", (candidate["id"],))
+                    node["candidates"].append(candidate)
+            node["decision_target"] = target(node, workflow)
+        view = dict(workflow, nodes=nodes)
+        for key in ("plan_revisions", "graph_revisions"):
+            view[key] = self.rows(key, "workflow_id=? AND state IN ('awaiting_owner','stale')", (workflow["id"],))
+            for revision in view[key]:
+                revision["decision_target"] = digest(revision["payload"])
+        return dict(workflow, progress=progress(nodes), review_summary=summarize(view))
+
     def view(self, workflow_id):
         w = self.get("workflows", workflow_id)
         if not w:
@@ -371,4 +446,41 @@ class Ledger:
                 cand["reviews"] = self.rows("reviews", "candidate_id=?", (cand["id"],))
                 cand["acceptances"] = self.rows("acceptances", "candidate_id=?", (cand["id"],))
             n["operations"] = self.rows("operations", "node_id=?", (n["id"],))
-        return dict(**w, nodes=nodes)
+            from .decisions import target
+
+            n["decision_target"] = target(n, w)
+            n["decisions"] = self.rows("decisions", "node_id=?", (n["id"],))
+            task = self.db.get_task(n["task_id"]) if n["task_id"] else None
+            if task:
+                from app.models import BUSY_STATUSES
+
+                n["task"] = {key: task.get(key) for key in (
+                    "id", "name", "status", "task_outcome", "completion_pending", "codex_thread_id",
+                    "model", "reasoning_effort", "branch", "worktree", "outcome_reason",
+                )}
+                n["task"]["thread_busy"] = task["status"] in BUSY_STATUSES or bool(task["completion_pending"])
+            else:
+                n["task"] = None
+            from .execution import resolve_execution
+
+            n["execution_settings"] = resolve_execution(n["spec"], w["plan"])
+            turns = self.db.list_turns(n["task_id"]) if task else []
+            reported = next((turn for turn in reversed(turns) if turn.get("model")), None)
+            n["execution_settings"]["actual_model"] = reported["model"] if reported else None
+            n["execution_settings"]["actual_reasoning_effort"] = reported.get("reasoning_effort") if reported else None
+        revisions = self.rows("plan_revisions", "workflow_id=?", (workflow_id,))
+        for revision in revisions:
+            revision["decision_target"] = digest(revision["payload"])
+        graphs = self.rows("graph_revisions", "workflow_id=?", (workflow_id,))
+        for revision in graphs:
+            revision["decision_target"] = digest(revision["payload"])
+        replans = self.rows("replans", "workflow_id=?", (workflow_id,))
+        result = dict(**w, nodes=nodes, plan_revisions=revisions, graph_revisions=graphs, replans=replans,
+                      replanning_limits=dict(max_tasks=3, max_source_replans=1, max_depth=1,
+                                             remaining_nodes=200-len(nodes), used_sources=len(replans)))
+        from .review_summary import summarize, progress
+        from .workflow_controls import control_target
+
+        result.update(review_summary=summarize(result), progress=progress(nodes), control_target=control_target(w),
+                      events=self.rows("workflow_events", "workflow_id=?", (workflow_id,)))
+        return result

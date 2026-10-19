@@ -4,15 +4,51 @@
 {% block content %}
 <section class="panel ap-panel">
   <h1>Autopilot</h1>
-  <p>固定した候補を検証し、Claude Codeで独立レビューします。確認済みの利用枠不足時だけ独立Codexへ切り替えます。</p>
+  <p>大タスクを子タスクへ分け、実装・検証・独立レビューの進捗をまとめて管理します。</p>
+  <fieldset id="ap-execution-settings"><legend>実行モデル・メンター</legend>
+    <div class="ap-form-grid">
+      <label for="ap-model">基本モデル<select id="ap-model"><option value="">Codex CLIの設定を使用</option><option value="__custom__">モデルIDを入力…</option></select></label>
+      <label id="ap-model-custom-label" for="ap-model-custom" hidden>モデルID<input id="ap-model-custom" autocomplete="off" placeholder="model id"></label>
+      <label for="ap-effort">推論の強さ<select id="ap-effort"><option value="high" selected>High（既定）</option><option value="xhigh">Extra high</option><option value="medium">Medium</option><option value="low">Low</option></select></label>
+      <label for="ap-mentor-rounds">メンターの最大相談回数<input id="ap-mentor-rounds" type="number" min="0" max="5" value="2"></label>
+    </div>
+    <label class="ap-check"><input id="ap-mentor-enabled" type="checkbox" checked> Claude Codeなどの独立メンターに相談してから人の確認へ進む</label>
+    <p class="muted">担当Markdownの指定を優先します。manifestの明示設定は維持し、未指定の項目にこの基本設定を使います。Dry-runで子タスクごとの実効モデルと指定元を確認できます。</p>
+    <p id="ap-catalog-message" class="muted" role="status"></p>
+  </fieldset>
+  <fieldset><legend>Markdown一括入力（取込だけでは実行しません）</legend>
+    <label for="ap-name">大タスク名</label><input id="ap-name" placeholder="Markdown workflow">
+    <label for="ap-files">COMMON・担当指示書 / ZIP</label><input id="ap-files" type="file" multiple accept=".md,.zip">
+    <button id="ap-import">取込・一覧編集</button>
+    <label for="ap-repository">Repository</label>
+    <div class="repo-row"><input id="ap-repository" list="ap-repo-candidates" autocomplete="off" placeholder="/absolute/repository"><button id="ap-browse" type="button">Browse…</button></div>
+    <datalist id="ap-repo-candidates"></datalist><div id="ap-recent-repos" class="chips" aria-label="最近使ったRepository"></div>
+    <label for="ap-base">Base ref</label><input id="ap-base" value="main" list="ap-ref-candidates"><datalist id="ap-ref-candidates"></datalist>
+    <p id="ap-repo-message" class="muted" role="status"></p>
+    <label class="ap-check"><input id="ap-import-commit" type="checkbox"> 担当範囲内の変更をcontrollerがcommitすることを許可</label>
+    <label class="ap-check"><input id="ap-import-billing" type="checkbox"> 所有者が両subscriptionの追加従量利用無効化を確認済み（自動検証不可）</label>
+    <label for="ap-import-replanning">根本原因の再計画policy</label>
+    <select id="ap-import-replanning"><option value="propose_only">propose_only — 案を保存し所有者判断を待つ</option><option value="off">off — 再計画しない</option><option value="auto_within_envelope">auto_within_envelope — 許可済み範囲だけ追加・実行</option></select>
+    <p>新タスクは最大3件・元タスクごとに1回・深さ1段。COMMON・受入条件・権限を自動変更しません。</p>
+    <div id="ap-documents"></div><div id="ap-import-nodes"></div>
+    <button id="ap-convert" disabled>編集内容をmanifestへ変換・Dry-run</button>
+  </fieldset>
   <label for="ap-manifest">Workflow manifest（JSON / YAML）</label>
   <textarea id="ap-manifest" rows="15" spellcheck="false" placeholder="version: 1"></textarea>
-  <p><label><input id="ap-opt-in" type="checkbox"> このmanifestの編集範囲・検証・予算・開始時権限にopt-inする</label></p>
+  <p><label class="ap-check"><input id="ap-opt-in" type="checkbox"> このmanifestの編集範囲・検証・予算・開始時権限にopt-inする</label></p>
   <button id="ap-preview">Dry-run</button> <button id="ap-start" disabled>Start</button>
-  <p id="ap-message" role="status"></p><pre id="ap-preview-result"></pre>
+  <p id="ap-message" role="status"></p><div id="ap-preview-summary"></div><details><summary>Dry-runの詳細データ</summary><pre id="ap-preview-result"></pre></details>
 </section>
 <section class="panel ap-panel"><h2>Workflows</h2><div id="ap-workflows"></div></section>
 <section class="panel ap-panel"><h2>既存 Needs Review</h2><p>選択したtaskの既存contract・編集担当path・必須validationを確認してください。manual gateは維持されます。</p><button id="ap-backlog-load">Dry-run分類</button><button id="ap-backlog-prepare">選択taskを一括dry-run</button><div id="ap-backlog"></div></section>
-<section class="panel ap-panel"><h2>Graph・待機理由・固定入力</h2><div id="ap-graph"></div></section>
+<section class="panel ap-panel" id="ap-selected-section" hidden><h2>選択中の大タスク</h2><div id="ap-graph"></div></section>
+<dialog id="ap-picker" aria-labelledby="ap-picker-title">
+  <h2 id="ap-picker-title">Repositoryフォルダーを選択</h2>
+  <div class="repo-row"><input id="ap-picker-path" autocomplete="off" spellcheck="false" aria-label="フォルダーのパス"><button type="button" id="ap-picker-go">Go</button></div>
+  <label class="check inline"><input type="checkbox" id="ap-picker-hidden"> 隠しフォルダーも表示</label>
+  <ul id="ap-picker-list" class="picker-list"></ul><p id="ap-picker-info" role="status"></p>
+  <div class="actions"><button type="button" id="ap-picker-back">閉じる</button><button type="button" id="ap-picker-select" class="primary" disabled>このフォルダーを選択</button></div>
+</dialog>
+<script src="{{ static_url('autopilot-common.js') }}" defer></script>
 <script src="{{ static_url('autopilot.js') }}" defer></script>
 {% endblock %}
