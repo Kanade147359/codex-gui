@@ -1,11 +1,13 @@
 """HTTP routes: two HTML pages plus a small JSON API (polled by static/app.js)."""
+import asyncio
+import json
 from pathlib import Path
 from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .attachments import AttachmentError, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_MESSAGE_BYTES, MAX_DIMENSION, MAX_PIXELS
@@ -735,3 +737,48 @@ async def context_events(request: Request, task_id: str, kind: str = "", limit: 
         raise api_error(e)
     kinds = [k for k in kind.split(",") if k] or None
     return {"events": manager(request).db.list_context_events(task_id, kinds, min(max(limit, 1), 1000))}
+
+
+class ArtifactGCSettings(BaseModel):
+    retention_days: int = Field(default=5, ge=1, le=3650)
+    auto_delete: bool = False
+
+
+class ArtifactGCRun(BaseModel):
+    dry_run: bool = True
+
+
+@router.get("/storage", response_class=HTMLResponse)
+async def storage_page(request: Request):
+    return TEMPLATES.TemplateResponse(request, "storage.html", {})
+
+
+@router.get("/api/artifact-gc")
+async def artifact_gc_state(request: Request):
+    m = manager(request)
+    rows = await run_in_threadpool(m.db.gc_history)
+    history = [{**{k: v for k, v in row.items() if k != "report_json"},
+                "report": json.loads(row["report_json"])} for row in rows]
+    return {"settings": m.artifact_gc.settings(), "history": history,
+            "running": m._gc_job is not None and not m._gc_job.done()}
+
+
+@router.put("/api/artifact-gc/settings")
+async def artifact_gc_settings(request: Request, body: ArtifactGCSettings):
+    return manager(request).artifact_gc.configure(body.retention_days, body.auto_delete)
+
+
+@router.post("/api/artifact-gc/run")
+async def artifact_gc_run(request: Request, body: ArtifactGCRun):
+    m = manager(request)
+    if not body.dry_run and not m.artifact_gc.settings()["auto_delete"]:
+        raise HTTPException(409, detail="Enable automatic deletion in Storage settings first")
+    try:
+        report = await asyncio.shield(m.start_artifact_gc(body.dry_run))
+    except TaskError as error:
+        raise api_error(error) from error
+    except ValueError as error:
+        raise HTTPException(409, detail=str(error)) from error
+    if report.get("status") == "busy":
+        raise HTTPException(409, detail="GC is already running in another process")
+    return report

@@ -34,6 +34,16 @@ class _Rollback(Exception):
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS artifact_gc_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    dry_run INTEGER NOT NULL,
+    trigger TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    released_bytes INTEGER NOT NULL DEFAULT 0,
+    report_json TEXT NOT NULL DEFAULT '{}'
+);
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -988,6 +998,28 @@ class Database:
 
     def delete_setting(self, key: str) -> None:
         self._execute("DELETE FROM app_settings WHERE key = ?", (key,))
+
+    def gc_start(self, dry_run: bool, trigger: str) -> int:
+        with self._lock, self._conn:
+            # The caller owns the interprocess GC gate; a prior unfinished run was interrupted.
+            self._conn.execute("UPDATE artifact_gc_runs SET status = 'interrupted', finished_at = ? WHERE status = 'running'", (now_iso(),))
+            return self._conn.execute(
+                "INSERT INTO artifact_gc_runs (started_at, dry_run, trigger) VALUES (?, ?, ?)",
+                (now_iso(), int(dry_run), trigger)).lastrowid
+
+    def gc_tasks(self) -> list[dict]:
+        from .artifact_gc import TASK_SNAPSHOT_SQL
+        with self._lock:
+            return [dict(row) for row in self._conn.execute(TASK_SNAPSHOT_SQL)]
+
+    def gc_finish(self, run_id: int, report: dict) -> None:
+        self._execute("UPDATE artifact_gc_runs SET finished_at = ?, status = ?, released_bytes = ?, report_json = ? WHERE id = ?",
+                      (now_iso(), report.get("status", "failed"), report.get("released_bytes", 0), json.dumps(report), run_id))
+
+    def gc_history(self, limit: int = 20) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM artifact_gc_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(row) for row in rows]
 
     # ---------- rate-limit history ----------
 

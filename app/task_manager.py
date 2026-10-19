@@ -30,6 +30,7 @@ from .appserver import CLOSED, AppServerClient, AppServerError
 from .codex_login import CodexLogin
 from .codex_runner import WEB_SEARCH_MODES, CodexRunner, approval_params, nested, task_config, terminate_process
 from .attachments import AttachmentError, AttachmentStore
+from .artifact_gc import ArtifactGC, launch_guard
 from .config import Settings
 from .database import Database, DependencyError, ScheduledError
 from .instructions import load_instructions
@@ -148,6 +149,8 @@ class TaskManager:
         self._attempts: dict[str, int] = {}        # task id -> id of the attempt row being run
         self._adopted: set[str] = set()            # running tasks of a previous GUI whose process is still alive
         self.scheduler = Scheduler(self.tick, settings.scheduler_interval_seconds)
+        self.artifact_gc = ArtifactGC(settings.home, db)
+        self._gc_job: Optional[asyncio.Task] = None
         self.db.add_status_listener(self._status_changed)
         self._slots = asyncio.Semaphore(settings.max_concurrent) if settings.max_concurrent > 0 else None
         from .autopilot.controller import Autopilot
@@ -599,6 +602,14 @@ class TaskManager:
         return _Turn.from_json(task["pending_turn"]) or _Turn(task["last_prompt"] or task["prompt"], trigger="initial")
 
     def _dispatch(self, task_id: str) -> bool:
+        # GC runs in a worker thread. A nonblocking interprocess gate keeps the event loop responsive;
+        # queued tasks remain protected and the scheduler dispatches them after collection finishes.
+        with launch_guard(self.settings.home) as acquired:
+            if not acquired:
+                return False
+            return self._dispatch_guarded(task_id)
+
+    def _dispatch_guarded(self, task_id: str) -> bool:
         """Claim a queued task and start its job. The claim is an atomic UPDATE: of any number of callers (a request, the
         scheduler, a status listener) exactly one wins, so a task is never started twice. False if this call did not start it."""
         try:
@@ -1532,6 +1543,9 @@ class TaskManager:
         self._shutting_down = True
         await self.autopilot.shutdown()
         await self.scheduler.stop()
+        if self._gc_job is not None:
+            # Cancelling to_thread does not stop removal. Drain it before closing the DB or the app.
+            await asyncio.shield(asyncio.gather(self._gc_job, return_exceptions=True))
         self.db.remove_status_listener(self._status_changed)
         for task_id in list(self._jobs):
             task = self.db.get_task(task_id)
@@ -1720,11 +1734,33 @@ class TaskManager:
         if self._shutting_down:
             return
         for name, step in (("autopilot", self.autopilot.tick), ("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
-                           ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue)):
+                           ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue),
+                           ("artifact_gc", self._tick_artifact_gc)):
             try:
                 step()
             except Exception:
                 logger.exception("scheduler step %s failed", name)
+
+    def start_artifact_gc(self, dry_run=True, trigger="manual") -> asyncio.Task:
+        if self._shutting_down or (self._gc_job is not None and not self._gc_job.done()):
+            raise TaskError("Build artifact GC is already running or shutting down", 409, "gc_busy")
+        self._gc_job = asyncio.create_task(asyncio.to_thread(self.artifact_gc.run, dry_run, trigger))
+        def finished(job):
+            if not job.cancelled() and job.exception() is not None:
+                logger.error("build artifact GC failed: %s", job.exception())
+            self.scheduler.wake()
+        self._gc_job.add_done_callback(finished)
+        return self._gc_job
+
+    def _tick_artifact_gc(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._gc_job is not None and not self._gc_job.done():
+            return
+        if self.artifact_gc.due():
+            self.start_artifact_gc(dry_run=not self.artifact_gc.settings()["auto_delete"], trigger="daily")
 
     # ---------- scheduled instructions (a follow-up turn for an existing thread, after other tasks) ----------
 
