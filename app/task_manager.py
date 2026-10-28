@@ -1773,9 +1773,7 @@ class TaskManager:
                     turn, model=target["slug"], reasoning_effort=next_effort(target),
                     route_index=idx + 1, codex_thread_id=None)
                 fields["status_detail"] = "Model escalated: " + reason
-                if self.db.transition(tid, task["status"], "queued", **fields):
-                    self.db.record_model_route(tid, old["slug"], target["slug"], reason,
-                                               task.get("codex_thread_id") or "")
+                if self.db.promote_model(task, target["slug"], reason, fields):
                     TaskLog.note(self.log_path(tid), f"model escalation {old['slug']} -> {target['slug']}: {reason}")
             except (ValueError, TypeError, KeyError, OSError):
                 logger.exception("model routing failed for task %s", tid)
