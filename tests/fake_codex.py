@@ -99,7 +99,7 @@ if mode == "semantic":
     text = json.dumps({"status": outcome, "reason": reason}) if outcome != "MISSING" else "done"
     emit({"type": "item.completed", "item": {"id": "final", "type": "agent_message", "text": text}})
     report_usage()
-elif mode in ("ok", "nothread", "newthread", "Previous", "crash", "crashearly", "wipcrash", "crashunstarted"):
+elif mode in ("ok", "nothread", "newthread", "Previous", "Continue", "crash", "crashearly", "wipcrash", "crashunstarted"):
     open("out.txt", "a").write("hello\n")
     print("this line is not json", flush=True)
     sys.stderr.write("a warning\n")

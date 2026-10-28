@@ -198,12 +198,16 @@ TASK_COLUMNS = (
     "tool_profile_check cwd_subdir stop_reason compactions last_cache_activity_at last_request_input long_context_ack "
     "task_outcome outcome_reason outcome_source completion_checked_at manual_override manual_override_at manual_override_by "
     "completion_contract completion_checks semantic_result completion_pending "
-    "evidence_result evidence_reason approval_source approved_at"
+    "evidence_result evidence_reason approval_source approved_at "
+    "route_enabled route_models route_index"
 ).split()
 
 # Columns added after the first release: (name, definition) applied to databases that lack them.
 # service_tier holds Codex's own id: "default" is Standard speed, "priority" is Fast.
 TASK_MIGRATIONS = [
+    ("route_enabled", "INTEGER NOT NULL DEFAULT 0"),
+    ("route_models", "TEXT NOT NULL DEFAULT '[]'"),
+    ("route_index", "INTEGER NOT NULL DEFAULT 0"),
     ("evidence_result", "TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(evidence_result IN ('PASS','FAIL','UNKNOWN'))"),
     ("evidence_reason", "TEXT NOT NULL DEFAULT 'Completion has not been checked.'"),
     ("approval_source", "TEXT NOT NULL DEFAULT ''"), ("approved_at", "TEXT"),
@@ -269,7 +273,7 @@ TASK_MIGRATIONS = [
 
 ATTEMPT_COLUMNS = (
     "task_id attempt_number trigger_kind started_at finished_at exit_code result failure_kind failure_message "
-    "codex_thread_id was_resume service_tier reasoning_effort git_head git_status unpushed"
+    "codex_thread_id was_resume service_tier reasoning_effort git_head git_status unpushed model requested_model model_source"
 ).split()
 
 # The two conditions of the dependency policy "all_success", evaluated inside the UPDATE that acts on them so that the
@@ -357,12 +361,27 @@ class Database:
             semantic_status TEXT NOT NULL, evidence_result TEXT NOT NULL,
             approval_source TEXT NOT NULL, approved_at TEXT NOT NULL, reason TEXT NOT NULL,
             task_outcome TEXT NOT NULL, actor TEXT NOT NULL, completion_checks TEXT NOT NULL)""")
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS model_route_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+                created_at TEXT NOT NULL, from_model TEXT NOT NULL, to_model TEXT NOT NULL,
+                reason TEXT NOT NULL, previous_thread TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_model_routes_task ON model_route_events(task_id,id);
+            CREATE TABLE IF NOT EXISTS model_pr_acceptances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+                pr_url TEXT NOT NULL, model TEXT NOT NULL, evidence TEXT NOT NULL,
+                created_at TEXT NOT NULL, UNIQUE(task_id,pr_url)
+            );
+        """)
         self._conn.commit()
         from .autopilot.ledger import migrate
         migrate(self)
 
     def _migrate(self) -> None:
         for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),
+                                  ("task_attempts", [("model", "TEXT"), ("requested_model", "TEXT"),
+                                                     ("model_source", "TEXT NOT NULL DEFAULT 'requested'")]),
                                   ("scheduled_instructions", [("attachment_ids", "TEXT NOT NULL DEFAULT '[]'")])):
             have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
             legacy_completion_upgrade = table == "tasks" and "task_outcome" not in have
@@ -652,6 +671,94 @@ class Database:
                 "ORDER BY next_retry_at, rowid", (now,))]
 
     # ---------- attempts ----------
+
+    def promote_model(self, task: dict, target: str, reason: str, fields: dict) -> bool:
+        """Atomically record a model promotion and queue its handoff.
+
+        A CAS on status, model and route index prevents a scheduler/user race
+        from queuing the same upgrade twice, including across GUI restarts.
+        """
+        old_status = task["status"]
+        if not can_transition(old_status, "queued"):
+            return False
+        if set(fields) - set(TASK_COLUMNS):
+            raise ValueError("unknown model promotion fields")
+        from .model_routing import escalation_reason
+        if not escalation_reason(task):
+            return False
+        updated = {**fields, "status": "queued"}
+        columns = ", ".join(f"{k}=?" for k in updated)
+        snapshot_keys = ("model", "route_index", "route_models", "semantic_result", "task_outcome",
+                         "completion_checked_at", "completion_contract", "completion_checks", "evidence_result",
+                         "last_prompt", "last_turn_at", "codex_thread_id", "pending_turn", "claimed_by",
+                         "stop_reason", "approved_at")
+        unchanged = " AND ".join(f"{k} IS ?" for k in snapshot_keys)
+        with self._lock, self._conn:
+            changed = self._conn.execute(
+                f"UPDATE tasks SET {columns} WHERE id=? AND status=? AND {unchanged} "
+                "AND route_enabled=1 AND completion_pending=0 AND manual_override=0 "
+                "AND worktree_removed=0 AND worktree_pending=0 "
+                "AND NOT EXISTS (SELECT 1 FROM task_attempts a WHERE a.task_id=tasks.id AND a.finished_at IS NULL)",
+                [*updated.values(), task["id"], old_status, *[task.get(k) for k in snapshot_keys]]
+            ).rowcount == 1
+            if changed:
+                self._audit_auto_approval(task["id"], fields)
+                self._conn.execute(
+                    "INSERT INTO model_route_events(task_id,created_at,from_model,to_model,reason,previous_thread) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (task["id"], now_iso(), task["model"], target, reason[:500], task.get("codex_thread_id") or ""))
+        if changed:
+            self._notify(task["id"], old_status, "queued")
+        return changed
+
+    def record_model_route(self, task_id: str, old: str, new: str, reason: str, thread_id: str) -> None:
+        self._execute(
+            "INSERT INTO model_route_events (task_id,created_at,from_model,to_model,reason,previous_thread) "
+            "VALUES (?,?,?,?,?,?)", (task_id, now_iso(), old, new, reason[:500], thread_id))
+
+    def list_model_routes(self, task_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM model_route_events WHERE task_id=? ORDER BY id", (task_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_model_pr_acceptance(self, task_id: str, url: str, evidence: str) -> dict:
+        from .model_routing import accepted_task
+        with self._lock, self._conn:
+            task = self._conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task is None or not accepted_task(dict(task)):
+                raise ValueError("PR acceptance requires a completed, gate/owner-approved task")
+            previous = self._conn.execute(
+                "SELECT * FROM model_pr_acceptances WHERE lower(rtrim(pr_url, '/'))=? ORDER BY id LIMIT 1",
+                (url,)).fetchone()
+            if previous:
+                if previous["task_id"] != task_id:
+                    raise ValueError("this PR has already been attributed to another task")
+                return dict(previous)
+            attempt = self._conn.execute(
+                "SELECT * FROM task_attempts WHERE task_id=? ORDER BY attempt_number DESC LIMIT 1", (task_id,)).fetchone()
+            model = attempt["model"] if attempt and attempt["model"] else "(unknown)"
+            self._conn.execute(
+                "INSERT INTO model_pr_acceptances(task_id,pr_url,model,evidence,created_at) VALUES (?,?,?,?,?)",
+                (task_id, url, model, evidence, now_iso()))
+            return dict(self._conn.execute("SELECT * FROM model_pr_acceptances WHERE task_id=? AND pr_url=?",
+                                           (task_id, url)).fetchone())
+
+    def list_model_pr_acceptances(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM model_pr_acceptances ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+    def model_performance_snapshot(self) -> dict:
+        """A single read transaction, without N+1 task queries or mutable-model fallback."""
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN")
+            return {
+                "tasks": [dict(r) for r in self._conn.execute("SELECT * FROM tasks")],
+                "attempts": [dict(r) for r in self._conn.execute("SELECT * FROM task_attempts ORDER BY task_id,attempt_number")],
+                "turns": [dict(r) for r in self._conn.execute("SELECT * FROM turns ORDER BY task_id,turn")],
+                "prs": [dict(r) for r in self._conn.execute("SELECT * FROM model_pr_acceptances ORDER BY id")],
+            }
 
     def start_attempt(self, **fields) -> int:
         """A new attempt row; the number is task-wide and assigned in the same statement (no gaps, no duplicates)."""

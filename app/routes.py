@@ -279,12 +279,47 @@ async def options(request: Request):
     """Model choices (from the codex CLI) and recently used repositories for the New Task form."""
     m = manager(request)
     request.app.state.completion_validation = completion.validation_capability()
-    return {**await request.app.state.catalog.get(), "repos": m.db.recent_repos(),
+    catalog = await request.app.state.catalog.get()
+    from .model_routing import available_chain
+    return {**catalog, "auto_route_chain": [m["slug"] for m in available_chain(catalog["models"])],
+            "repos": m.db.recent_repos(),
             "backend": m.settings.backend, "subscription_only": m.settings.subscription_only,
             "default_auto_retry": m.settings.default_auto_retry, "default_max_retries": m.settings.default_max_retries,
             "context_warn_percent": m.settings.context_warn_percent, "context_efficiency": context_options(),
             "completion_approval": m.completion_approval_settings(),
             "completion_validation": request.app.state.completion_validation}
+
+
+class ModelPRAcceptance(BaseModel):
+    pr_url: str
+    evidence: str
+
+
+@router.get("/model-performance", response_class=HTMLResponse)
+async def model_performance(request: Request):
+    return TEMPLATES.TemplateResponse(request, "model_metrics.html", {})
+
+
+@router.get("/api/model-performance")
+async def model_performance_data(request: Request):
+    return manager(request).model_summary()
+
+
+@router.get("/api/tasks/{task_id}/model-routes")
+async def model_routes(request: Request, task_id: str):
+    try:
+        m = manager(request)
+        return {"events": m.db.list_model_routes(m.get(task_id)["id"])}
+    except TaskError as e:
+        raise api_error(e)
+
+
+@router.post("/api/tasks/{task_id}/accepted-pr")
+async def accepted_pr(request: Request, task_id: str, body: ModelPRAcceptance):
+    try:
+        return manager(request).record_accepted_pr(task_id, body.pr_url, body.evidence)
+    except TaskError as e:
+        raise api_error(e)
 
 
 class CompletionApprovalSettings(BaseModel):

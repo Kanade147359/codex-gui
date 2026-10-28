@@ -383,17 +383,19 @@ function initDashboard() {
     const def = options.default_model ? ` (${options.default_model})` : "";
     const recInfo = options.models.find((m) => m.slug === rec);
     const rest = options.models.filter((m) => m.slug !== rec);
+    const autoReady = (options.auto_route_chain || []).length >= 2;
     modelSel.innerHTML =
+      (autoReady ? `<option value="auto">Auto — ${options.auto_route_chain.map((slug) => esc(modelName(slug))).join(" → ")} (opt-in escalation)</option>` : "") +
       (recInfo ? `<option value="${esc(rec)}">${esc(recInfo.name)} — recommended</option>` : "") +
       `<option value="">Use Codex default${esc(def)}</option>` +
       rest.map((m) => `<option value="${esc(m.slug)}">${esc(m.name)} — ${esc(m.slug)}</option>`).join("") +
       `<option value="${CUSTOM}">Other…</option>`;
-    modelSel.value = recInfo ? rec : "";
+    modelSel.value = recInfo ? rec : "";  // Auto is an explicit choice, never silently enabled.
     buildEffortSelect(true);
   }
 
   function currentModelInfo() {
-    const slug = modelSel.value || options.default_model;
+    const slug = modelSel.value === "auto" ? options.auto_route_chain[0] : (modelSel.value || options.default_model);
     return options.models.find((m) => m.slug === slug);
   }
 
