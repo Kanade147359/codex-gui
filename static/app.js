@@ -385,12 +385,12 @@ function initDashboard() {
     const rest = options.models.filter((m) => m.slug !== rec);
     const autoReady = (options.auto_route_chain || []).length >= 2;
     modelSel.innerHTML =
-      (autoReady ? `<option value="auto">Auto — Terra → Sol → Astra (escalate after explicit PARTIAL)</option>` : "") +
+      (autoReady ? `<option value="auto">Auto — ${options.auto_route_chain.map((slug) => esc(modelName(slug))).join(" → ")} (opt-in escalation)</option>` : "") +
       (recInfo ? `<option value="${esc(rec)}">${esc(recInfo.name)} — recommended</option>` : "") +
       `<option value="">Use Codex default${esc(def)}</option>` +
       rest.map((m) => `<option value="${esc(m.slug)}">${esc(m.name)} — ${esc(m.slug)}</option>`).join("") +
       `<option value="${CUSTOM}">Other…</option>`;
-    modelSel.value = autoReady ? "auto" : (recInfo ? rec : "");
+    modelSel.value = recInfo ? rec : "";  // Auto is an explicit choice, never silently enabled.
     buildEffortSelect(true);
   }
 
@@ -669,7 +669,7 @@ function initDashboard() {
   async function loadOptions() {
     try {
       options = await api("GET", "/api/options");
-      $("#default-model").textContent = (options.auto_route_chain || []).length >= 2 ? "Auto (Terra → Sol → Astra)" : (options.recommended_model ? modelName(options.recommended_model) : (options.default_model || "Codex default"));
+      $("#default-model").textContent = options.recommended_model ? modelName(options.recommended_model) : (options.default_model || "Codex default");
       $("#backend-note").textContent = options.backend === "app-server" ? "via codex app-server" : "legacy codex exec backend";
       const validation = options.completion_validation;
       if (validation) {

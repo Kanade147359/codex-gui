@@ -7,7 +7,10 @@
 body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--mono); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.topbar { display: flex; align-items: center; gap: 16px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.topbar > * { min-width: 0; max-width: 100%; }
+.topbar .filter { flex-wrap: wrap; }
+.topbar .filter select { min-width: 0; max-width: 100%; }
 .brand { font-weight: bold; font-size: 15px; color: var(--text); }
 main { padding: 16px 20px 40px; max-width: 1400px; }
 section { margin-bottom: 24px; }

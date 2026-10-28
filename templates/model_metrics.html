@@ -4,10 +4,10 @@
 {% block content %}
 <section class="panel">
   <h1>Model Performance</h1>
-  <p class="muted">Observed execution statistics, not model benchmark claims or subscription billing. Existing unlabelled attempts are excluded.</p>
+  <p class="muted">Observed execution statistics, not model benchmark claims or subscription billing. Unreported model identity is shown as unknown; requested and reported models are distinguished.</p>
   <div style="overflow-x:auto">
     <table class="tasks-table" style="width:100%">
-      <thead><tr><th>Model</th><th>Attempts</th><th>Execution success</th><th>Gate-accepted tasks</th><th>Avg duration</th><th>Input / cached</th><th>Output tokens</th><th>Accepted PRs*</th></tr></thead>
+      <thead><tr><th>Model</th><th>Attempts (finished / running)</th><th>Execution success</th><th>Accepted tasks (manual)</th><th>Avg duration</th><th>Input / cached</th><th>Output tokens</th><th>Accepted PRs*</th></tr></thead>
       <tbody id="model-perf-rows"><tr><td colspan="8">Loading…</td></tr></tbody>
     </table>
   </div>
@@ -15,11 +15,11 @@
 </section>
 <section class="panel">
   <h2>Record PR acceptance</h2>
-  <p class="muted">Record an externally accepted PR for an already Completion Gate-approved task. Duplicate task/PR pairs count only once.</p>
+  <p class="muted">Record an externally accepted PR for an already Completion Gate-approved task. A PR URL is counted once across all tasks. Another task cannot claim the same PR.</p>
   <form id="record-pr-form">
-    <label>Task ID <input name="task_id" required maxlength="80"></label>
-    <label>GitHub PR URL <input name="pr_url" type="url" required placeholder="https://github.com/owner/repo/pull/123"></label>
-    <label>Acceptance evidence <input name="evidence" required maxlength="1000" placeholder="Merged / accepted at ... (manual evidence)"></label>
+    <label style="display:block">Task ID <input name="task_id" required maxlength="80"></label>
+    <label style="display:block">GitHub PR URL <input name="pr_url" type="url" required placeholder="https://github.com/owner/repo/pull/123"></label>
+    <label style="display:block">Acceptance evidence <input name="evidence" required maxlength="1000" placeholder="Merged / accepted at ... (manual evidence)"></label>
     <button type="submit">Record</button>
   </form>
   <p id="pr-record-result" class="muted"></p>

@@ -25,8 +25,8 @@ def test_available_chain_only_advertised(monkeypatch):
     assert [m["slug"] for m in model_routing.available_chain(MODELS[:2])] == [
         "gpt-6.1-terra", "gpt-6.1-sol",
     ]
-    assert model_routing.next_effort(MODELS[1]) == "xhigh"
-    assert model_routing.next_effort(MODELS[2]) == "max"
+    assert model_routing.next_effort(MODELS[1]) == "high"
+    assert model_routing.next_effort(MODELS[2]) == "high"
 
 
 @pytest.mark.parametrize("status,semantic,outcome,source,kind,expected", [
@@ -35,7 +35,7 @@ def test_available_chain_only_advertised(monkeypatch):
     ("completed", "NEEDS_INPUT", "needs_input", "", "", ""),
     ("completed", "SUCCESS", "success", "", "", ""),
     ("completed", "PARTIAL", "needs_review", "", "", ""),
-    ("failed", "", "incomplete", "codex", "max_turns", "model execution limit"),
+    ("failed", "", "incomplete", "codex", "max_turns", ""),
     ("failed", "", "incomplete", "codex", "unknown", ""),
     ("failed", "", "incomplete", "gui", "max_turns", ""),
     ("waiting-for-quota", "", "incomplete", "codex", "quota", ""),
@@ -44,7 +44,8 @@ def test_available_chain_only_advertised(monkeypatch):
 def test_non_escalation_boundaries(status, semantic, outcome, source, kind, expected):
     t = {"route_enabled": 1, "status": status, "task_outcome": outcome,
          "semantic_result": json.dumps({"status": semantic, "reason": "not done"}) if semantic else "",
-         "failure_source": source, "last_failure_kind": kind, "manual_override": 0, "completion_pending": 0}
+         "failure_source": source, "last_failure_kind": kind, "manual_override": 0, "completion_pending": 0, "evidence_result": "PASS",
+         "completion_checked_at": "2026-01-01T00:00:00Z"}
     assert model_routing.escalation_reason(t) == expected
     t["route_enabled"] = 0
     assert model_routing.escalation_reason(t) == ""
@@ -66,8 +67,10 @@ def test_attempt_model_and_route_schema_survives_restart(settings):
     assert "model" in {r["name"] for r in d._conn.execute("PRAGMA table_info(task_attempts)")}
     assert "route_enabled" in {r["name"] for r in d._conn.execute("PRAGMA table_info(tasks)")}
     d.record_model_route("t", "terra", "sol", "PARTIAL", "thread-1")
-    d.record_model_pr_acceptance("t", "https://github.com/a/b/pull/1", "sol", "accepted by owner")
-    d.record_model_pr_acceptance("t", "https://github.com/a/b/pull/1", "sol", "duplicate")
+    from test_database import new_task
+    new_task(d, "t", status="completed", task_outcome="success", approval_source="manual", approved_at="now")
+    d.record_model_pr_acceptance("t", "https://github.com/a/b/pull/1", "accepted by owner")
+    d.record_model_pr_acceptance("t", "https://github.com/a/b/pull/1", "duplicate")
     d.close()
     d = Database(settings.db_path)
     assert len(d.list_model_routes("t")) == 1
@@ -98,7 +101,7 @@ def test_auto_task_escalates_once_with_same_worktree_and_new_thread(git_repo, ma
         routed = m.get(task["id"])
         assert routed["status"] == "queued"
         assert routed["model"] == "gpt-6.1-sol"
-        assert routed["reasoning_effort"] == "xhigh"
+        assert routed["reasoning_effort"] == "high"
         assert routed["codex_thread_id"] is None
         assert routed["worktree"] == old_worktree and routed["branch"] == done["branch"]
         turn = json.loads(routed["pending_turn"])

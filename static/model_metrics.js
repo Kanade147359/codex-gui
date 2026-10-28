@@ -17,10 +17,10 @@
     }
     for (const m of data.models) {
       const tr = document.createElement("tr");
-      cell(tr, m.model);
-      cell(tr, m.attempts);
+      cell(tr, m.model + " (reported " + m.reported_model_attempts + ", requested " + m.requested_model_attempts + ")");
+      cell(tr, m.attempts + " (" + m.finished_attempts + " / " + m.running_attempts + ")");
       cell(tr, m.execution_success_rate == null ? "—" : (100 * m.execution_success_rate).toFixed(1) + "%");
-      cell(tr, m.accepted_tasks);
+      cell(tr, m.accepted_tasks + " (" + m.manually_accepted_tasks + ")");
       cell(tr, m.duration_avg_seconds == null ? "—" : m.duration_avg_seconds.toFixed(0) + "s");
       cell(tr, m.input_tokens.toLocaleString() + " / " + m.cached_input_tokens.toLocaleString());
       cell(tr, m.output_tokens.toLocaleString());
