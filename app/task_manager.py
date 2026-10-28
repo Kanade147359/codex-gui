@@ -291,6 +291,15 @@ class TaskManager:
         await self._check_images(attachment_ids)
         name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Image task")
         model = model.strip()
+        route_chain = []
+        if model == "auto":
+            from .catalog import ModelCatalog
+            from .model_routing import available_chain
+            # The CLI model catalog is authoritative; never invoke a guessed slug.
+            route_chain = available_chain((await ModelCatalog(self.settings.codex_bin).get())["models"])
+            if not route_chain:
+                raise TaskError("Auto routing requires Terra and at least one higher model in codex debug models", 400, "routing_unavailable")
+            model = route_chain[0]["slug"]
         if model.startswith("-"):
             raise TaskError("invalid model name")
         if reasoning_effort != "default" and not EFFORT_RE.match(reasoning_effort):
@@ -353,6 +362,7 @@ class TaskManager:
                 depends_on=deps, message=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).message(),
                 id=task_id, name=name, repository=repo, worktree=str(wt), branch=branch,
                 base_ref=base_ref, base_sha=base_sha, prompt=prompt, model=model,
+                route_enabled=int(bool(route_chain)), route_models=json.dumps(route_chain), route_index=0,
                 reasoning_effort=reasoning_effort, auto_approval=int(auto_approval),
                 service_tier=service_tier, model_verbosity=model_verbosity, web_search_enabled=int(web_search_mode != "disabled"), web_search_mode=web_search_mode,
                 sandbox=sandbox, network_access=int(network_access and sandbox == "workspace-write"),
@@ -784,7 +794,7 @@ class TaskManager:
         self._attempts[task_id] = self.db.start_attempt(
             task_id=task_id, trigger_kind=turn.trigger, started_at=now_iso(), was_resume=int(bool(turn.resume_thread)),
             service_tier=turn.service_tier or task["service_tier"], reasoning_effort=task["reasoning_effort"],
-            codex_thread_id=turn.resume_thread)
+            codex_thread_id=turn.resume_thread, model=task["model"] or None)
 
     def _end_attempt(self, task_id: str, result: str, turn: Optional[_Turn] = None, *, exit_code: Optional[int] = None,
                      failure: Optional[Failure] = None) -> None:
@@ -1720,11 +1730,72 @@ class TaskManager:
         if self._shutting_down:
             return
         for name, step in (("autopilot", self.autopilot.tick), ("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
-                           ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue)):
+                           ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled),
+                           ("model_routes", self._tick_model_routes), ("queue", self._tick_queue)):
             try:
                 step()
             except Exception:
                 logger.exception("scheduler step %s failed", name)
+
+    def _tick_model_routes(self) -> None:
+        """Escalate ONLY completed self-reported PARTIAL tasks or explicit model-limit failures.
+
+        A distinct Codex thread starts in the SAME worktree; old threads, turns and
+        attempts remain recorded. Never touch Autopilot-owned tasks or running jobs.
+        DB compare-and-swap makes repeated ticks idempotent.
+        """
+        from .model_routing import escalation_reason, handoff_prompt, diagnostics_tail, next_effort
+        if self._shutting_down:
+            return
+        for task in self.db.list_tasks():
+            tid = task["id"]
+            if not task.get("route_enabled") or tid in self._jobs or tid in self._adopted:
+                continue
+            if self.autopilot.ledger.node_for_task(tid):
+                continue
+            if self._completion_locks.get(tid) and self._completion_locks[tid].locked():
+                continue
+            reason = escalation_reason(task)
+            if not reason or task["status"] not in ("completed", "failed"):
+                continue
+            try:
+                chain = json.loads(task["route_models"])
+                idx = task["route_index"]
+                if not isinstance(chain, list) or idx < 0 or idx + 1 >= len(chain):
+                    continue
+                old, target = chain[idx], chain[idx + 1]
+                if old.get("slug") != task["model"] or not target.get("slug"):
+                    continue
+                prompt = handoff_prompt(task, old["slug"], target["slug"], reason,
+                                        diagnostics_tail(self.log_path(tid)))
+                turn = _Turn(prompt, trigger="model_escalation")
+                fields = self._queue_fields(
+                    turn, model=target["slug"], reasoning_effort=next_effort(target),
+                    route_index=idx + 1, codex_thread_id=None,
+                    status_detail="Model escalated: " + reason)
+                if self.db.transition(tid, task["status"], "queued", **fields):
+                    self.db.record_model_route(tid, old["slug"], target["slug"], reason,
+                                               task.get("codex_thread_id") or "")
+                    TaskLog.note(self.log_path(tid), f"model escalation {old['slug']} -> {target['slug']}: {reason}")
+            except (ValueError, TypeError, KeyError, OSError):
+                logger.exception("model routing failed for task %s", tid)
+
+    def model_summary(self) -> dict:
+        from .model_routing import summary
+        return summary(self.db)
+
+    def record_accepted_pr(self, task_id: str, pr_url: str, evidence: str) -> dict:
+        import re
+        task = self.get(task_id)
+        if task["status"] != "completed" or task["task_outcome"] != "success":
+            raise TaskError("PR acceptance requires a completed, accepted task", 409, "not_accepted")
+        url = pr_url.strip().rstrip("/")
+        if not re.fullmatch(r"https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*", url):
+            raise TaskError("a canonical GitHub pull request URL is required")
+        if not evidence.strip():
+            raise TaskError("manual acceptance evidence is required")
+        self.db.record_model_pr_acceptance(task_id, url, task["model"], evidence.strip())
+        return {"task_id": task_id, "pr_url": url, "model": task["model"], "source": "manual"}
 
     # ---------- scheduled instructions (a follow-up turn for an existing thread, after other tasks) ----------
 
@@ -2133,6 +2204,7 @@ class TaskManager:
         task["completion_checks"] = json.loads(task["completion_checks"] or "[]")
         task["completion_overrides"] = self.db.completion_overrides(task["id"])
         task["completion_approvals"] = self.db.completion_approvals(task["id"])
+        task["model_route_events"] = self.db.list_model_routes(task["id"])
         result = completion.parse_result(task["semantic_result"])
         task["semantic_status"] = result["status"] if result else "UNKNOWN"
         task["ctx"] = self.ctx.task_view(task, turns, task["effective_model"] or task["model"],
