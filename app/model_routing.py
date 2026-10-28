@@ -41,7 +41,7 @@ def escalation_reason(task: dict) -> str:
         result = parse_result(task.get("semantic_result", ""))
         # Model explicitly reported PARTIAL. BLOCKED/NEEDS_INPUT require an owner decision.
         if result and result["status"] == "PARTIAL" and task.get("task_outcome") == "incomplete":
-            return "verified semantic PARTIAL"
+            return "self-reported semantic PARTIAL"
         return ""
     if task.get("status") == "failed" and task.get("failure_source") == "codex":
         # Unknown infrastructure / tool / context errors should be addressed, not escalated.
