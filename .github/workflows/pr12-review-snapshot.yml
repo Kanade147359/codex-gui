@@ -1,0 +1,23 @@
+name: PR12 isolated review snapshot
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.event.pull_request.number == 12
+    runs-on: ubuntu-22.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Archive tracked sources only
+        run: git archive --format=tar --output=review-source.tar HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr12-review-source
+          path: review-source.tar
+          retention-days: 1
