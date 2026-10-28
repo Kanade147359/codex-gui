@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Model Performance - Codex GUI{% endblock %}
+{% block page %}model-performance{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Model Performance</h1>
+  <p class="muted">Observed execution statistics, not model benchmark claims or subscription billing. Existing unlabelled attempts are excluded.</p>
+  <div style="overflow-x:auto">
+    <table class="tasks-table" style="width:100%">
+      <thead><tr><th>Model</th><th>Attempts</th><th>Execution success</th><th>Gate-accepted tasks</th><th>Avg duration</th><th>Input / cached</th><th>Output tokens</th><th>Accepted PRs*</th></tr></thead>
+      <tbody id="model-perf-rows"><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <p class="muted small">* Accepted PRs are manually recorded with evidence; they are not inferred from commits or process exit codes. Execution success means the Codex attempt completed, not that the task passed its Completion Gate.</p>
+</section>
+<section class="panel">
+  <h2>Record PR acceptance</h2>
+  <p class="muted">Record an externally accepted PR for an already Completion Gate-approved task. Duplicate task/PR pairs count only once.</p>
+  <form id="record-pr-form">
+    <label>Task ID <input name="task_id" required maxlength="80"></label>
+    <label>GitHub PR URL <input name="pr_url" type="url" required placeholder="https://github.com/owner/repo/pull/123"></label>
+    <label>Acceptance evidence <input name="evidence" required maxlength="1000" placeholder="Merged / accepted at ... (manual evidence)"></label>
+    <button type="submit">Record</button>
+  </form>
+  <p id="pr-record-result" class="muted"></p>
+</section>
+<script defer src="{{ static_url('model_metrics.js') }}"></script>
+{% endblock %}
