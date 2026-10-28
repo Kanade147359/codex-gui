@@ -119,6 +119,7 @@ def test_accepted_pr_is_explicit_and_deduplicated(git_repo, make_manager):
     async def scenario():
         task = await m.create_task(repository=str(git_repo), prompt="ok", name="pr-test")
         await wait_for(lambda: m.get(task["id"]) if m.get(task["id"])["status"] == "completed" else None)
+        m.db.update_task(task["id"], task_outcome="needs_review")
         with pytest.raises(TaskError):
             m.record_accepted_pr(task["id"], "https://github.com/a/b/pull/1", "merged")
         m.db.update_task(task["id"], task_outcome="success")
