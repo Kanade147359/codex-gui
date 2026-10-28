@@ -1771,8 +1771,8 @@ class TaskManager:
                 turn = _Turn(prompt, trigger="model_escalation")
                 fields = self._queue_fields(
                     turn, model=target["slug"], reasoning_effort=next_effort(target),
-                    route_index=idx + 1, codex_thread_id=None,
-                    status_detail="Model escalated: " + reason)
+                    route_index=idx + 1, codex_thread_id=None)
+                fields["status_detail"] = "Model escalated: " + reason
                 if self.db.transition(tid, task["status"], "queued", **fields):
                     self.db.record_model_route(tid, old["slug"], target["slug"], reason,
                                                task.get("codex_thread_id") or "")
@@ -1790,7 +1790,7 @@ class TaskManager:
         if task["status"] != "completed" or task["task_outcome"] != "success":
             raise TaskError("PR acceptance requires a completed, accepted task", 409, "not_accepted")
         url = pr_url.strip().rstrip("/")
-        if not re.fullmatch(r"https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*", url):
+        if not re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*", url):
             raise TaskError("a canonical GitHub pull request URL is required")
         if not evidence.strip():
             raise TaskError("manual acceptance evidence is required")
