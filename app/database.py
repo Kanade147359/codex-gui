@@ -671,6 +671,34 @@ class Database:
 
     # ---------- attempts ----------
 
+    def promote_model(self, task: dict, target: str, reason: str, fields: dict) -> bool:
+        """Atomically record a model promotion and queue its handoff.
+
+        A CAS on status, model and route index prevents a scheduler/user race
+        from queuing the same upgrade twice, including across GUI restarts.
+        """
+        old_status = task["status"]
+        if not can_transition(old_status, "queued"):
+            return False
+        if set(fields) - set(TASK_COLUMNS):
+            raise ValueError("unknown model promotion fields")
+        updated = {**fields, "status": "queued"}
+        columns = ", ".join(f"{k}=?" for k in updated)
+        with self._lock, self._conn:
+            changed = self._conn.execute(
+                f"UPDATE tasks SET {columns} WHERE id=? AND status=? AND model=? AND route_index=?",
+                [*updated.values(), task["id"], old_status, task["model"], task["route_index"]]
+            ).rowcount == 1
+            if changed:
+                self._audit_auto_approval(task["id"], fields)
+                self._conn.execute(
+                    "INSERT INTO model_route_events(task_id,created_at,from_model,to_model,reason,previous_thread) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (task["id"], now_iso(), task["model"], target, reason[:500], task.get("codex_thread_id") or ""))
+        if changed:
+            self._notify(task["id"], old_status, "queued")
+        return changed
+
     def record_model_route(self, task_id: str, old: str, new: str, reason: str, thread_id: str) -> None:
         self._execute(
             "INSERT INTO model_route_events (task_id,created_at,from_model,to_model,reason,previous_thread) "
