@@ -64,6 +64,7 @@ def test_ready_contract_is_pinned_and_read_only(client, linked_repo):
         "A second owner is not active simultaneously.",
     ]
     assert result["preview"]["plan"]["base_sha"] and len(result["preview"]["plan"]["base_sha"]) == 40
+    assert result["manifest"]["base_ref"] == result["preview"]["plan"]["base_sha"]
     assert result["manifest"]["nodes"][0]["paths"] == ["module.py"]
     assert result["manifest"]["nodes"][0]["goal_ids"] == ["AC-1", "AC-2"]
     assert result["manifest"]["policy"]["automatic_acceptance"] is False
