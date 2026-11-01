@@ -146,9 +146,11 @@ async def build(ap, raw):
     issue = await _issue_from_gh(slug, number)
     if (not isinstance(issue.get("body"), str) or not isinstance(issue.get("title"), str)
         or not isinstance(issue.get("url"), str) or issue.get("number") != number
-        or issue["url"].rstrip("/") != raw["issue_url"].rstrip("/")
         or not isinstance(issue.get("updatedAt"), str)):
         raise ValueError("GitHub Issue identity or required fields are invalid")
+    source_slug, source_number = issue_identity(issue["url"])
+    if source_slug.lower() != slug.lower() or source_number != number:
+        raise ValueError("GitHub Issue identity mismatch")
     body, title = issue["body"], issue["title"].strip()
     if (not title or not body.strip() or "\x00" in body
         or len(body.encode("utf-8")) > MAX_ISSUE_BYTES or len(title.encode("utf-8")) > 1024):
