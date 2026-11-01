@@ -16,6 +16,17 @@
     <p class="muted">担当Markdownの指定を優先します。manifestの明示設定は維持し、未指定の項目にこの基本設定を使います。Dry-runで子タスクごとの実効モデルと指定元を確認できます。</p>
     <p id="ap-catalog-message" class="muted" role="status"></p>
   </fieldset>
+  <fieldset id="ap-issue-contract"><legend>GitHub Issue → Task Contract（プレビューのみ）</legend>
+    <p>Issueと固定base SHAの関連ファイルを読み取り、受け入れ条件・不足事項を表示します。実行・登録・権限付与はしません。</p>
+    <label for="ap-issue-url">Issue URL</label><input id="ap-issue-url" autocomplete="off" placeholder="https://github.com/owner/repo/issues/123">
+    <label for="ap-issue-paths">変更を許可するpath（JSON配列、任意・未指定ならdraft）</label>
+    <input id="ap-issue-paths" spellcheck="false" value="[]">
+    <label for="ap-issue-validation">必須validation profile（JSON、任意・未指定ならdraft）</label>
+    <textarea id="ap-issue-validation" rows="3" spellcheck="false">{"commands":[],"artifacts":[]}</textarea>
+    <button id="ap-issue-generate" type="button">Issueを読み込んでTask Contractを生成</button>
+    <p id="ap-issue-status" role="status"></p><div id="ap-issue-suggestions"></div>
+    <details><summary>収集結果・不足事項</summary><pre id="ap-issue-result"></pre></details>
+  </fieldset>
   <fieldset><legend>Markdown一括入力（取込だけでは実行しません）</legend>
     <label for="ap-name">大タスク名</label><input id="ap-name" placeholder="Markdown workflow">
     <label for="ap-files">COMMON・担当指示書 / ZIP</label><input id="ap-files" type="file" multiple accept=".md,.zip">
