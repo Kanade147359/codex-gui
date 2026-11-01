@@ -217,7 +217,7 @@ async def build(ap, raw):
     )
     raw_manifest = dict(
         version=1, name="Issue #" + str(number) + ": " + title,
-        repository=str(root), base_ref=base_ref, inputs=inputs, goals=goal_entries,
+        repository=str(root), base_ref=base_sha, inputs=inputs, goals=goal_entries,
         nodes=[node], permissions={"commit_owned_changes": False, "publish_main": False},
         policy={"automatic_acceptance": False},
     )
