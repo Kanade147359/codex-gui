@@ -344,6 +344,8 @@ class Ledger:
                 or n["generation"] != cand["generation"]
                 or n["state"] != "reviewing"
                 or not approved
+                or (w["plan"]["policy"].get("review_provider_policy") == "claude_only"
+                    and r["provider"] != "claude")
                 or r["generation"] != latest_review
                 or r["payload"].get("run_generation") != w["generation"]
                 or not r["payload"].get("session")
@@ -492,4 +494,6 @@ class Ledger:
 
         result.update(review_summary=summarize(result), progress=progress(nodes), control_target=control_target(w),
                       events=self.rows("workflow_events", "workflow_id=?", (workflow_id,)))
+        from .metrics import summarize as metrics
+        result["metrics"] = metrics(self, result)
         return result

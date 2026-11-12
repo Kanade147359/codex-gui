@@ -7,6 +7,16 @@ from .runner import redact
 router = APIRouter()
 
 
+@router.post("/api/autopilot/dsh/plan")
+async def plan_with_dsh(request: Request, body: dict):
+    from .dsh import draft_plan
+    import asyncio
+    try:
+        return await draft_plan(controller(request), body)
+    except (ValueError, TypeError, KeyError, OSError, asyncio.TimeoutError) as e:
+        raise error(e)
+
+
 @router.post("/api/autopilot/import")
 async def import_markdown(request: Request):
     from .importer import MAX_TOTAL, documents, prepare

@@ -140,9 +140,19 @@ def manifest(value):
         "mentor_enabled",
         "mentor_max_rounds",
         "semantic_recovery",
+        "dsh",
+        "review_provider_policy",
     }
     if set(policy) - allowed:
         raise ValueError("unknown policy fields")
+    from .dsh import normalize as normalize_dsh
+    if "dsh" in policy:
+        policy["dsh"] = normalize_dsh(policy["dsh"])
+    review_policy = policy.setdefault("review_provider_policy", "claude_then_codex")
+    if review_policy not in ("claude_then_codex", "claude_only"):
+        raise ValueError("invalid review_provider_policy")
+    if policy.get("dsh") and review_policy != "claude_only":
+        raise ValueError("DSH missions require claude_only independent auditing")
     for key, default, maximum in (
         ("max_fix_rounds", 3, 10),
         ("no_progress_limit", 2, 10),
@@ -187,6 +197,8 @@ def manifest(value):
         permissions.setdefault(key, False)
         if type(permissions[key]) is not bool:
             raise ValueError(f"{key} must be boolean")
+    if policy.get("dsh") and permissions["publish_main"]:
+        raise ValueError("DSH missions cannot publish main")
     inputs = value.get("inputs", {})
     if (
         not isinstance(inputs, dict)
