@@ -245,6 +245,8 @@ def preflight_environment(policy):
         "CLAUDE_CODE_USE_BEDROCK",
         "CLAUDE_CODE_USE_VERTEX",
         "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CODEX_ACCESS_TOKEN",
     )
     if any(os.environ.get(k) for k in forbidden):
         raise ProviderFailure("configuration", "API key or alternate provider environment detected (values withheld)")
@@ -297,6 +299,23 @@ class ReviewProvider:
         return dict(state="unknown", reason="CLI session outcome requires reconciliation")
 
 
+def authenticated_command(binary, provider, root, scratch):
+    """Expose the CLI's own credential store read-only; never read or copy tokens.
+
+    Only the CLI process can access this mount. Model tools stay disabled. An
+    expired credential that needs writing must be refreshed by normal CLI login.
+    """
+    relative = {"claude": ".claude/.credentials.json", "codex": ".codex/auth.json"}[provider]
+    credential = Path.home() / relative
+    if not credential.is_file():
+        raise ProviderFailure("auth", "Official CLI credential store unavailable")
+    (Path(scratch) / Path(relative).parent).mkdir(mode=0o700, exist_ok=True)
+    return sandbox(root, scratch, network=True, cwd="/scratch") + [
+        "--ro-bind", str(Path(binary).resolve()), "/review-cli",
+        "--ro-bind", str(credential), "/scratch/" + relative, "--", "/review-cli",
+    ]
+
+
 class ClaudeProvider(ReviewProvider):
     def __init__(self, binary="claude"):
         self.binary = binary
@@ -307,7 +326,9 @@ class ClaudeProvider(ReviewProvider):
         binary = shutil.which(self.binary)
         if not binary:
             raise ProviderFailure("configuration", "Claude Code CLI is unavailable")
-        rc, version, _ = await run_bounded([binary, "--version"], timeout=15)
+        rc, version, timed_out = await run_bounded([binary, "--version"], timeout=15)
+        if rc or timed_out:
+            raise ProviderFailure("configuration", "Cannot determine Claude CLI version")
         _, help_text, _ = await run_bounded([binary, "--help"], timeout=15)
         for flag in ("--json-schema", "--tools", "--setting-sources", "--strict-mcp-config", "--safe-mode"):
             if flag not in help_text:
@@ -315,9 +336,22 @@ class ClaudeProvider(ReviewProvider):
         credential = Path.home() / ".claude/.credentials.json"
         if not credential.is_file():
             raise ProviderFailure("auth", "subscription OAuth credentials unavailable")
-        auth = json.loads(credential.read_text())
-        if not isinstance(auth.get("claudeAiOauth"), dict):
-            raise ProviderFailure("auth", "Claude subscription OAuth required")
+        # Only the official CLI reads its credentials. Never decode/extract tokens.
+        with tempfile.TemporaryDirectory(prefix="ap-claude-auth-") as scratch:
+            argv = authenticated_command(binary, "claude", scratch, scratch) + [
+                "--safe-mode", "--setting-sources", "", "--settings", '{"disableAllHooks":true}',
+                "auth", "status", "--json",
+            ]
+            rc, output, timed_out = await run_bounded(argv, env=minimal_env(), timeout=20)
+            try:
+                auth = structured_json(output)
+            except (ValueError, TypeError):
+                auth = {}
+            if (rc or timed_out or not isinstance(auth, dict) or auth.get("loggedIn") is not True
+                or auth.get("authMethod") != "claude.ai"
+                or auth.get("apiProvider") != "firstParty"
+                or auth.get("subscriptionType") not in ("pro", "max")):
+                raise ProviderFailure("auth", "Claude CLI did not confirm a first-party Pro/Max subscription")
         return dict(
             version=version.split()[0],
             binary=str(Path(binary).resolve()),
@@ -330,22 +364,8 @@ class ClaudeProvider(ReviewProvider):
         capabilities = await self.probe_capabilities_and_auth(trusted_review_policy)
         prompt = await review_prompt(candidate, root)
         with tempfile.TemporaryDirectory(prefix="ap-claude-") as scratch:
-            auth_dir = Path(scratch) / ".claude"
-            auth_dir.mkdir(mode=0o700)
-            credential = auth_dir / ".credentials.json"
-            credential.write_bytes((Path.home() / ".claude/.credentials.json").read_bytes())
-            credential.chmod(0o600)
-            argv = sandbox(root, scratch, network=True, cwd="/scratch")
             binary = capabilities["binary"]
-            argv += [
-                "--ro-bind",
-                binary,
-                "/review-cli",
-                "--ro-bind",
-                str(credential),
-                "/scratch/.claude/.credentials.json",
-                "--",
-                "/review-cli",
+            argv = authenticated_command(binary, "claude", root, scratch) + [
                 "--print",
                 "--verbose",
                 "--safe-mode",
@@ -477,17 +497,20 @@ class CodexProvider(ReviewProvider):
         binary = shutil.which(self.binary)
         if not binary:
             raise ProviderFailure("configuration", "Codex CLI unavailable")
-        _, version, _ = await run_bounded([binary, "--version"], timeout=15)
+        rc, version, timed_out = await run_bounded([binary, "--version"], timeout=15)
+        if rc or timed_out:
+            raise ProviderFailure("configuration", "Cannot determine Codex CLI version")
         credential = Path.home() / ".codex/auth.json"
         if not credential.is_file():
             raise ProviderFailure("auth", "Codex subscription credentials unavailable")
-        auth = json.loads(credential.read_text())
-        if (
-            auth.get("auth_mode") not in (None, "chatgpt")
-            or not isinstance(auth.get("tokens"), dict)
-            or auth.get("OPENAI_API_KEY")
-        ):
-            raise ProviderFailure("auth", "Codex ChatGPT subscription authentication required")
+        with tempfile.TemporaryDirectory(prefix="ap-codex-auth-") as scratch:
+            argv = authenticated_command(binary, "codex", scratch, scratch) + [
+                "-c", 'forced_login_method="chatgpt"', "login", "status",
+            ]
+            rc, output, timed_out = await run_bounded(
+                argv, env=dict(minimal_env(), CODEX_HOME="/scratch/.codex"), timeout=20)
+            if rc or timed_out or not output.splitlines() or output.strip().splitlines()[-1] != "Logged in using ChatGPT":
+                raise ProviderFailure("auth", "Codex CLI did not confirm ChatGPT authentication")
         return dict(
             binary=str(Path(binary).resolve()), version=version.strip().split()[-1], auth="ChatGPT subscription"
         )
@@ -503,21 +526,8 @@ class CodexProvider(ReviewProvider):
         cap = await self.probe_capabilities_and_auth(trusted_review_policy)
         prompt = canonical(candidate["replan_input"]) if replan else await review_prompt(candidate, root)
         with tempfile.TemporaryDirectory(prefix="ap-codex-review-") as scratch:
-            home = Path(scratch) / ".codex"
-            home.mkdir(mode=0o700)
-            credential = home / "auth.json"
-            credential.write_bytes((Path.home() / ".codex/auth.json").read_bytes())
-            credential.chmod(0o600)
-            argv = sandbox(root, scratch, network=True, cwd="/scratch") + [
-                "--ro-bind",
-                cap["binary"],
-                "/review-cli",
-                "--ro-bind",
-                str(credential),
-                "/scratch/.codex/auth.json",
-                "--",
-                "/review-cli",
-                "app-server",
+            argv = authenticated_command(cap["binary"], "codex", root, scratch) + [
+                "-c", 'forced_login_method="chatgpt"', "app-server",
             ]
             env = dict(minimal_env(), CODEX_HOME="/scratch/.codex")
             client = self.client_factory(argv, env)
