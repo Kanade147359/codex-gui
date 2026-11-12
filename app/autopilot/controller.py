@@ -43,6 +43,8 @@ class Autopilot:
         self.manager = manager
         self.ledger = Ledger(manager.db)
         self.providers = providers or dict(claude=ClaudeProvider(), codex=CodexProvider(manager.settings.codex_bin))
+        from .dsh import OllamaDispatcher
+        self.dispatcher = OllamaDispatcher()
         self.validator = validator or Validator()
         self.root = manager.settings.home / "autopilot"
         self.jobs = {}
@@ -99,7 +101,9 @@ class Autopilot:
             warnings=warnings,
             execution_order=[n["id"] for n in plan["nodes"]],
             execution_settings={n["id"]: resolve_execution(n, plan) for n in plan["nodes"]},
-            review_provider="Claude Code; only confirmed included quota permits independent Codex fallback",
+            review_provider=("Claude Code required; quota waits without substitute audit"
+                             if plan["policy"]["review_provider_policy"] == "claude_only" else
+                             "Claude Code; only confirmed included quota permits independent Codex fallback"),
             target="main (explicit permission)"
             if plan["permissions"]["publish_main"]
             else "workflow-owned integration ref",
@@ -166,6 +170,9 @@ class Autopilot:
                             (next_state, node["id"]),
                         )
         if action == "stop":
+            planner_job = self.jobs.get("dsh:" + workflow_id)
+            if planner_job:
+                planner_job.cancel()
             for node in self.ledger.rows("nodes", "workflow_id=?", (workflow_id,)):
                 job = self.jobs.get(node["id"])
                 if job:
@@ -194,6 +201,8 @@ class Autopilot:
         self.manager.scheduler.wake()
         if action == "resume":
             self.reconcile(workflow_id)
+            from .dsh import resume
+            resume(self, self.ledger.get("workflows", workflow_id))
         return self.ledger.view(workflow_id)
 
     def can_dispatch(self, task_id):
@@ -394,6 +403,8 @@ class Autopilot:
         for w in self.ledger.rows("workflows", "state='running'"):
             nodes = self.ledger.rows("nodes", "workflow_id=?", (w["id"],))
             policy = w["plan"]["policy"]
+            from . import dsh
+            dispatch_name = dsh.selection(self, w, nodes) if policy.get("dsh") else None
             for planner in nodes:
                 if (
                     planner["state"] == "accepted"
@@ -484,6 +495,8 @@ class Autopilot:
                     if n["spec"]["kind"] == "integration" and integrations >= min(
                         policy["integration_slots"], self.manager.settings.autopilot_integration_slots
                     ):
+                        continue
+                    if policy.get("dsh") and n["name"] != dispatch_name:
                         continue
                     self._spawn(n, state, "launching", self._launch)
                     if n["spec"]["kind"] == "integration":
@@ -956,7 +969,9 @@ class Autopilot:
         fallback = any(
             r["provider"] == "claude" and r["payload"].get("error_kind") == "included_quota" for r in previous
         )
-        for provider in ["codex"] if fallback else ["claude", "codex"]:
+        required_claude = w["plan"]["policy"].get("review_provider_policy") == "claude_only"
+        choices = ["claude"] if required_claude else (["codex"] if fallback else ["claude", "codex"])
+        for provider in choices:
             key = self._availability_key(provider, w)
             rows = self.ledger.rows("provider_availability", "key=?", (key,))
             if not rows or rows[0]["state"] != "included_quota":
@@ -974,7 +989,8 @@ class Autopilot:
             n["id"],
             n["state"],
             "waiting_provider",
-            reason="Both providers report included quota unavailable; no paid fallback",
+            reason=("Required Claude audit waiting for included quota; no substitute audit"
+                    if required_claude else "Both providers report included quota unavailable; no paid fallback"),
         )
         return None
 
@@ -1163,7 +1179,8 @@ class Autopilot:
             failures = sum(r["payload"].get("error_kind") in REVIEW_RETRY_ERRORS for r in attempts)
             payload["retry_failures"] = failures
             if failures <= policy["infra_retries"]:
-                payload.setdefault("retry_at", payload.get("failed_at", time.time()) + policy["provider_backoff"])
+                payload.setdefault("retry_at", payload.get("failed_at", time.time())
+                                   + min(3600, policy["provider_backoff"] * 2 ** (failures - 1)))
                 state = "review_queued"
             else:
                 state = "blocked_infrastructure"
@@ -1611,6 +1628,8 @@ class Autopilot:
             )
 
     def reconcile(self, workflow_id=None):
+        from .dsh import recover
+        recover(self, workflow_id)
         nodes = self.ledger.rows(
             "nodes", "workflow_id=?" if workflow_id else "1", (workflow_id,) if workflow_id else ()
         )
