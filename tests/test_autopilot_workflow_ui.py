@@ -45,6 +45,29 @@ def test_manifest_policy_remains_authoritative_and_bad_defaults_fail_closed(clie
     assert client.post('/api/autopilot/dry-run', json=dict(manifest='x' * (1024 * 1024 + 1), execution_defaults={})).status_code == 400
 
 
+def test_dsh_plan_http_proposes_without_starting_and_rejects_remote_route(client, git_repo, monkeypatch):
+    calls = []
+
+    async def generate(config, context, schema, planning=False):
+        calls.append(config)
+        return dict(tasks=[dict(id='docs', prompt='Write README', paths=['README.md'], depends_on=[],
+                                validation_profile='check')]), dict(model='fixture', usage={})
+
+    monkeypatch.setattr(client.app.state.manager.autopilot.dispatcher, 'generate', generate)
+    envelope = dict(goal='Write README', repository=str(git_repo), paths=['README.md'],
+                    validation_profiles=dict(check=dict(commands=[['python3', '-c', 'pass']])),
+                    policy=dict(dsh=dict(model='local:3b')))
+    response = client.post('/api/autopilot/dsh/plan', json=envelope)
+    assert response.status_code == 200, response.text
+    assert response.json()['manifest']['policy']['review_provider_policy'] == 'claude_only'
+    assert not client.get('/api/tasks').json()['tasks']
+    assert not client.get('/api/autopilot/workflows').json()['workflows']
+    envelope['policy']['dsh']['endpoint'] = 'https://example.com:443'
+    assert client.post('/api/autopilot/dsh/plan', json=envelope).status_code == 400
+    assert len(calls) == 1
+    assert 'ap-dsh-plan' in client.get('/autopilot').text
+
+
 def test_detail_page_and_listing_have_permanent_link_and_one_review_narrative(client, git_repo):
     raw = plan(git_repo, ('A', 'B'))
     raw['name'] = '<script>alert(1)</script>'

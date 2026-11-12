@@ -75,6 +75,23 @@
     } catch (error) { showError(error); }
   };
   el('ap-manifest').addEventListener('input', () => {generatedManifest = false; invalidate();});
+  el('ap-dsh-plan').onclick = async () => {
+    const button = el('ap-dsh-plan'); button.disabled = true; invalidate();
+    message('ローカルDSHで計画案を生成しています…');
+    try {
+      const result = await api('/api/autopilot/dsh/plan', {
+        goal: el('ap-dsh-goal').value, repository: el('ap-repository').value, base_ref: el('ap-base').value,
+        paths: el('ap-dsh-paths').value.split('\n').map(p => p.trim()).filter(Boolean),
+        validation_profiles: JSON.parse(el('ap-dsh-validation').value),
+        policy: {...executionDefaults(), dsh: {model: el('ap-dsh-model').value.trim()},
+          extra_usage_disabled_confirmed: el('ap-import-billing').checked, mentor_enabled: false},
+        permissions: {commit_owned_changes: el('ap-import-commit').checked, publish_main: false},
+      });
+      el('ap-manifest').value = JSON.stringify(result.manifest, null, 2); generatedManifest = true;
+      showPreview(result.preview); message('計画案を作成しました。目標・子タスク・検証条件を確認してからStartしてください。');
+    } catch (error) {showError(error);}
+    finally {button.disabled = false;}
+  };
   el('ap-preview').onclick = async () => {
     try { showPreview(await api('/api/autopilot/dry-run', {manifest: el('ap-manifest').value, execution_defaults: executionDefaults()})); }
     catch (error) { invalidate(); showError(error); }

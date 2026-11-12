@@ -1,0 +1,52 @@
+{
+  "status": "PASS",
+  "kind": "real local Ollama goal decomposition; no implementation or paid model invocation",
+  "model": "ministral-3:3b",
+  "usage": {
+    "prompt_eval_count": 314,
+    "eval_count": 74,
+    "total_duration": 13434099118
+  },
+  "tasks": [
+    {
+      "id": "create_hello_file",
+      "prompt": "Create a file named hello.txt with the exact content 'hello' (no extra spaces or newlines).",
+      "paths": [
+        "hello.txt"
+      ],
+      "depends_on": [],
+      "validation": {
+        "commands": [
+          [
+            "python3",
+            "-c",
+            "from pathlib import Path; assert Path('hello.txt').read_text().strip() == 'hello'"
+          ]
+        ],
+        "artifacts": [],
+        "timeout": 300,
+        "outputs": [],
+        "network": false
+      },
+      "input_files": [
+        "MISSION.md"
+      ],
+      "goal_ids": [],
+      "acceptance_ids": [],
+      "kind": "code",
+      "draft": false,
+      "envelope": {
+        "paths": [
+          "hello.txt"
+        ],
+        "validation_profiles": []
+      },
+      "integration_mode": "merge-only",
+      "handoff": [],
+      "review_files": [],
+      "contract": {},
+      "manual_gates": []
+    }
+  ],
+  "registered_workflows": 0
+}
