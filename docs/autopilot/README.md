@@ -6,6 +6,10 @@ It uses the existing TaskManager scheduler and SQLite connection. Ordinary
 `all_success` dependencies retain `completed && success && !completion_pending`.
 It never deploys, restarts a service, changes billing or purchases/consumes credits.
 
+The opt-in [three-layer HOOTL extension](hootl-implementation.md) adds local Ollama
+goal decomposition and durable task dispatch, a Claude-only audit policy, and
+workflow metrics. It is not yet qualified for unattended 24-hour operation.
+
 Open `/autopilot`, paste a manifest, run **Dry-run**, inspect the fixed plan and
 permissions, opt in, then **Start**. Multiple Markdown files or a ZIP can also be uploaded and edited before conversion.
 Each workflow has a permanent detail page with progress, consolidated review decisions,
@@ -33,8 +37,11 @@ estimate is displayed. Codex review creates a fresh thread, not resume/fork of
 the implementation conversation. Same-model separate-thread review is labeled
 as such, not cross-model verification.
 
-Both real adapters use an isolated CLI process with only staged subscription
-credentials and trusted settings, no inherited SSH agent or API-key environment.
+Both real adapters use an isolated CLI process with the CLI's own credential file
+mounted read-only and trusted settings, no inherited SSH agent or API-key environment.
+The application does not decode or copy OAuth tokens; official CLI authentication
+metadata must confirm the subscription route. Credentials needing refresh through
+a writable store require normal CLI login outside the reviewer sandbox.
 Claude uses `--safe-mode`, empty tools/settings sources and strict empty MCP
 configuration, not `--bare`. Codex disables shell, plugins and subagents, uses a
 new read-only thread and structured `turn/start`. Fixed requirements and partitioned base/head diffs are supplied as data. No candidate

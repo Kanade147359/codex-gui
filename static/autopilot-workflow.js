@@ -50,7 +50,7 @@
     for (const event of workflow.events || []) {
       const row = document.createElement('article'); row.className = 'ap-history-entry';
       const payload = event.payload || {};
-      const kind = event.kind || payload.kind, label = {note: '大タスクのメモ', instruction: '子タスクへの追加指示', add_node: '子タスクの追加'}[kind] || kind || '操作';
+      const kind = event.kind || payload.kind, label = {note: '大タスクのメモ', instruction: '子タスクへの追加指示', add_node: '子タスクの追加', dsh: `DSHタスク選択 · ${event.state}`}[kind] || kind || '操作';
       row.append(text('h3', `${label}${event.created_at ? ` · ${new Date(event.created_at).toLocaleString()}` : ''}`));
       const narrative = payload.prompt || payload.note || payload.reason || payload.summary || payload.node?.prompt;
       if (narrative) {const paragraph = text('p', narrative); paragraph.className = 'ap-review-text'; row.append(paragraph);}
@@ -63,6 +63,11 @@
   function renderInputs() {
     const settings = Object.fromEntries(workflow.nodes.map(node => [node.name, node.execution_settings]));
     const children = [ui.settingsTable(settings)];
+    if (workflow.metrics) {
+      const metrics = workflow.metrics;
+      children.push(text('p', `検証済み成果 ${metrics.verified_deliverables} · Codex実行 ${metrics.codex_executions} · Claude監査 ${metrics.claude_audits} · 指摘 ${metrics.claude_findings} · DSH選択 ${metrics.dsh_decisions}`));
+      children.push(ui.details('Mission評価指標（未計測はnull）', metrics, 'mission-metrics'));
+    }
     for (const [name, body] of Object.entries(workflow.plan.inputs || {})) {
       const details = document.createElement('details'); details.dataset.persist = `input:${name}`;
       details.append(text('summary', name), text('pre', body)); children.push(details);

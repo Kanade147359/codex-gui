@@ -33,6 +33,15 @@
     <div id="ap-documents"></div><div id="ap-import-nodes"></div>
     <button id="ap-convert" disabled>編集内容をmanifestへ変換・Dry-run</button>
   </fieldset>
+  <fieldset><legend>ローカルDSHでタスクを分解</legend>
+    <p>上のRepository・Base refを使用します。編集範囲と検証コマンドを指定して計画案を作り、Dry-run後にStartで実行します。</p>
+    <label for="ap-dsh-goal">開発目標</label><textarea id="ap-dsh-goal" rows="3"></textarea>
+    <label for="ap-dsh-model">インストール済みOllamaモデル</label><input id="ap-dsh-model" placeholder="例: ministral-3:3b">
+    <label for="ap-dsh-paths">編集を許可するパス（1行1件）</label><textarea id="ap-dsh-paths" rows="3"></textarea>
+    <label for="ap-dsh-validation">検証プロファイル（名前とcommandsを含むJSON）</label><textarea id="ap-dsh-validation" rows="4" placeholder='{"tests":{"commands":[["python3","-m","pytest","-q"]]}}'></textarea>
+    <button type="button" id="ap-dsh-plan">DSHで計画案を作成</button>
+    <p class="muted">ローカルCPUで生成します。Claude必須監査・本番反映なしの計画です。課金確認の設定は上のチェックボックスを使用します。</p>
+  </fieldset>
   <label for="ap-manifest">Workflow manifest（JSON / YAML）</label>
   <textarea id="ap-manifest" rows="15" spellcheck="false" placeholder="version: 1"></textarea>
   <p><label class="ap-check"><input id="ap-opt-in" type="checkbox"> このmanifestの編集範囲・検証・予算・開始時権限にopt-inする</label></p>
