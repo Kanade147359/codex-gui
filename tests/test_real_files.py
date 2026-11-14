@@ -13,6 +13,7 @@ import uuid
 import pytest
 
 from app.task_manager import TaskManager
+from app.database import Database
 from conftest import wait_for
 
 pytestmark=pytest.mark.skipif(os.environ.get('CODEX_GUI_REAL_FILES')!='1',reason='opt-in real subscription file test')
@@ -37,6 +38,8 @@ def test_real_model_reads_upload_then_artifact_and_resumes(settings,db,git_repo,
     async def stream(): yield data
     async def idle(tid): return await wait_for(lambda:m.get(tid)['status'] not in ('queued','starting','running','waiting_dependencies') and m.get(tid),timeout=240)
     async def scenario():
+        nonlocal m
+        reopened = None
         m.scheduler.start(.05)
         try:
             a=await m.attachments.upload_file(stream(),'verification-input.json')
@@ -49,11 +52,20 @@ def test_real_model_reads_upload_then_artifact_and_resumes(settings,db,git_repo,
             a_done=await idle(source['id']); assert a_done['task_outcome']=='success',a_done['status_detail']+' '+a_done['outcome_reason']
             b_done=await idle(target['id']); assert b_done['task_outcome']=='success',b_done['status_detail']+' '+b_done['outcome_reason']
             assert hashlib.sha256((Path(b_done['worktree'])/'verification.json').read_bytes()).hexdigest()==expected
+            (Path(a_done['worktree'])/'verification.json').write_bytes(b'changed after snapshot')
             await m.delete_worktree(source['id'],force=True)
+            await m.shutdown()
+            db.close()
+            reopened = Database(settings.db_path)
+            m = TaskManager(settings, reopened)
+            m.recover()
             await m.send_instruction(target['id'],'Read the same attached input path from the preceding instruction and write its SHA-256 hex digest to reread.sha256. Return SUCCESS only after checking it.')
             resumed=await idle(target['id'])
             assert resumed['codex_thread_id']==b_done['codex_thread_id']
             assert resumed['task_outcome']=='success',resumed['outcome_reason']
             assert (Path(resumed['worktree'])/'reread.sha256').read_text().strip()==expected
-        finally: await m.shutdown()
+        finally:
+            await m.shutdown()
+            if reopened is not None:
+                reopened.close()
     asyncio.run(scenario())

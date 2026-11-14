@@ -73,6 +73,8 @@ Artifact ID、source task、元相対パス、SHA-256、サイズ、登録時刻
 
 `task_id`を指定しないsnapshot入力はNew Task向けの未所有uploadとなり、task作成時に所有権を確定する。所有済み一般入力のIDを別Taskへ流用すると拒否する。移行は追加テーブル・追加列のみで既存画像行はkind=imageとして保持し、繰り返し適用できる。
 
+待機中の指示へ渡す `POST /api/tasks/{id}/inputs` では `pending_only: true` を指定する。開始と競合してpending turnへ関連付けできなかった場合は409を返し、追加指示からの再操作を求める。省略時の保存済み入力の関連付けAPIは互換維持する。
+
 ## 安全性と対応範囲
 
 成果物はDBのTaskパスとサーバ計算のworktreeパスの一致を検査し、trustedなworktree rootからdir_fd / O_NOFOLLOWで各要素を開く。検証後に文字列パスから開き直さず、同じFDで配信する。symlink・hardlink・FIFO等は取得／ZIP／snapshotすべてで拒否する。snapshotとZIPではサイズ・inode・mtime/ctimeを前後比較し、snapshotでは元パスの置換も検査する。

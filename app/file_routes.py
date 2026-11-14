@@ -54,6 +54,7 @@ async def upload(request: Request, filename: str = 'input.bin'):
 
 class InputSelection(BaseModel):
     attachment_ids: list[str] = Field(max_length=16)
+    pending_only: bool = False
 
 
 @router.post('/api/tasks/{task_id}/inputs')
@@ -63,7 +64,7 @@ async def associate(request: Request, task_id: str, body: InputSelection):
     await run_in_threadpool(m.attachments.resolve, body.attachment_ids, task_id)
     task = m.get(task_id)
     pending = m.db.attach_pending_files(task_id, body.attachment_ids, m.settings)
-    if task['status'] in ('waiting_dependencies', 'queued', 'retry_wait') and not pending:
+    if not pending and (body.pending_only or task['status'] in ('waiting_dependencies', 'queued', 'retry_wait')):
         raise FileError('タスクが開始されました。追加指示から添付してください。', 409)
     m.db.claim_files(task_id, body.attachment_ids)
     return dict(inputs=m.attachments.views(body.attachment_ids), pending_turn_updated=pending)

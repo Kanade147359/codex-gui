@@ -140,7 +140,7 @@ window.TaskFileUI = (() => {
         }
         const target = tasks.find(t=>t.id===destination);
         if (["waiting_dependencies", "queued", "retry_wait"].includes(target.status)) {
-          await json(`/api/tasks/${destination}/inputs`, {attachment_ids:inputs.map(a=>a.id)});
+          await json(`/api/tasks/${destination}/inputs`, {attachment_ids:inputs.map(a=>a.id), pending_only:true});
         } else {
           await json(`/api/tasks/${destination}/messages`, {prompt:dialog.querySelector(".transfer-prompt").value, attachment_ids:inputs.map(a=>a.id), service_tier:"standard"});
         }
