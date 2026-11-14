@@ -202,9 +202,30 @@
     <button data-tab="status" class="active">Status</button>
     <button data-tab="diff">Diff</button>
     <button data-tab="log">Log</button>
+    <button data-tab="files">Files</button>
   </nav>
   <pre id="git-status" class="block tab-body"></pre>
   <div id="git-diff" class="tab-body" hidden><pre id="git-stat" class="block"></pre><pre id="git-diff-body" class="block diff"></pre></div>
   <pre id="git-log" class="block tab-body" hidden></pre>
+  <div id="task-files" class="tab-body" hidden>
+    <h3>Files / Artifacts</h3>
+    <p class="small muted">Worktree files are available while running. Hidden files, credential names, symlinks and hardlinks are excluded. Worktree files disappear when the worktree is deleted; saved inputs and Artifact snapshots persist.</p>
+    <form id="file-search" class="file-toolbar">
+      <label>Relative path<input id="file-path" placeholder="reports/ or verification.json" autocomplete="off"></label>
+      <label>Find filename<input id="file-query" placeholder="Filter paths" autocomplete="off"></label>
+      <button type="submit">Refresh files</button>
+    </form>
+    <p id="file-error" class="attachment-error" role="alert"></p>
+    <p id="file-summary" class="small muted"></p>
+    <div class="file-toolbar">
+      <button type="button" id="file-select-all">Select visible files</button>
+      <button type="button" id="files-zip">Download selected ZIP</button>
+      <button type="button" id="files-send">Send selected to Task</button>
+      <button type="button" id="files-more" hidden>Load more</button>
+    </div>
+    <div id="file-list" class="task-file-list"></div>
+    <h3>Saved inputs</h3><div id="file-inputs" class="attachment-list"></div>
+    <h3>Artifact snapshots</h3><div id="file-snapshots" class="task-file-list"></div>
+  </div>
 </section>
 {% endblock %}

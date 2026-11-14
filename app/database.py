@@ -188,6 +188,16 @@ CREATE TABLE IF NOT EXISTS task_messages (
     attachment_ids TEXT NOT NULL DEFAULT '[]', kind TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id, id);
+CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY, source_task_id TEXT NOT NULL, relative_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL, revision TEXT NOT NULL DEFAULT '',
+    UNIQUE(source_task_id, relative_path, sha256)
+);
+CREATE TABLE IF NOT EXISTS artifact_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, source_task_id TEXT NOT NULL,
+    relative_path TEXT NOT NULL, attachment_id TEXT, artifact_id TEXT,
+    UNIQUE(task_id, source_task_id, relative_path)
+);
 CREATE TABLE IF NOT EXISTS recent_repos (
     path TEXT PRIMARY KEY,
     last_used TEXT NOT NULL
@@ -373,6 +383,9 @@ class Database:
 
     def _migrate(self) -> None:
         for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),
+                                  ("attachments", [("kind", "TEXT NOT NULL DEFAULT 'image'"),
+                                                   ("task_id", "TEXT"), ("sha256", "TEXT NOT NULL DEFAULT ''"),
+                                                   ("artifact_id", "TEXT")]),
                                   ("scheduled_instructions", [("attachment_ids", "TEXT NOT NULL DEFAULT '[]'")])):
             have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
             legacy_completion_upgrade = table == "tasks" and "task_outcome" not in have
@@ -459,7 +472,7 @@ class Database:
             except Exception:  # a bad listener must not undo or hide a state change that is already committed
                 log.exception("status listener failed for %s (%s -> %s)", task_id, old, new)
 
-    def create_task(self, depends_on=(), message=None, **fields) -> dict:
+    def create_task(self, depends_on=(), message=None, artifact_refs=(), **fields) -> dict:
         """Insert a task, and its dependency edges in the same transaction (a task is never visible half-wired)."""
         cols = [c for c in TASK_COLUMNS if c in fields]
         unknown = set(fields) - set(TASK_COLUMNS)
@@ -474,14 +487,48 @@ class Database:
             )
             if message is not None:
                 self._insert_message(fields["id"], message)
+            for ref in artifact_refs:
+                self._conn.execute("INSERT INTO artifact_requests (task_id, source_task_id, relative_path) VALUES (?, ?, ?)",
+                                   (fields["id"], ref["source_task_id"], ref["path"]))
             if depends_on:
                 self._insert_edges(fields["id"], list(depends_on))
         return self.get_task(fields["id"])
 
     # Images are immutable and deliberately have no delete API: previews, histories and schedules may share them.
-    def add_attachment(self, row: dict) -> None:
-        self._execute(f"INSERT INTO attachments ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})",
-                      list(row.values()))
+    def add_attachment(self, row: dict, limits=None) -> None:
+        if limits and row.get("kind") == "file":
+            return self.add_file_attachments([row], limits)
+        self._execute(f"INSERT INTO attachments ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})", list(row.values()))
+
+    def add_file_attachments(self, rows, limits) -> None:
+        from .attachments import AttachmentError
+        with self._lock, self._conn:
+            count, size = self.upload_usage()
+            if count + len(rows) > limits.file_store_max_count or size + sum(r["size"] for r in rows) > limits.file_store_max_bytes:
+                raise AttachmentError("保存ファイル件数または総容量の上限に達しました。")
+            for row in rows:
+                self._conn.execute(f"INSERT INTO attachments ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})", list(row.values()))
+
+    def get_artifact(self, aid: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM artifacts WHERE id = ?", (aid,)).fetchone()
+            return dict(row) if row else None
+
+    def list_artifacts(self, source_task_id=None) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT * FROM artifacts" + (" WHERE source_task_id = ?" if source_task_id else "") + " ORDER BY created_at",
+                (source_task_id,) if source_task_id else ())]
+
+    def add_artifact(self, row: dict) -> dict:
+        with self._lock, self._conn:
+            self._conn.execute(f"INSERT OR IGNORE INTO artifacts ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})", list(row.values()))
+            return dict(self._conn.execute("SELECT * FROM artifacts WHERE source_task_id = ? AND relative_path = ? AND sha256 = ?",
+                                          (row['source_task_id'], row['relative_path'], row['sha256'])).fetchone())
+
+    def artifact_requests(self, task_id):
+        with self._lock:
+            return [dict(r) for r in self._conn.execute("SELECT * FROM artifact_requests WHERE task_id = ? ORDER BY id", (task_id,))]
 
     def get_attachment(self, image_id: str) -> Optional[dict]:
         with self._lock:
@@ -489,12 +536,61 @@ class Database:
         return dict(row) if row else None
 
     def _insert_message(self, task_id: str, message: dict) -> None:
+        self._claim_files(task_id, message.get("attachment_ids", []))
         self._conn.execute("INSERT INTO task_messages (task_id, prompt, attachment_ids, kind, created_at) VALUES (?, ?, ?, ?, ?)",
                            (task_id, message["prompt"], json.dumps(message.get("attachment_ids", [])), message["kind"], now_iso()))
 
     def add_message(self, task_id: str, prompt: str, attachment_ids=(), kind="steer") -> None:
         with self._lock, self._conn:
             self._insert_message(task_id, dict(prompt=prompt, attachment_ids=list(attachment_ids), kind=kind))
+
+    def _claim_files(self, task_id: str, ids) -> None:
+        from .attachments import AttachmentError
+        for aid in ids:
+            row = self._conn.execute("SELECT kind, task_id FROM attachments WHERE id = ?", (aid,)).fetchone()
+            if row and row["kind"] == "file":
+                if row["task_id"] not in (None, task_id):
+                    raise AttachmentError("入力ファイルは別のタスクに関連付けられています。")
+                self._conn.execute("UPDATE attachments SET task_id = ? WHERE id = ?", (task_id, aid))
+
+    def claim_files(self, task_id: str, ids) -> None:
+        with self._lock, self._conn:
+            self._claim_files(task_id, ids)
+
+    def attach_pending_files(self, task_id: str, ids, limits=None) -> bool:
+        """Attach to an unstarted instruction only, atomically with ownership and history."""
+        from .task_manager import _Turn
+        with self._lock, self._conn:
+            row = self._conn.execute("SELECT status, pending_turn, claimed_by FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            turn = _Turn.from_json(row["pending_turn"]) if row else None
+            if not row or row["claimed_by"] or row["status"] not in ("waiting_dependencies", "queued", "retry_wait") or not turn or turn.started:
+                return False
+            combined = list(dict.fromkeys([*turn.attachment_ids, *ids]))
+            if limits:
+                from .attachments import AttachmentError, MAX_IMAGES, MAX_MESSAGE_BYTES
+                records = [self.get_attachment(aid) for aid in combined]
+                images = [r for r in records if r and r['kind'] == 'image']
+                files = [r for r in records if r and r['kind'] == 'file']
+                if (len(images) > MAX_IMAGES or sum(r['size'] for r in images) > MAX_MESSAGE_BYTES or
+                        len(files) > 16 or sum(r['size'] for r in files) > limits.file_message_max_bytes):
+                    raise AttachmentError('添付件数またはメッセージの合計容量上限を超えています。')
+            self._claim_files(task_id, ids)
+            turn.attachment_ids = combined
+            self._conn.execute("UPDATE tasks SET pending_turn = ? WHERE id = ?", (turn.to_json(), task_id))
+            latest = self._conn.execute("SELECT id FROM task_messages WHERE task_id = ? ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+            if latest:
+                self._conn.execute("UPDATE task_messages SET attachment_ids = ? WHERE id = ?", (json.dumps(turn.attachment_ids), latest["id"]))
+            return True
+
+    def input_files(self, task_id: str) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._conn.execute(
+                "SELECT * FROM attachments WHERE kind = 'file' AND task_id = ? ORDER BY created_at", (task_id,))]
+
+    def upload_usage(self) -> tuple[int, int]:
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM attachments WHERE kind = 'file'").fetchone()
+            return tuple(row)
 
     def list_messages(self, task_id: str) -> list[dict]:
         with self._lock:
@@ -771,6 +867,7 @@ class Database:
             for p in parents:
                 if p not in known:
                     raise ScheduledError(f"dependency task not found: {p}", "missing")
+            self._claim_files(task_id, attachment_ids)
             cur = self._conn.execute(
                 "INSERT INTO scheduled_instructions (task_id, prompt, status, service_tier, created_at, created_by, attachment_ids) "
                 "VALUES (?, ?, 'waiting_dependencies', ?, ?, ?, ?)", (task_id, prompt, service_tier, now_iso(), created_by, json.dumps(list(attachment_ids))))

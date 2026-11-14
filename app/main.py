@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from .appserver import AppServerClient
 from .catalog import ModelCatalog
@@ -13,9 +14,12 @@ from .codex_runner import CodexRunner
 from .config import Settings
 from .database import Database
 from .routes import router
+from .file_routes import router as file_router
+from .attachments import AttachmentError
+from .task_files import FileError
 from .autopilot.routes import router as autopilot_router
 from . import completion, ssh_agent
-from .task_manager import TaskManager
+from .task_manager import TaskError, TaskManager
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -53,11 +57,18 @@ def create_app(settings: Optional[Settings] = None, runner: Optional[CodexRunner
         db.close()
 
     app = FastAPI(title="Codex GUI", lifespan=lifespan)
+    @app.exception_handler(FileError)
+    @app.exception_handler(AttachmentError)
+    @app.exception_handler(TaskError)
+    async def file_error(request, error):
+        return JSONResponse(status_code=getattr(error, 'status', 400),
+                            content={'detail': {'message': str(error), 'code': 'invalid_attachment' if isinstance(error, AttachmentError) else 'task_file'}})
     app.state.settings = settings
     app.state.completion_validation = completion.validation_capability()
     app.state.manager = TaskManager(settings, db, runner, app_server)
     app.state.catalog = ModelCatalog(settings.codex_bin)
     app.include_router(router)
+    app.include_router(file_router)
     app.include_router(autopilot_router)
     app.mount("/static", NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
     return app

@@ -581,6 +581,13 @@ function initDashboard() {
     dialog.showModal();
     (f.repository.value ? f.prompt : f.repository).focus();
   });
+  if (new URLSearchParams(location.search).get("attach_artifacts")) {
+    try {
+      const incoming = JSON.parse(sessionStorage.getItem("codex-gui-artifact-draft") || "null");
+      if (incoming) { images?.add(incoming.inputs || []); if (incoming.repository) f.repository.value = incoming.repository; sessionStorage.removeItem("codex-gui-artifact-draft"); }
+    } catch (_) {}
+    $("#new-task-btn").click();
+  }
   // ----- run after other tasks -----
 
   function renderDepChoices() {
@@ -624,7 +631,7 @@ function initDashboard() {
         base_ref: baseValue(),
         name: f.name.value,
         prompt: f.prompt.value,
-        ...(images?.hasImages() ? { attachment_ids: await images.ids() } : {}),
+        ...(images?.hasImages() ? { attachment_ids: await images.ids(), artifact_refs: images.refs() } : {}),
         model: selectedModel(),
         reasoning_effort: effortSel.value,
         auto_approval: f.auto_approval.checked,
@@ -1024,7 +1031,7 @@ function initTask() {
   });
   $("#schedule-btn").addEventListener("click", async () => {
     const prompt = $("#instruction").value;
-    if (!prompt.trim() && !images?.hasImages()) { setMsg("Write an instruction or attach an image first.", true); return; }
+    if (!prompt.trim() && !images?.hasImages()) { setMsg("Write an instruction or attach a file first.", true); return; }
     const after = $("#delivery-after").checked;
     const deps = after ? [...schedDeps] : [];
     if (after && !deps.length) { setMsg("Select at least one task to wait for, or choose “Send when thread is idle”.", true); return; }
@@ -1219,6 +1226,8 @@ function initTask() {
     $("#git-status").hidden = gitTab !== "status";
     $("#git-diff").hidden = gitTab !== "diff";
     $("#git-log").hidden = gitTab !== "log";
+    $("#task-files").hidden = gitTab !== "files";
+    if (gitTab === "files") window.TaskFileUI.refresh();
   }));
 
   async function action(label, fn) {
@@ -1315,7 +1324,7 @@ function initTask() {
       const lastMessage = task.messages?.at(-1);
       if (lastMessage?.prompt === prompt) previousImages = lastMessage.attachment_ids || [];
     }
-    if (!prompt.trim() && !images?.hasImages() && !previousImages.length) { setMsg("Write an instruction or attach an image first.", true); return; }
+    if (!prompt.trim() && !images?.hasImages() && !previousImages.length) { setMsg("Write an instruction or attach a file first.", true); return; }
     if (confirmText && !confirm(confirmText)) return;
     sending = true;
     images?.setBusy(true);

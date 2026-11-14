@@ -11,6 +11,8 @@ A local web GUI for running several Codex CLI instances at once and managing the
 - Run multiple Codex processes in parallel, watch logs in real time, and inspect Git status / diff / log
 - Stop, Commit / Push, delete worktrees / branches, and keep history in SQLite
 
+- Attach arbitrary files, browse/download task files, and transfer immutable artifacts between tasks ([guide, API and validation](docs/file-transfer/README.md))
+
 > **Note:** The GUI itself has no login (authentication). Read [Security](#security) before exposing it to anyone else.
 
 ## Table of Contents

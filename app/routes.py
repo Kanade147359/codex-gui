@@ -67,6 +67,8 @@ async def get_attachment(request: Request, image_id: str):
     store = manager(request).attachments
     try:
         row = store.get(image_id)
+        if row["kind"] != "image":
+            raise AttachmentError("入力ファイルはタスクのFiles画面から取得してください。")
         path = store.path(row)
         if not path.is_file():
             raise AttachmentError("保存済み画像が見つかりません。")
@@ -76,12 +78,18 @@ async def get_attachment(request: Request, image_id: str):
                                                                     "Cache-Control": "private, max-age=31536000, immutable"})
 
 
+class ArtifactReference(BaseModel):
+    source_task_id: str
+    path: str
+
+
 class NewTask(BaseModel):
     repository: str
     base_ref: str = "main"
     name: str = ""
     prompt: str
     attachment_ids: list[str] = []
+    artifact_refs: list[ArtifactReference] = []
     model: str = ""
     reasoning_effort: str = "default"
     auto_approval: bool = True
