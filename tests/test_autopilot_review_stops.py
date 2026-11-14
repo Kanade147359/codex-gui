@@ -10,11 +10,31 @@ import pytest
 from app.autopilot import goals
 from app.autopilot.git import git, sha, scope, snapshot, submit_head
 from app.autopilot.providers import ClaudeProvider, CodexProvider, ProviderFailure, review_schema, validate_result
-from app.autopilot.review_context import prompt, review_all
+from app.autopilot.review_context import partitions, prompt, review_all
 from app.autopilot.review_summary import summarize
 
 
 FIXTURES = json.loads((Path(__file__).parent / "fixtures/autopilot/review_stops.json").read_text())
+
+
+@pytest.mark.parametrize("path", ["成果.md", "audit/report.md "])
+def test_required_artifact_names_preserved_in_fixed_review_snapshot(git_repo, tmp_path, path):
+    async def run():
+        await git(git_repo, "config", "core.quotePath", "true")
+        base = await sha(git_repo)
+        target = git_repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("Pinned companion evidence.\n")
+        await git(git_repo, "add", "--", path)
+        await git(git_repo, "commit", "-qm", "required companion")
+        head = await sha(git_repo)
+        candidate = dict(payload=dict(changed_paths=[path], scope=await scope(git_repo, base, head),
+                                      contract=dict(required_paths=[path])))
+        source = await snapshot(str(git_repo), head, base, tmp_path / "fixed")
+        _, related = await partitions(candidate, source)
+        assert [(item["path"], item["text"]) for item in related] == [(path, target.read_text())]
+
+    asyncio.run(run())
 
 
 def approved(candidate):

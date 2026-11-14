@@ -1,0 +1,151 @@
+{
+  "release": "GUI-RELEASE-01",
+  "date": "2026-11-14",
+  "base_main": "c70cb894428484423590c045ed08da7e0ec804c6",
+  "operational_acceptance": "NOT_COMPLETE",
+  "discovery": {
+    "sources": ["origin fetch", "local and remote refs", "registered worktrees", "commit ancestry", "GitHub PR metadata", "existing GET /api/tasks and GET /api/tasks/{id}/log", "existing verification records"],
+    "policy": "Only committed fixed SHAs are eligible. No other task's uncommitted work is copied or committed. Existing reports are referenced rather than reproduced."
+  },
+  "integration_candidates": [
+    {
+      "feature": "Build Artifact GC P0 (distinct from task-to-task Artifact transfer)",
+      "branch": "codex-gui/cdb25c51-codex-gui-build-artifact-gc-p0",
+      "sha": "cd195489435b7fa668ca40c2e808fee2aeb2be85",
+      "implementation_sha": "2e4e788fc8032c137b275bc68941d0bb0c4199fc",
+      "dependencies": ["12dabe5385f130383b00cd2609dd6bff7360d68f (already in main)"],
+      "pr": "https://github.com/Kanade147359/codex-gui/pull/8",
+      "source_worktree_clean": true,
+      "evidence": ["docs/build-artifact-gc.md", "docs/build-artifact-gc-dry-run-2026-10-15.md", "tests/test_artifact_gc.py", "tests/test_ui_storage_browser.py"],
+      "default": "Automatic deletion disabled; no production scan or deletion performed by this release task."
+    },
+    {
+      "feature": "Autopilot fixed review evidence handoff and output diagnostics",
+      "branch": "codex-gui/118133d6-task",
+      "sha": "61f3161a6ea93a08ed1f79220cac189204384265",
+      "dependencies": ["c4ec1e338924e234f391a5396aa493d22b71a9a1 (already in main)"],
+      "source_worktree_clean": true,
+      "evidence": ["docs/autopilot/review-stops-test-results.txt", "tests/test_autopilot_review_stops.py"],
+      "integration_fix": "Read tracked names using ls-files -z and compare exactly, preserving Japanese and trailing spaces. Both new regression cases failed before the fix. Acceptance gates remain strict."
+    }
+  ],
+  "held": [
+    {
+      "feature": "FILE-01 / ARTIFACT-01 task-to-task transfer",
+      "classification": "HOLD",
+      "branch": "codex-gui/070d92b5-file-01-codex-gui",
+      "branch_head": "c70cb894428484423590c045ed08da7e0ec804c6",
+      "implementation_sha": null,
+      "reason": "The implementation, tests and verification record exist only as uncommitted changes in another task's worktree. Its SUCCESS outcome is not a fixed release artifact. Owner explicitly prohibited importing or committing such changes.",
+      "existing_evidence": "The source worktree's docs/file-transfer/README.md and verification.json report isolated regression and real subscription-model/browser checks. These are source-task results, not integrated or operational acceptance.",
+      "next_step": "Have the source task commit its reviewed implementation and provide that fixed SHA."
+    },
+    {
+      "feature": "Version upgrade / self-update / safe restart",
+      "classification": "HOLD",
+      "implementation_sha": null,
+      "reason": "No committed self-update implementation, corresponding task, or deployed update API was found. The deployed combined service has no safe apply/reservation endpoint. Do not implement a replacement or restart it from this task."
+    },
+    {
+      "feature": "CGUI-12 independent Runtime/Web",
+      "classification": "NEEDS_FIX_OR_SEPARATE_MIGRATION",
+      "branch": "impl/cgui-12-independent-runtime",
+      "sha": "7168a93098b6c27eebf7e0cd92d5798681079ad9",
+      "dependencies": ["c70cb894428484423590c045ed08da7e0ec804c6"],
+      "reason": "Changes the default run.sh and app.main launch contract to Web-only, requiring an offline handover, credentials and separate supervisors. It is not a self-update mechanism. Combining it with GC also loses the /storage HTML route and requires adapting GC API tests to the new factory.",
+      "evidence": ["docs/runtime/operations.md and validation.md at the fixed source SHA"],
+      "limitations": "Source record: 9 focused passes, 1004 broad passes, 36 skips, 3 pre-existing failures. Real-model/auth deployment and initial handover unverified. Migration backs up SQLite only; a coordinated DB/Artifact backup and restore qualification remain required.",
+      "action": "Its isolated trial merge was aborted; no Runtime code enters this release."
+    },
+    {
+      "feature": "Terra routing and metrics",
+      "branch": "feature/terra-auto-routing-metrics-handoff",
+      "sha": "7f77318d11cd852976ba7eab44fad7470e43115f",
+      "pr": "https://github.com/Kanade147359/codex-gui/pull/12",
+      "classification": "HOLD",
+      "reason": "Draft with CI evidence, but real Terra/Sol and production-isolated smoke still explicitly unrun. Session/model handoff needs separate qualification."
+    },
+    {
+      "feature": "Issue-to-task contract preflight",
+      "branch": "feat/p0a-issue-task-contract-20261101",
+      "sha": "3c28c9dabb20e3d39f9c11341d3dd5408551779c",
+      "pr": "https://github.com/Kanade147359/codex-gui/pull/13",
+      "classification": "HOLD",
+      "reason": "Draft awaiting CI/review in its existing report; independently verifying it is outside this release's ready candidates."
+    },
+    {
+      "feature": "HOOTL stack",
+      "branch": "codex-gui/53043adf-hootl-ui-evidence",
+      "sha": "76e4f5804b287c25b57023d40e3cd391ed1fd005",
+      "prs": [14, 15, 16],
+      "classification": "HOLD",
+      "reason": "Stacked partial implementation; real subscription end-to-end and 24-hour qualification explicitly absent. Do not infer completion from process success."
+    },
+    {
+      "feature": "Research mode",
+      "branch": "codex-gui/e9f08cb8-codex-gui-research-mode",
+      "sha": "d3b75053d6441f7d1ce9889164e0dbac6de0ffc5",
+      "classification": "HOLD",
+      "reason": "Existing task outcome is incomplete."
+    },
+    {
+      "feature": "Corriedale Console preview",
+      "branch": "codex-gui/0730617b-task-c-codex-gui-console-previ",
+      "sha": "eef5bcdc5b2e99d9b2d9930372e013ab80dd22c3",
+      "pr": "https://github.com/Kanade147359/codex-gui/pull/2",
+      "classification": "HOLD",
+      "reason": "Existing integrated Console result is blocked by unsigned requests/HTTP 401; not a qualified release."
+    },
+    {
+      "feature": "Standalone DSH controller and audit-only branches",
+      "sha": "85345d3caf87afa285d2db9073ae4c8f399732a3",
+      "classification": "HOLD",
+      "reason": "Separate controller qualification and audit records are not needed for the independent GUI candidates; no 24-hour operational qualification claimed."
+    }
+  ],
+  "already_present": [
+    {"feature": "Image attachments", "sha": "9d74f31bd10f7098a9cc9b37068b60dcfe3e4bf1"},
+    {"feature": "Dependency graph", "sha": "f4e7c47389d5cd68889a13724d62cf4b978df8b2"},
+    {"feature": "Semantic completion", "sha": "952834c522432313005ae5a7fbf2d7e62153b57c"},
+    {"feature": "Mobile UI", "sha": "5460184d4088d74fda17982a80b4f89c9704c922"},
+    {"feature": "Document workflows", "sha": "d395d232807203813b5052ae0df9ab926690d180"},
+    {"feature": "Goal-aware replanning", "sha": "30afbfb6fdaf704a16b68ce80293ea74484d014d"},
+    {"feature": "Initial Autopilot", "source_sha": "802beb2f95a8f22a20bb7edf2ee6ffdd9a084f93", "main_squash": "2d35188", "note": "Already delivered through PR #3 and later stack; do not merge the old unsquashed branch again."}
+  ],
+  "deployment": {
+    "state": "NOT_APPLIED_NO_SAFE_UPDATE_PATH",
+    "checkout_sha": "c70cb894428484423590c045ed08da7e0ec804c6",
+    "loaded_sha": "No running-revision endpoint exists; checkout identity is not proof of the loaded Python revision.",
+    "launch": ".venv/bin/python -m uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8765",
+    "safety": "The release task and other turns are active. No production checkout/index, DB, Artifact store, process, configuration or supervisor is changed. No production backup is claimed because no deployment is attempted.",
+    "rollback_target": "Preserved deployed checkout/configuration and base_main. Before any later migration, drain safely, take a consistent SQLite plus attachments/Artifact backup, and verify restoration together with the old code. Code-only rollback after migration is not qualified."
+  },
+  "validation": {
+    "focused": {"passed": 196, "provider": "fake processes and temporary SQLite/repositories"},
+    "unicode_regression_before_fix": {"failed": 2},
+    "independent_review": "Read-only independent review found no blocking concern in the NUL-delimited path fix.",
+    "browser_integration_regression": "The existing 769px test passed on pristine base_main and failed with the GC navigation link. Allow header items to wrap; retain the existing overflow assertion.",
+    "environment_retries": "Initial broad run was invalidated by shared /tmp exhaustion; repository-contained temporary paths then picked up parent AGENTS.md. Final broad tests use separate /tmp paths and existing installed dependencies. Newly installed Playwright lacked its matching browser; final browser checks use the existing matching Chromium without modifying the live venv.",
+    "real_subscription_models": "NOT_RUN in this release",
+    "artifact_transfer_integrated": "NOT_RUN: uncommitted implementation excluded",
+    "self_update_and_restore": "NOT_RUN: no eligible update implementation or deployment",
+    "final_results": {
+      "full": {"passed": 1054, "skipped": 37, "failed": 3, "errors": 0, "seconds": 179.55},
+      "browser": {"passed": 13, "failed": 0, "seconds": 44.45, "coverage": "Storage dry run/settings/history, image attachments, existing thread, scheduled instructions, dependencies, desktop and 320-1280px Chromium"},
+      "baseline_cli": {"failed": 3, "sha": "c70cb894428484423590c045ed08da7e0ec804c6", "environment": "Same interpreter and installed Codex, pristine git archive, separate temporary data"},
+      "existing_failures": [
+        "tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded",
+        "tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model",
+        "tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap"
+      ],
+      "new_regressions_remaining": 0,
+      "static_checks": ["git diff --check", "node --check static/storage.js", "release JSON parsed successfully"],
+      "commands": [
+        "python -m pytest -q (isolated --basetemp, CODEX_GUI_HOME and JUnit XML)",
+        "CODEX_GUI_BROWSER=1 python -m pytest -q tests/test_ui_storage_browser.py tests/test_ui_attachments_browser.py tests/test_ui_mobile_browser.py",
+        "python -m pytest -q tests/test_artifact_gc.py tests/test_autopilot_review_stops.py tests/test_autopilot_review_summary.py tests/test_database.py tests/test_dependencies.py tests/test_scheduled_instructions.py tests/test_attachments.py"
+      ],
+      "interpretation": "Real installed CLI plus local scripted Responses are not real subscription-model inference. All three broad-suite failures reproduce on unchanged main; assertions were not weakened. This does not qualify Artifact transfer, self-update, migration restoration or production deployment."
+    }
+  }
+}

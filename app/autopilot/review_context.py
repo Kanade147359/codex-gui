@@ -104,8 +104,8 @@ async def partitions(candidate, root):
         raise ValueError("related code read budget exceeded; declare review_files explicitly")
     for path in sorted(requested):
         if (Path(root) / path).is_file():
-            _, tracked, _ = await git(root, "ls-files", "--error-unmatch", "--", safe_path(path))
-            if tracked.strip() != path:
+            _, tracked, _ = await git(root, "ls-files", "-z", "--error-unmatch", "--", safe_path(path))
+            if tracked != path + "\0":
                 raise ValueError("review requested unregistered source")
             related.append(read(root, path))
     if not pages:
@@ -163,8 +163,8 @@ async def review_all(provider, candidate, policy, root, attempt, on_identity):
                 raise ValueError("bounded snapshot read budget exhausted; no verdict accepted")
             for request in result["requested_reads"]:
                 path = safe_path(request["path"])
-                _, tracked, _ = await git(root, "ls-files", "--error-unmatch", "--", path)
-                if tracked.strip() != path:
+                _, tracked, _ = await git(root, "ls-files", "-z", "--error-unmatch", "--", path)
+                if tracked != path + "\0":
                     raise ValueError("review requested unregistered source")
                 reads.append(read(root, path, request["start"], request["end"]))
             if len(canonical(reads).encode()) > 512 * 1024:
