@@ -198,6 +198,8 @@ def test_pending_transfer_rejects_destination_start_race(client, git_repo, monke
     target = task(client, git_repo, depends_on=[source])
     assert m.get(target)['status'] == 'waiting_dependencies'
     client.portal.call(m.scheduler.stop)
+    m.detach()
+    monkeypatch.setattr(m, '_dispatch', lambda _: False)
     pending_before = m.get(target)['pending_turn']
     uploaded = upload(client, b'not silently delivered')
 
