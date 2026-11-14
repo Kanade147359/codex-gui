@@ -1,0 +1,72 @@
+{
+  "release": "GUI-RELEASE-01 Artifact continuation",
+  "date": "2026-11-14",
+  "previous_remote_main": "0c62fe8dfb8446ad5f1075570eabe83f7a291b85",
+  "source": {
+    "task": "070d92b5",
+    "branch": "codex-gui/070d92b5-file-01-codex-gui",
+    "sha": "6e214ea5945bad6591561ebe042b703ff6f9fb18",
+    "parent": "c70cb894428484423590c045ed08da7e0ec804c6",
+    "confirmed_by": ["Original task final assistant report via existing read-only log API", "git show commit/parent/tree", "21 recorded code hashes match Git objects in independent review"],
+    "excluded": "The source task's two untracked desktop/mobile screenshots remain untouched and are not imported.",
+    "dependencies": "Source parent is already in current main. No Runtime separation or self-update dependency. Previous GC/review release remains present and is not re-merged.",
+    "trial_merge": "aaf008565c45630adad0d2509270dfc59d0db9dd",
+    "product_fix_sha": "8a83be12b850b63a3431978dad713199a43a4e70",
+    "tested_code_sha": "43101722153fd207b0b04ab6424d4a303374fab4"
+  },
+  "integration_fix": {
+    "problem": "A destination shown as waiting can start before its input association request. The old response could report success without adding the input to its running instruction.",
+    "resolution": "The waiting-destination UI sends pending_only=true; the existing atomic pending-turn update must succeed or return 409. Default input association remains compatible.",
+    "regressions": ["Destination starts before request", "Destination starts inside the pending update", "No silent pending/history/ownership mutation on rejection"],
+    "independent_review": "No blocking concern after the fix."
+  },
+  "decisions": {
+    "MAIN_MERGED": "PASS on published main; exact final remote ref and source ancestry are verified in the task completion outcome.",
+    "DEPLOYMENT_READY": "BLOCKED",
+    "DEPLOYED": "NOT_APPLIED",
+    "ARTIFACT_E2E": "PASS_ISOLATED_REAL_SUBSCRIPTION_MODEL",
+    "reservation": "NONE: no apply reservation API exists in the deployed service."
+  },
+  "validation": {
+    "focused_source_regressions": {"passed": 253, "provider": "fake Codex, real SQLite/Git/HTTP"},
+    "artifact_final_regressions": {"passed": 18, "coverage": "CAS, input ownership, source mutation/deletion, restart, dependencies, quota, race rejection and nonempty backup restoration"},
+    "browser": {"passed": 15, "skipped": 2, "coverage": "Real Chromium with fake Codex: direct A-to-new-B and existing-B transfer without download/re-upload, image attachments, scheduled instructions, dependencies, Storage, mobile and desktop"},
+    "real_subscription": {"passed": 1, "seconds": 40.83, "provider": "Installed Codex 0.159.2, ChatGPT login, subscription-only, workspace-write sandbox", "coverage": "A-to-B dependency transfer; exact SHA-256; A file mutation and worktree deletion; shutdown/recreate manager and app-server plus reopen SQLite; B reads immutable input again in the original thread", "isolation": "Temporary DB, repositories/worktrees and CODEX_HOME. Copied auth removed by fixture finalizer. No production task/thread used; no API-billing fallback."},
+    "real_browser_subscription": "NOT_RERUN: the two real-model browser tests remain opt-in. Current browser transfer evidence uses fake Codex, independently of the real-model lifecycle check.",
+    "full_suite": {"sha": "43101722153fd207b0b04ab6424d4a303374fab4", "passed": 1103, "skipped": 41, "failed": 0, "errors": 0, "seconds": 193.41, "environment": "Existing Python 3.10 venv, temporary DBs/repos/CODEX_HOME and localhost fixtures. Outer execution sandbox omitted for installed CLI socket compatibility; child Codex sandbox remains configured. Real subscription tests stay opt-in and ran separately.", "prior_cli_failures": "All three Context Efficiency cases that failed in the earlier outer sandbox run pass in this execution environment; no assertion was weakened."},
+    "new_fixture_setup": "An initial new restore fixture lacked its descriptor reader. A subsequent broad run exposed an unintended second fake dispatcher in the new race fixture; stop/detach fixture dispatch while injecting the two controlled races. Both cases then passed in five independent repeats (10/10). Original assertions remain intact. Earlier diagnostics are retained locally.",
+    "static": ["git diff --check", "node --check static/files.js", "release JSON parsing"],
+    "not_verified": ["Physical smartphone", "Safari/Firefox", "Windows native server", "Production post-switch A-to-B", "Automatic update failure recovery"]
+  },
+  "backup_and_restore": {
+    "production_snapshot": "Read-only SQLite online backup includes committed WAL. Copy only immutable attachment/CAS files registered in that DB snapshot, verify sizes/hashes and retain the manifest privately.",
+    "result": "PASS: integrity_check, repeatable new migrations, unchanged original table rows, SQLite-aware restore of the pre-migration database, and old code opening the restored copy. No scheduler is started against copied production task rows.",
+    "scope_limit": "Current production has zero registered attachments and no Artifact tables. This does not claim a nonempty production CAS restore, nor a full backup of external Codex sessions, source worktrees or unregistered files.",
+    "nonempty_fixture": "PASS: real SQLite backup plus CAS/input/image copy; source worktree removed; reopen twice; preserve target thread, scheduled dependencies, message/input IDs, image bytes; transfer restored CAS into a new consumer input.",
+    "private_evidence": ".release-validation/private/backup-restore-result.json and its private manifest (ignored by Git, directory 0700, files 0600)",
+    "freshness": "The online snapshot is point-in-time, not a reservation or final cutover backup. A fresh verified snapshot is required after intake is quiescent and active work has drained. Never restore it over active schedulers."
+  },
+  "running_service": {
+    "observed": "One uvicorn combined service launched from the preserved main checkout, parent zsh, localhost:8765; no reload flag.",
+    "checkout_sha": "c70cb894428484423590c045ed08da7e0ec804c6",
+    "loaded_sha": "UNVERIFIED: no build-identity endpoint/manifest; process origin and current disk files do not prove the in-memory Python revision. No code injection or debugger attachment attempted.",
+    "launch": ".venv/bin/python -m uvicorn --factory app.main:create_app --host 127.0.0.1 --port 8765",
+    "configuration": "Observed process uses default CODEX_GUI_HOME/backend/host/port settings. Private evidence retains the exact process identity and allowlisted configuration, without credentials.",
+    "cutover_blockers": ["This release task and other turns remain active", "Existing shutdown interrupts running turns", "No atomic intake drain/apply reservation or safe hot-switch path", "Loaded revision cannot be positively identified through current read-only interfaces"],
+    "unchanged": "No live checkout/index, production DB, attachment/CAS, process, supervisor or configuration changed for deployment. Creating the separately requested GUI update task is a distinct authorized task-history operation."
+  },
+  "self_update_handoff": {
+    "status": "NOT_FOUND_NOT_IMPLEMENTED_BY_THIS_RELEASE",
+    "searched": ["Fetched local/remote refs and registered GUI worktrees", "All reachable commit subjects for self-update/safe restart/upgrade terms", "Reachable object paths for updater/release/restart scripts", "Original GUI task names and relevant completion reports", "Existing GitHub PR inventory", "Deployed OpenAPI paths", "Current run.sh, app startup/shutdown and observed process parent"],
+    "remaining_candidates": ["External launch/supervisor scripts or operator-managed deployment files outside repository history", "Uncommitted/unregistered or removed task artifacts not represented by the inspected refs", "CGUI-12 offline handover can inform a separate design, but is not self-update", "Corriedale preview lifecycle and build GC are different features"],
+    "separate_task": {"id": "d0c41e99", "name": "GUI-UPDATE-01", "base_sha": "8a83be12b850b63a3431978dad713199a43a4e70", "scope": "Locate existing implementation; if absent implement/verify a safe update mechanism in its own worktree. No main merge/push, production DB writes, deployment or process restart authorized."},
+    "runtime": {"sha": "7168a93098b6c27eebf7e0cd92d5798681079ad9", "decision": "EXCLUDED: independent initial migration and launch contract; not required for Artifact use."}
+  },
+  "remaining_apply_operations": [
+    "Use the separate update task to establish an observable loaded revision and a supported drain/cutover mechanism, or explicitly authorize an operator maintenance handover. Do not infer permission to interrupt active tasks.",
+    "Quiesce new intake and scheduled/queued dispatch through the qualified mechanism; wait for every active turn including this release task to finish. Reconcile thread IDs, reservations, dependencies and worktrees before proceeding.",
+    "Take a fresh consistent DB plus registered attachment/Artifact backup and verify its isolated restoration. Preserve old code, launcher and configuration; retain the newer DB separately if rollback is later needed.",
+    "Only after those conditions hold, stop the old combined service normally and start a fixed immutable new release checkout with the recorded settings. Never edit the running main checkout or start two schedulers against one DB.",
+    "Verify the new loaded SHA, all retained task/thread/reservation/reference identities, and a fresh non-sensitive A-to-B transfer. If cutover fails, keep schedulers offline and restore the matching code plus verified DB/files together; do not assume code-only rollback after migration."
+  ]
+}

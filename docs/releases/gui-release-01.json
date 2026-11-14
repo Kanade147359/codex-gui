@@ -1,5 +1,6 @@
 {
   "release": "GUI-RELEASE-01",
+  "continuation": "gui-release-01-artifact.json",
   "date": "2026-11-14",
   "base_main": "c70cb894428484423590c045ed08da7e0ec804c6",
   "operational_acceptance": "NOT_COMPLETE",
