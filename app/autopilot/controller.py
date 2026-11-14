@@ -106,6 +106,10 @@ class Autopilot:
             isolation="managed validators only; agent-issued shell builds are not OS concurrency limited",
         )
 
+    def require_new_start(self):
+        if not self.manager.settings.autopilot_new_starts:
+            raise ValueError("Autopilot new starts are frozen; use HIRO. Existing workflows and history are preserved.")
+
     async def register(self, raw, expected_digest):
         preview = await self.dry_run(raw)
         if preview["input_digest"] != expected_digest:
@@ -118,6 +122,8 @@ class Autopilot:
         w = self.ledger.get("workflows", workflow_id)
         if not w:
             raise ValueError("workflow not found")
+        if action == "start":
+            self.require_new_start()
         if action == "reconcile":
             self.reconcile(workflow_id)
             return self.ledger.view(workflow_id)
@@ -247,6 +253,8 @@ class Autopilot:
         with nullcontext(_connection) if _connection is not None else self.ledger.transaction() as c:
             current = unpack(c.execute("SELECT * FROM ap_nodes WHERE id=?", (node["id"],)).fetchone())
             run = c.execute("SELECT state,generation FROM ap_workflows WHERE id=?", (workflow["id"],)).fetchone()
+            if run["state"] == "completed" and not self.manager.settings.autopilot_new_starts:
+                raise TaskError("Completed Autopilot workflows cannot restart; use HIRO", 409, "autopilot_frozen")
             if (
                 run["state"] not in ("running", "paused", "completed")
                 or run["generation"] != workflow["generation"]

@@ -166,6 +166,8 @@ async def register(request: Request, body: dict):
     try:
         if body.get("opt_in") is not True:
             raise ValueError("explicit workflow opt-in is required")
+        if body.get("start") is True:
+            controller(request).require_new_start()
         result = await controller(request).register(execution_manifest(body), body.get("expected_digest"))
         if body.get("start") is True:
             return await controller(request).control(result["id"], "start")

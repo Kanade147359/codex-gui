@@ -68,6 +68,8 @@ class FixtureProvider(ClaudeProvider):
 
 
 def install(manager, claude=None, codex=None):
+    # Legacy Autopilot lifecycle fixtures explicitly opt in; production defaults remain frozen.
+    manager.settings.autopilot_new_starts = True
     manager.runner = ImplementationRunner()
     manager.autopilot = Autopilot(
         manager, providers=dict(claude=claude or FixtureProvider("claude"), codex=codex or FixtureProvider("codex"))

@@ -2,6 +2,23 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def local_hiro_url(value: str) -> str:
+    """Navigation only: no public host, credential, or protocol-relative redirect."""
+    if not value:
+        return ""
+    if value != value.strip() or any(ord(c) < 33 for c in value) or "\\" in value:
+        raise ValueError("CODEX_GUI_HIRO_URL must be a local HTTP(S) URL or absolute local path")
+    parsed = urlsplit(value)
+    if value.startswith("/") and not value.startswith("//") and not parsed.netloc:
+        return value
+    if (parsed.scheme not in ("http", "https") or parsed.hostname not in ("localhost", "127.0.0.1", "::1")
+            or parsed.username is not None or parsed.password is not None):
+        raise ValueError("CODEX_GUI_HIRO_URL must be a credential-free loopback HTTP(S) URL")
+    parsed.port  # Reject malformed ports at configuration time.
+    return value
 
 
 @dataclass
@@ -32,6 +49,13 @@ class Settings:
     retry_backoff_seconds: tuple = (10.0, 30.0, 60.0)
     # How often the scheduler looks at waiting / queued / retry_wait tasks (it also wakes up on every status change).
     scheduler_interval_seconds: float = 2.0
+    # Migration freeze: existing workflows keep their scheduler and recovery behavior.
+    autopilot_new_starts: bool = False
+    hiro_url: str = ""
+
+    def __post_init__(self):
+        self.hiro_url = local_hiro_url(self.hiro_url)
+
     # Autopilot caps are shared across opt-in workflows; existing ordinary tasks retain their settings.
     autopilot_implementation_slots: int = 3
     autopilot_review_slots: int = 1
@@ -52,6 +76,8 @@ class Settings:
             default_max_retries=int(os.environ.get("CODEX_GUI_MAX_RETRIES", "3")),
             retry_backoff_seconds=tuple(float(x) for x in os.environ.get("CODEX_GUI_RETRY_BACKOFF", "10,30,60").split(",") if x.strip()),
             scheduler_interval_seconds=float(os.environ.get("CODEX_GUI_SCHEDULER_INTERVAL", "2")),
+            autopilot_new_starts=os.environ.get("CODEX_GUI_AUTOPILOT_NEW_STARTS", "0") == "1",
+            hiro_url=os.environ.get("CODEX_GUI_HIRO_URL", ""),
             autopilot_implementation_slots=int(os.environ.get("CODEX_GUI_AUTOPILOT_IMPLEMENTATION_SLOTS","3")),
             autopilot_review_slots=int(os.environ.get("CODEX_GUI_AUTOPILOT_REVIEW_SLOTS","1")),
             autopilot_validator_slots=int(os.environ.get("CODEX_GUI_AUTOPILOT_VALIDATOR_SLOTS","1")),

@@ -21,7 +21,7 @@
     el('ap-preview-summary').replaceChildren(text('h3', `${result.plan.name} · ${nodes.length} 子タスク`),
       text('p', `メンター: ${result.plan.policy.mentor_enabled === false ? '無効' : '有効'} · 最大 ${result.plan.policy.mentor_max_rounds ?? 2} 回`), ui.settingsTable(settings));
     for (const warning of result.warnings || []) el('ap-preview-summary').append(text('p', warning));
-    el('ap-start').disabled = false; el('ap-opt-in').checked = false;
+    el('ap-start').disabled = el('ap-start').dataset.newStarts !== 'true'; el('ap-opt-in').checked = false;
   }
   function changeExecutionDefaults() {
     invalidate();

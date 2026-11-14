@@ -104,6 +104,8 @@ def add_node(ap, identity, body):
     with ap.ledger.transaction() as connection:
         workflow, replay = _current(connection, identity, body, key, fingerprint)
         if not replay:
+            if workflow["state"] == "completed":
+                ap.require_new_start()
             # A publication plan has a pinned final target; extending it requires a new reviewed plan.
             if workflow["plan"]["permissions"].get("publish_main"):
                 raise ValueError("a main publication plan requires a new reviewed final integration plan")

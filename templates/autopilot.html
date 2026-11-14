@@ -4,6 +4,10 @@
 {% block content %}
 <section class="panel ap-panel">
   <h1>Autopilot</h1>
+  {% if not request.app.state.settings.autopilot_new_starts %}
+  <p role="status">新規起動は凍結されています。新しいマルチエージェント実行にはHIROを使用してください。既存workflowと履歴は維持されます。</p>
+  {% if request.app.state.settings.hiro_url %}<a class="button" href="{{ request.app.state.settings.hiro_url }}">HIROを開く</a>{% endif %}
+  {% endif %}
   <p>大タスクを子タスクへ分け、実装・検証・独立レビューの進捗をまとめて管理します。</p>
   <fieldset id="ap-execution-settings"><legend>実行モデル・メンター</legend>
     <div class="ap-form-grid">
@@ -36,7 +40,7 @@
   <label for="ap-manifest">Workflow manifest（JSON / YAML）</label>
   <textarea id="ap-manifest" rows="15" spellcheck="false" placeholder="version: 1"></textarea>
   <p><label class="ap-check"><input id="ap-opt-in" type="checkbox"> このmanifestの編集範囲・検証・予算・開始時権限にopt-inする</label></p>
-  <button id="ap-preview">Dry-run</button> <button id="ap-start" disabled>Start</button>
+  <button id="ap-preview">Dry-run</button> <button id="ap-start" data-new-starts="{{ 'true' if request.app.state.settings.autopilot_new_starts else 'false' }}" disabled>Start</button>
   <p id="ap-message" role="status"></p><div id="ap-preview-summary"></div><details><summary>Dry-runの詳細データ</summary><pre id="ap-preview-result"></pre></details>
 </section>
 <section class="panel ap-panel"><h2>Workflows</h2><div id="ap-workflows"></div></section>
