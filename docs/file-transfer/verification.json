@@ -1,0 +1,157 @@
+{
+  "status": "SUCCESS",
+  "verified_at": "2026-11-14T02:22:40.209081+00:00",
+  "base_commit": "c70cb894428484423590c045ed08da7e0ec804c6",
+  "branch": "codex-gui/070d92b5-file-01-codex-gui",
+  "uncommitted_changes": true,
+  "codex_cli": "0.159.2",
+  "platform": "Linux; Chromium 159; Python 3.10",
+  "validation": [
+    {
+      "name": "focused_files_security",
+      "command": "pytest tests/test_files.py tests/test_artifacts.py -q",
+      "result": "39 passed, 1 warning in 7.81s",
+      "live_subscription_model": false
+    },
+    {
+      "name": "state_transition_regression",
+      "command": "pytest tests/test_files.py tests/test_artifacts.py tests/test_attachments.py tests/test_scheduled_instructions.py tests/test_dependencies.py tests/test_recovery.py tests/test_database.py -q",
+      "result": "250 passed, 1 warning in 38.21s",
+      "live_subscription_model": false
+    },
+    {
+      "name": "browser_mock",
+      "command": "CODEX_GUI_BROWSER=1 pytest tests/test_ui_files_browser.py tests/test_ui_attachments_browser.py tests/test_ui_mobile_browser.py -q",
+      "result": "14 passed, 1 warning in 90.21s (0:01:30)",
+      "live_subscription_model": false
+    },
+    {
+      "name": "installed_cli_mock_model",
+      "command": "pytest tests/test_files_codex.py -q",
+      "result": "1 passed in 1.55s",
+      "live_subscription_model": false
+    },
+    {
+      "name": "real_model_dependency_resume",
+      "command": "CODEX_GUI_REAL_FILES=1 pytest tests/test_real_files.py -q",
+      "result": "1 passed in 34.05s",
+      "live_subscription_model": true
+    },
+    {
+      "name": "real_model_browser",
+      "command": "CODEX_GUI_BROWSER=1 CODEX_GUI_REAL_FILES_BROWSER=1 pytest tests/test_ui_files_browser.py::test_real_browser_upload_model_read_transfer_and_download -q",
+      "result": "2 passed, 1 warning in 55.87s",
+      "live_subscription_model": true
+    },
+    {
+      "name": "scheduled_final",
+      "command": "pytest tests/test_ui_scheduled.py tests/test_scheduled_instructions.py -q",
+      "result": "46 passed, 1 warning in 7.70s",
+      "live_subscription_model": false
+    },
+    {
+      "name": "full_regression",
+      "command": "pytest -q",
+      "result": "1041 passed, 40 skipped, 2 warnings in 189.17s (0:03:09)",
+      "live_subscription_model": false
+    },
+    {
+      "name": "final_attachment_regression",
+      "command": "pytest tests/test_files.py tests/test_artifacts.py tests/test_attachments.py tests/test_scheduled_instructions.py -q",
+      "result": "112 passed, 1 warning in 16.88s",
+      "live_subscription_model": false
+    },
+    {
+      "name": "final_browser",
+      "command": "CODEX_GUI_BROWSER=1 pytest tests/test_ui_files_browser.py::test_upload_download_preview_zip_artifact_transfer_and_resume -q",
+      "result": "2 passed, 1 warning in 11.93s",
+      "live_subscription_model": false
+    }
+  ],
+  "real_browser_sha256_proof": [
+    {
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "expected_sha256": "6bf6c5f948a36e821d8da416ce8aec3a6d2e497d3d48b2f344d8cf365cefc286",
+      "outputs": [
+        {
+          "status": "completed",
+          "task_outcome": "success",
+          "sha256": "6bf6c5f948a36e821d8da416ce8aec3a6d2e497d3d48b2f344d8cf365cefc286"
+        },
+        {
+          "status": "completed",
+          "task_outcome": "success",
+          "sha256": "6bf6c5f948a36e821d8da416ce8aec3a6d2e497d3d48b2f344d8cf365cefc286"
+        }
+      ]
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "expected_sha256": "f9b8d6223017f1aeadc5d5ac5eeb4a494f2afaa8c221e3ff2f06d79ed6b56920",
+      "outputs": [
+        {
+          "status": "completed",
+          "task_outcome": "success",
+          "sha256": "f9b8d6223017f1aeadc5d5ac5eeb4a494f2afaa8c221e3ff2f06d79ed6b56920"
+        },
+        {
+          "status": "completed",
+          "task_outcome": "success",
+          "sha256": "f9b8d6223017f1aeadc5d5ac5eeb4a494f2afaa8c221e3ff2f06d79ed6b56920"
+        }
+      ]
+    }
+  ],
+  "validated_code_sha256": {
+    "app/attachments.py": "a5600e40c9f1444848216c051ec76a7c81b0bdf304c63538ce9b8a19ab5cd5e7",
+    "app/config.py": "85a4b9c4ea5f93f1fb2559b810e7308001442c04c91a585dfeaa7c3c5bf5deb2",
+    "app/database.py": "61004788b5acaedcb18f902989f18a69e3ec80daa41df2fd2fe5ddb9c2866438",
+    "app/main.py": "35a92ecd551148f3b5a23cb859204aa4292bd5f5f398e0fe5299474e3b92dc54",
+    "app/routes.py": "f195f3c22bcab91472c261d9d2db46ebcf98e30cbdc073a90d9002229241b729",
+    "app/task_manager.py": "fe4d12bcbe38016690fc0fed6fcfa88b4ab94cdd18010e18040ca6e54433c9f5",
+    "static/app.js": "c44ee3dacc3f48bcab0548ec1cc2357adf17def16ed6ffa602063a61eb093d66",
+    "static/attachments.js": "00f00e80e841296543380e6243318e9a11088f8adc152cc3626c91b4110593a8",
+    "static/style.css": "73facb414a0eee34c3773aedeadeb0e0e95912b308e25ea98bb64369b65edf97",
+    "templates/base.html": "4ee8da25ee2b6727484056a7a52f5dfb3c02176d1d8ace24f79cd8af94889bd2",
+    "templates/task.html": "bb81d4c0aad37715b4533100138aa1feaaac5c5d07c0b4eaf5178b64d7ad7af4",
+    "app/artifacts.py": "effb1518c163a8e7d970137930aa332dd99e925a286cd367f98ea2fa8735a65d",
+    "app/file_routes.py": "8bc5f0df6fd8dbb35a30aa2b20efe0b788d787b8f0449f86182ccad0ebba412b",
+    "app/task_files.py": "1eb5bf43e6f0c76da8485c0ebf1a7feb84e3fa0d2cf52096675f15c87bf8e7f4",
+    "static/files.js": "b6c722a1915f21c9ba2eeb1014551e8a3e30a9da239d5a568de3e23ec65e8077",
+    "tests/fake_files_codex.py": "f9472ce45ad3207855db53fe3fff59caa511f7be8095a72476bc9d8b708046a1",
+    "tests/test_artifacts.py": "32384554aa3560242b18c31aaa034539ecefa4dab7e787e4806e127352d92065",
+    "tests/test_files.py": "f7c16bfc65cef462ebdc727a1c628cbe3e45d97b63d196435ea04950b5aa0deb",
+    "tests/test_files_codex.py": "1c29d83f41f238439a6ba05cc5bac205906688f785f4cc2349300225de72f71d",
+    "tests/test_real_files.py": "0b183e7f967fc8c94811547b88e2a959ed9d9f1a6c8057337f180c54ec49917b",
+    "tests/test_ui_files_browser.py": "7c3014d061e90dedc6e6fc0d30203e3f4d172c6f46cd1c63c3947afcff15d71a"
+  },
+  "security": [
+    "path traversal and cross-task ID/path rejection",
+    "symlink/hardlink/FIFO rejection",
+    "pinned descriptors across path replacement",
+    "source mutation detected during snapshot",
+    "per-file/message/store/ZIP limits",
+    "interrupted upload cleanup",
+    "atomic ownership race and lost-worktree cleanup",
+    "atomic multi-artifact input registration",
+    "restart/dependency/duplicate-execution regression",
+    "UUID target/partial-name collisions preserve pre-existing files"
+  ],
+  "unverified": [
+    "physical mobile devices",
+    "Safari and Firefox",
+    "native Windows server"
+  ],
+  "environment_note": "The outer development sandbox masked /tmp/codex-daemon-1000 as mode 000. Installed-CLI tests were rerun outside that outer sandbox; every child Codex retained workspace-write sandbox. No product sandbox bypass/configuration change was introduced.",
+  "production_gui_restarted": false,
+  "production_database_modified": false,
+  "merged_to_main": false,
+  "pushed": false,
+  "blockers": []
+}

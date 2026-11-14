@@ -37,12 +37,20 @@ class Settings:
     autopilot_review_slots: int = 1
     autopilot_validator_slots: int = 1
     autopilot_integration_slots: int = 1
+    file_max_bytes: int = 100 * 1024 * 1024
+    file_store_max_bytes: int = 2 * 1024 * 1024 * 1024
+    file_store_max_count: int = 1000
+    file_message_max_bytes: int = 400 * 1024 * 1024
 
     @classmethod
     def from_env(cls) -> "Settings":
         home = Path(os.environ.get("CODEX_GUI_HOME", "~/.local/share/codex-gui")).expanduser()
         return cls(
             home=home,
+            file_max_bytes=int(os.environ.get("CODEX_GUI_FILE_MAX_BYTES", str(100 * 1024 * 1024))),
+            file_store_max_bytes=int(os.environ.get("CODEX_GUI_FILE_STORE_MAX_BYTES", str(2 * 1024 * 1024 * 1024))),
+            file_store_max_count=int(os.environ.get("CODEX_GUI_FILE_STORE_MAX_COUNT", "1000")),
+            file_message_max_bytes=int(os.environ.get("CODEX_GUI_FILE_MESSAGE_MAX_BYTES", str(400 * 1024 * 1024))),
             codex_bin=os.environ.get("CODEX_BIN", "codex"),
             max_concurrent=int(os.environ.get("CODEX_GUI_MAX_CONCURRENT", "0")),
             backend=os.environ.get("CODEX_GUI_BACKEND", "app-server"),

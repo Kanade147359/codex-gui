@@ -131,7 +131,11 @@ class TaskManager:
                  app_server: Optional[AppServerClient] = None):
         self.settings = settings
         self.db = db
-        self.attachments = AttachmentStore(settings.home / "attachments", db)
+        self.attachments = AttachmentStore(settings.home / "attachments", db, settings)
+        from .task_files import TaskFiles
+        from .artifacts import ArtifactStore
+        self.files = TaskFiles(self)
+        self.artifacts = ArtifactStore(self)
         self.runner = runner or CodexRunner(settings.codex_bin, settings.subscription_only)
         self.runner.instructions = load_instructions(settings.instructions_path)
         self._app_server = app_server
@@ -279,17 +283,31 @@ class TaskManager:
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
                           allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
-                          completion_contract: Optional[dict] = None, attachment_ids=(),
+                          completion_contract: Optional[dict] = None, attachment_ids=(), artifact_refs=(),
                           _defer_dispatch: bool = False, _task_id: Optional[str] = None, _branch: Optional[str] = None) -> dict:
         try:
             rules = completion.contract(completion_contract)
         except ValueError as e:
             raise TaskError(str(e)) from e
         prompt = prompt.strip()
-        if not prompt and not attachment_ids:
+        if not prompt and not attachment_ids and not artifact_refs:
             raise TaskError("prompt is required")
+        from .task_files import parts
+        if len(artifact_refs) > 16:
+            raise TaskError("Artifact参照は16件までです。")
+        refs = []
+        for ref in artifact_refs:
+            if not isinstance(ref, dict) or not isinstance(ref.get("source_task_id"), str):
+                raise TaskError("Artifact参照が不正です。")
+            parts(ref.get("path", ""))
+            self.get(ref.get("source_task_id", ""))
+            if ref in refs:
+                raise TaskError("Artifact参照が重複しています。")
+            refs.append(ref)
         await self._check_images(attachment_ids)
-        name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Image task")
+        if len(refs) + sum(self.attachments.get(aid)["kind"] == "file" for aid in attachment_ids) > 16:
+            raise TaskError("入力ファイルとArtifact参照は合計16件までです。")
+        name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Attachment task")
         model = model.strip()
         if model.startswith("-"):
             raise TaskError("invalid model name")
@@ -320,6 +338,7 @@ class TaskManager:
         if dependency_policy not in DEPENDENCY_POLICIES:
             raise TaskError(f"invalid dependency policy: {dependency_policy} (allowed: {', '.join(DEPENDENCY_POLICIES)})")
         deps = self._check_dependency_ids(depends_on)
+        deps = list(dict.fromkeys([*deps, *(r["source_task_id"] for r in refs)]))
 
         repo_input = Path(repository.strip()).expanduser()
         if not repository.strip() or not repo_input.is_dir():
@@ -350,6 +369,7 @@ class TaskManager:
 
         try:
             self.db.create_task(
+                artifact_refs=refs,
                 depends_on=deps, message=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).message(),
                 id=task_id, name=name, repository=repo, worktree=str(wt), branch=branch,
                 base_ref=base_ref, base_sha=base_sha, prompt=prompt, model=model,
@@ -366,6 +386,16 @@ class TaskManager:
             )
         except DependencyError as e:
             raise TaskError(str(e), 400, e.code) from e
+        except AttachmentError as e:
+            # Another task can win ownership while Git creates this task's worktree.
+            # Remove only this just-created, unstarted worktree and its branch.
+            if not deps:
+                try:
+                    await git.remove_worktree(repo, wt)
+                    await git.delete_branch(repo, branch)
+                except git.GitError:
+                    logger.exception("could not remove unstarted worktree after attachment conflict: %s", wt)
+            raise TaskError(str(e), 400, "invalid_attachment") from e
         self.db.touch_repo(repo, now_iso())
         if ctx_fields["tool_profile"] != "full":
             self._verify_in_background(task_id)
@@ -448,16 +478,18 @@ class TaskManager:
             raise TaskError("task is blocked by a prerequisite; use Run Anyway or fix the dependency", 409, "blocked")
         self._require_worktree(task)
 
-    async def _check_images(self, ids, resume=False) -> None:
+    async def _check_images(self, ids, resume=False, task_id=None) -> None:
         if not ids:
             return
         try:
-            await asyncio.to_thread(self.attachments.resolve, ids)
-            await self.runner.check_image_support(self.settings.backend, resume)
+            await asyncio.to_thread(self.attachments.resolve, ids, task_id)
+            if self.attachments.paths(ids):
+                await self.runner.check_image_support(self.settings.backend, resume)
         except AttachmentError as e:
             raise TaskError(str(e), 400, "invalid_attachment") from e
 
     def _image_input(self, prompt: str, ids) -> list[dict]:
+        prompt = self.attachments.file_prompt(prompt, ids)
         return ([{"type": "text", "text": prompt}] if prompt else []) + [
             {"type": "localImage", "path": path} for path in self.attachments.paths(ids)]
 
@@ -473,7 +505,7 @@ class TaskManager:
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("instruction is required")
-        await self._check_images(attachment_ids, resume=True)
+        await self._check_images(attachment_ids, resume=True, task_id=task_id)
         tier = self._turn_tier(service_tier)
         task = self.get(task_id)
         if reasoning_effort is not None and reasoning_effort != task["reasoning_effort"]:
@@ -514,6 +546,7 @@ class TaskManager:
         if not info or not info.get("turn") or task["status"] != "running":
             raise TaskError("the turn has not started yet; try again in a moment", 409, "active")
         try:
+            self.db.claim_files(task["id"], attachment_ids)
             await (await self.client()).request(
                 "turn/steer", {"threadId": info["thread"], "expectedTurnId": info["turn"],
                                "input": self._image_input(prompt, attachment_ids)}, timeout=30)
@@ -550,7 +583,7 @@ class TaskManager:
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("prompt is required")
-        await self._check_images(attachment_ids)
+        await self._check_images(attachment_ids, task_id=task_id)
         task = self.get(task_id)
         self._require_idle_with_worktree(task)
         return self._begin_turn(task, _Turn(prompt, trigger="new_session", attachment_ids=list(attachment_ids)), stop_reason="", long_context_ack="")
@@ -705,8 +738,12 @@ class TaskManager:
         """Before Codex is started: the worktree must exist (a waiting task gets it now), and before a retry its state is
         recorded. Nothing is reset, cleaned or checked out. False if the run cannot go on (the task is settled already)."""
         try:
-            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread))
-        except TaskError as e:
+            from .task_files import FileError
+            requests = self.db.artifact_requests(task_id)
+            if turn.trigger == "initial" or any(not r["attachment_id"] for r in requests):
+                await asyncio.to_thread(self.artifacts.prepare_requests, task_id, turn)
+            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread), task_id=task_id)
+        except (TaskError, FileError, AttachmentError) as e:
             self._settle(task_id, log, turn, "failed", failure=Failure("invalid_attachment", recovery.NON_RETRYABLE, str(e)))
             return False
         task = self.get(task_id)
@@ -1207,7 +1244,7 @@ class TaskManager:
 
         async def feed_prompt():
             try:
-                prompt = turn.prompt + "\n\n" + completion.RESULT_INSTRUCTION
+                prompt = self.attachments.file_prompt(turn.prompt, turn.attachment_ids) + "\n\n" + completion.RESULT_INSTRUCTION
                 rules = json.loads(task["completion_contract"] or "{}")
                 if rules:
                     prompt += "\nCompletion contract: " + json.dumps(rules)
@@ -1737,7 +1774,7 @@ class TaskManager:
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("instruction is required", 400, "empty")
-        await self._check_images(attachment_ids, resume=True)
+        await self._check_images(attachment_ids, resume=True, task_id=task_id)
         task = self.get(task_id)
         tier = self._turn_tier(service_tier) or "default"
         deps = self._check_dependency_ids(depends_on)
@@ -2124,6 +2161,7 @@ class TaskManager:
         task = self._present(dict(task), latest, scheduled=self.db.scheduled_counts())
         task["messages"] = [row | {"attachments": self.attachments.views(row["attachment_ids"])}
                             for row in self.db.list_messages(task["id"])]
+        task["artifact_requests"] = self.db.artifact_requests(task["id"])
         task["scheduled_instructions"] = [self._scheduled_view(r) for r in self.db.list_scheduled(task["id"])]
         task["dependents"] = [{"id": d["id"], "name": d["name"], "status": d["status"]}
                               for d in map(self.db.get_task, self.db.dependents_of(task["id"])) if d]
