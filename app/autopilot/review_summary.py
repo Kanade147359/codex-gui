@@ -114,6 +114,8 @@ def summarize(view):
         if state == "blocked_decision" and gates:
             reasons.append("必要な人の判断: " + "、".join(_text(gate) for gate in gates))
         action = ACTIONS.get(state, "詳細と根拠を確認し、次の操作を判断してください")
+        if "outside approved edit ownership" in node.get("reason", ""):
+            action = "承認済み担当範囲・タスクの固定比較基点・候補branchの差分を確認してください"
         name = _text(node["name"], 100)
         detail = "；".join(reasons)
         prose.append(f"{name}では、{detail}。{action}。")

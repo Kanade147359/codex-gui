@@ -74,9 +74,11 @@ def validate(value, candidate):
     if report["requirements_digest"] != bundle["digest"]:
         raise ValueError("goal review fixed requirements digest mismatch")
     known = {g["id"] for g in bundle.get("goals", [])}
-    for assessment in report["assessments"].values():
-        if set(assessment["goal_ids"]) - known or not assessment["evidence"].strip():
-            raise ValueError("goal review needs source-backed IDs and evidence")
+    for axis, assessment in report["assessments"].items():
+        unknown = sorted(set(assessment["goal_ids"]) - known)
+        if unknown or not assessment["evidence"].strip():
+            raise ValueError(f"goal review needs source-backed IDs and evidence: {axis}; "
+                             f"unknown_goal_ids={unknown}; empty_evidence={not assessment['evidence'].strip()}")
     if value["verdict"] == "APPROVE" and any(a["status"] != "ALIGNED" for a in report["assessments"].values()):
         raise ValueError("goal violation or unknown evidence cannot approve")
     if value["verdict"] == "APPROVE" and not known <= {g for a in report["assessments"].values() for g in a["goal_ids"]}:
@@ -110,9 +112,15 @@ Evaluate task_correctness, goal_alignment, architectural_consistency and evidenc
 A task may implement only part of a workflow goal: incompleteness of that overall goal alone is not a violation.
 Reject prohibited assumptions or architectural contradictions even when individual tests pass.
 Use only supplied explicit goal IDs. Free-form COMMON remains binding; do not invent owner-approved goals.
+Assessment goal_ids must come from requirements.goals[].id, not acceptance_ids, finding IDs or validation IDs.
+Describe acceptance IDs in assessment evidence; use task:contract or supplied document/goal references in requirement_refs.
 Each axis needs source-specific evidence and ALIGNED, VIOLATION or UNKNOWN. UNKNOWN cannot APPROVE.
 Classify each blocking cause using IMPLEMENTATION_DEFECT, TASK_ASSUMPTION_FALSE, TASK_CONTRACT_CONFLICT,
 MISSING_PREREQUISITE, ENVIRONMENT_FAILURE or INCONCLUSIVE. Supply reproduction, observed/expected results,
 fixed requirement references, a counterexample and evidence_refs (validation ID or snapshot:path:line).
 An assertion by an implementer is not proof. A test/transport/quota failure alone is not a faulty task premise.
+For an audit/report task, evaluate delivery of the audit against its contract separately from the audited code.
+Preserve the subject's verdict and findings in its artifacts; do not convert them to task blocking findings or
+goal_review.root_causes unless the audit deliverable itself violates its fixed requirements.
+Each root_causes.finding_id must identify an entry in this response's blocking array.
 """
