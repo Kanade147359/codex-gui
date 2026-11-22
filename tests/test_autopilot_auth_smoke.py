@@ -1,4 +1,4 @@
-"""Opt-in CLI auth metadata only. Private staged credentials; NO model/limit/credit operations."""
+"""Opt-in official CLI auth metadata; no credential extraction or model calls."""
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ import tempfile
 
 import pytest
 
-from app.autopilot.providers import IsolatedAppServer
+from app.autopilot.providers import IsolatedAppServer, authenticated_command
 from app.autopilot.runner import sandbox, minimal_env, run_bounded
 
 pytestmark = pytest.mark.skipif(
@@ -27,20 +27,7 @@ def test_claude_isolated_subscription_auth_metadata(tmp_path):
         root = tmp_path / "source"
         root.mkdir()
         with tempfile.TemporaryDirectory(prefix="ap-auth-claude-") as scratch:
-            folder = Path(scratch) / ".claude"
-            folder.mkdir(mode=0o700)
-            staged = folder / ".credentials.json"
-            staged.write_bytes(credential.read_bytes())
-            staged.chmod(0o600)
-            argv = sandbox(root, scratch, network=True, cwd="/scratch") + [
-                "--ro-bind",
-                str(Path(binary).resolve()),
-                "/review-cli",
-                "--ro-bind",
-                str(staged),
-                "/scratch/.claude/.credentials.json",
-                "--",
-                "/review-cli",
+            argv = authenticated_command(binary, "claude", root, scratch) + [
                 "--safe-mode",
                 "--setting-sources",
                 "",
@@ -53,11 +40,9 @@ def test_claude_isolated_subscription_auth_metadata(tmp_path):
             rc, output, timeout = await run_bounded(argv, env=minimal_env(), timeout=20)
             assert rc == 0 and not timeout, "isolated Claude auth metadata unavailable"
             metadata = json.loads(output)
-            assert metadata.get("loggedIn") is True and metadata.get("authMethod") in (
-                "oauth_token",
-                "claude_ai",
-                "claude.ai",
-            ), "subscription OAuth not confirmed"
+            assert metadata.get("loggedIn") is True and metadata.get("authMethod") == "claude.ai"
+            assert metadata.get("apiProvider") == "firstParty"
+            assert metadata.get("subscriptionType") in ("pro", "max")
 
     asyncio.run(scenario())
 
@@ -71,21 +56,8 @@ def test_codex_isolated_chatgpt_account_metadata_and_fresh_threads(tmp_path):
         root = tmp_path / "source"
         root.mkdir()
         with tempfile.TemporaryDirectory(prefix="ap-auth-codex-") as scratch:
-            folder = Path(scratch) / ".codex"
-            folder.mkdir(mode=0o700)
-            staged = folder / "auth.json"
-            staged.write_bytes(credential.read_bytes())
-            staged.chmod(0o600)
-            argv = sandbox(root, scratch, network=True, cwd="/scratch") + [
-                "--ro-bind",
-                str(Path(binary).resolve()),
-                "/review-cli",
-                "--ro-bind",
-                str(staged),
-                "/scratch/.codex/auth.json",
-                "--",
-                "/review-cli",
-                "app-server",
+            argv = authenticated_command(binary, "codex", root, scratch) + [
+                "-c", 'forced_login_method="chatgpt"', "app-server",
             ]
             client = IsolatedAppServer(argv, dict(minimal_env(), CODEX_HOME="/scratch/.codex"))
             try:
