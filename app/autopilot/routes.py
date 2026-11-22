@@ -41,6 +41,18 @@ async def convert_markdown(request: Request, body: dict):
         raise error(e)
 
 
+@router.post("/api/autopilot/issues/preview")
+async def issue_contract_preview(request: Request, body: dict):
+    """Issue-to-contract preflight only: no workflow creation or permission grant."""
+    from app.git_manager import GitError
+    from .issue_contract import build
+
+    try:
+        return await build(controller(request), body)
+    except (ValueError, TypeError, KeyError, GitError) as exc:
+        raise error(exc)
+
+
 @router.post("/api/autopilot/workflows/{identity}/nodes/{name}/decision")
 async def owner_decision(request: Request, identity: str, name: str, body: dict):
     try:
