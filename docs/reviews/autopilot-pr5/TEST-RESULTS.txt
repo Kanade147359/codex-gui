@@ -1,0 +1,43 @@
+Independent reviewer runs; all source SHAs are pinned in RESULTS.json.
+
+full @ d395d232807203813b5052ae0df9ab926690d180: 799 passed, 3 failed, 29 skipped, 0 deselected; 122.546s
+  command: python -m pytest -q
+  log SHA256: 6336dedb28542e9f5064bd5282964c4b1cab81f3ca1d2979da4cd989b8075941
+  tests.test_ctx_e2e::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded
+    assert (1 >= 1 and 0 == 1)
+  tests.test_ctx_e2e::test_real_codex_tool_output_limit_reaches_the_model
+    assert 156 < 156
+  tests.test_ctx_integration::test_tool_output_token_limit_only_lowers_the_cap
+    assert 39 < 39
+
+regression @ d395d232807203813b5052ae0df9ab926690d180: 69 passed, 0 failed, 0 skipped, 0 deselected; 26.621s
+  command: CODEX_GUI_AUTOPILOT_CLI_SMOKE=1 CODEX_GUI_AUTOPILOT_TOOLCHAIN_SMOKE=1 python -m pytest -q tests/test_autopilot.py tests/test_autopilot_api.py tests/test_autopilot_documents.py tests/test_autopilot_cli_smoke.py tests/test_autopilot_toolchains.py
+  log SHA256: f2385182d43903fcf22fb88e1f8bf204d102eab07aca3527172b9b22d8e352bc
+
+baseline @ 12dabe5385f130383b00cd2609dd6bff7360d68f: 0 passed, 3 failed, 0 skipped, 0 deselected; 5.943s
+  command: python -m pytest -q tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap
+  log SHA256: fecf1abc7dc51d698a03cb071b9415340b64786b1a638367fa88be5ffc95b1ee
+  tests.test_ctx_e2e::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded
+    assert (1 >= 1 and 0 == 1)
+  tests.test_ctx_e2e::test_real_codex_tool_output_limit_reaches_the_model
+    assert 156 < 156
+  tests.test_ctx_integration::test_tool_output_token_limit_only_lowers_the_cap
+    assert 39 < 39
+
+browser @ d395d232807203813b5052ae0df9ab926690d180: 4 passed, 0 failed, 0 skipped, 9 deselected; 27.61s
+  command: PLAYWRIGHT_BROWSERS_PATH=/tmp/pr5-independent-review/browsers CODEX_GUI_BROWSER=1 python -m pytest -q tests/test_autopilot_browser.py tests/test_ui_mobile_browser.py -k 'autopilot or 320'
+  log SHA256: a786f6232bc23fe2cb319140137fad5a2ad3b554d95d2862f2a585be7da16e79
+
+clean-import @ d395d232807203813b5052ae0df9ab926690d180: 1 passed, 0 failed, 0 skipped, 0 deselected; 1.939s
+  command: python -m pytest -q tests/test_autopilot_documents.py::test_uploaded_markdown_revision_repair_integration_and_successor_across_restart
+  log SHA256: 2f459807653d6b93f0d63ba4b658b0d38871555c546816cbd1e676ce54fea0ff
+
+repro @ d395d232807203813b5052ae0df9ab926690d180: 0 passed, 2 failed, 0 skipped, 0 deselected; 1.526s
+  command: PYTHONPATH=/tmp/pr5-independent-review/head:/tmp/pr5-independent-review/head/tests python -m pytest -c /tmp/pr5-independent-review/head/pytest.ini -q /home/kanade/.local/share/codex-gui/worktrees/codex-gui/b910d878/docs/reviews/autopilot-pr5/reproduce_findings.py
+  log SHA256: 0bd18206b30bcd70da731e58b1e6d2bc07c9fce000475001930c2023a4b482cb
+  ::test_planner_cannot_remove_owner_assigned_document
+    AssertionError: ready/applied without owner decision, assigned instructions omitted: ['documents/COMMON.md', 'handoff/00/HANDOFF.md', 'handoff/00/plan.json']
+    assert 'documents/A.md' in ['documents/COMMON.md', 'handoff/00/HANDOFF.md', 'handoff/00/plan.json']
+  ::test_registered_runtime_cannot_expose_nested_credentials
+    AssertionError: sandbox read three synthetic credentials and nested GUI state
+    assert 'PASS' != 'PASS'
