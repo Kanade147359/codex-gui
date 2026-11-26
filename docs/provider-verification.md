@@ -12,7 +12,7 @@ by tests, no production service was restarted, and main was not merged.
 | Installed-Codex runtime, app-server and lifecycle regression | **58 passed, 1 skipped, no warnings** | Includes all three previously failing tests, real read-only sandbox denial and exited-leader descendant cleanup. |
 | Final settings/restart/API/provider run | 46 passed | Covers CLI-path propagation to execution/readers, restart, configuration dispatch races, legacy API compatibility, handoff and provider contracts. |
 | Focused providers, recovery, Codex argv, sessions and heterogeneous workflows | 148 passed | Includes Claude fake subprocesses, actual streaming/parser/lifecycle, schema migrations and backups. |
-| Final HEAD desktop/mobile/Autopilot browser regression | See PR #19 acceptance evidence | All four browser modules run together after the final commit; real Chromium with isolated servers and fake execution providers. |
+| Final HEAD desktop/mobile/Autopilot browser regression | See PR #19 acceptance evidence | All five modules containing opt-in browser tests run together after the final commit; real Chromium with isolated servers and fake execution providers. |
 | Ruff undefined-name/unused-import checks on provider/lifecycle/role modules | PASS | `F821,F822,F823,F401`; JavaScript syntax checks also passed. |
 | Installed Claude metadata | CHECKED, not execution E2E | Version 2.1.185, supported help flags/effort/modes, subscription auth classification. No credentials persisted in GUI DB. |
 | Real Claude model E2E | **NOT_RUN** | Extra usage / purchased-credit disablement cannot be verified automatically and was not confirmed for this run. Opt-in test skips by default. |
@@ -93,6 +93,14 @@ also closes a dead server before replacing it. Both leader states and idempotent
 close are tested with an actual local subprocess whose child ignores SIGTERM.
 The final 58-test runtime run has no warnings.
 
+One separate installed-Codex check remains SKIP:
+`test_profile_on_the_real_config_never_adds_tools_and_removes_apps` cannot
+initialize an in-process app-server with the protected real CODEX_HOME
+(`Read-only file system`). This leaves the user's real-config catalog-reduction
+measurement unverified; it does not invalidate the isolated catalog/tool-output
+tests. Reproduce with that node in `tests/test_ctx_integration.py`. The production
+config/state permissions are intentionally not changed to make it run.
+
 One run also saw an empty result in
 `test_default_allows_spawn_and_multi_agent_false_alone_does_not_stop_it`.
 Individual baseline/current reruns and the latest full suite passed. Its cause
@@ -112,6 +120,7 @@ python -m pytest -q tests/test_providers.py tests/test_recovery.py tests/test_co
 python -m pytest -q tests/test_provider_api.py tests/test_providers.py tests/test_api.py
 CODEX_GUI_BROWSER=1 CODEX_GUI_CHROMIUM=/path/to/chrome python -m pytest -q tests/test_provider_browser.py tests/test_ui_mobile_browser.py tests/test_ui_attachments_browser.py
 CODEX_GUI_BROWSER=1 CODEX_GUI_CHROMIUM=/path/to/chrome python -m pytest -q tests/test_autopilot_browser.py
+CODEX_GUI_BROWSER=1 CODEX_GUI_CHROMIUM=/path/to/chrome python -m pytest -q tests/test_autopilot_workflow_ui.py -k browser
 python -m pytest -q tests/test_real_claude.py
 ```
 
