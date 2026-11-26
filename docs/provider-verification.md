@@ -16,7 +16,7 @@ by tests, no production service was restarted, and main was not merged.
 | Ruff undefined-name/unused-import checks on provider/lifecycle/role modules | PASS | `F821,F822,F823,F401`; JavaScript syntax checks also passed. |
 | Installed Claude metadata | CHECKED, not execution E2E | Version 2.1.185, supported help flags/effort/modes, subscription auth classification. No credentials persisted in GUI DB. |
 | Real Claude model E2E | **PASS** | Owner confirmation received 2026-11-27; official 2.1.185 / Sonnet 4.6, private staged OAuth, real new/resumed turns. |
-| Independent final subagent code review | Pending | Codex collaboration slot is unavailable; separate native Claude Explore agents will review an isolated final snapshot. |
+| Independent final subagent code review | See PR #19 acceptance evidence | Claude native review stopped at the included-plan limit with no completed reports. A separately selected Codex native review uses a new session, fresh included-plan eligibility and a read-only clone; no automatic fallback. |
 
 The final HEAD regression/browser results and SHA are recorded in the PR after
 the commit, avoiding a self-referential commit hash in this document. The earlier
@@ -151,14 +151,26 @@ per-case reruns and exact evidence are recorded in PR #19.
 | Claude image attachment | PASS | NATIVE742 recognized from the attached PNG and persisted in message history. |
 | Claude sandbox permission enforcement | PASS | A parent-writable test path outside the task worktree fails inside native Bash with read-only filesystem; no fallback or edit-tool retry. |
 | Desktop/mobile real-task GUI display | PASS | Chromium at widths 375/1280 shows Claude and completed native Subagent status. |
-| Codex implementation → Claude review | PASS | Real Autopilot independent review APPROVE, no fallback. |
-| Claude implementation → Codex review | PASS | Real Autopilot independent review APPROVE with a distinct thread. |
+| Codex implementation → Claude review | PASS earlier; latest rerun blocked | Both directions passed after the Python -B fixture repair. A later integrated run reached Claude quota and waited without fallback; it is not scored PASS. Exact SHAs are recorded in PR #19. |
+| Claude implementation → Codex review | PASS earlier; latest whole-workflow rerun incomplete | Earlier real Autopilot APPROVE used a distinct thread; the latest combined run could not finish after Claude quota exhaustion. |
 | Completion Gate / dependency release | PASS | Missing evidence holds a real Codex dependent with zero attempts; same-Claude-session repair releases exactly one execution. |
 | Interrupt / native child collection / GUI shutdown | PASS | Stop and real GUI SIGTERM collect shell descendants; preserved sessions resume after stop/restart. |
 | Dedicated self-updater Drain | NOT_RUN | No updater entry point identified in this checkout; owner asked for the normal update command. GUI shutdown is a separate real PASS. |
-| Independent final subagent review | Pending | Native-agent snapshot review will run after conflict resolution. |
+| Independent final subagent review | See PR #19 | Claude native review started two agents but hit quota before reports. A separate Codex native review, selected explicitly, records its snapshot, complete path coverage and findings before any PASS claim. |
 
 ### Actual failures and repairs
+
+- The latest combined real run has four PASS and one blocked Autopilot test;
+  the independent Claude review also stopped at the same included-plan limit.
+  Native `rate_limit_event` reported `status: rejected`,
+  `overageDisabledReason: org_level_disabled` and `isUsingOverage: false`.
+  Review reports were absent, so independent review is not inferred from agent
+  startup. No paid retry, API route or automatic provider fallback was used.
+- GitHub CI without an installed Codex exposed a backup fixture that handled
+  regular files with FakeRunner but delegated image-capability discovery to a
+  real binary. ReadingRunner now inherits the existing ImageRunner fixture.
+  All backup/hash/reservation/restore assertions are unchanged. The 44 file and
+  artifact tests pass with installed Codex deliberately excluded from PATH.
 
 - Linux lacked socat. The enforced sandbox refused startup before a model call.
   An Ubuntu socat package was extracted under `/tmp` and added only to the test
@@ -205,16 +217,22 @@ CODEX_GUI_REAL_CLAUDE=1 CODEX_GUI_CLAUDE_EXTRA_USAGE_DISABLED=1 CODEX_GUI_REAL_F
 
 Codex model calls additionally require fresh included-plan usage confirmation;
 unknown availability skips rather than using purchased credits or API billing.
-Native final review uses isolated repository clones and read-only Explore agents,
-not implementation-session self-review. Its full coverage/results are saved as
+Native final review uses isolated repository clones and independent read-only
+agents, not implementation-session self-review. Select a separate Codex review
+explicitly with `CODEX_GUI_FINAL_REVIEW_PROVIDER=codex`; it checks fresh ChatGPT
+included-plan limits and creates a new thread, never resumes a Claude session. Its full coverage/results are saved as
 JSON evidence and reviewed before a merge recommendation.
 
-**Merge decision: HOLD pending final qualification and review.** Current main
+**Merge decision: HOLD until outstanding acceptance is resolved.** A dedicated
+self-updater Drain remains NOT_RUN because its entry point is absent. Claude
+quota prevents completing the latest Autopilot rerun. Final regression/browser
+counts, independent review outcome and tested SHA are authoritative in PR #19;
+an earlier PASS is never substituted for a blocked latest run. Current main
 c51e99d92e6d81620acc86cf3ad6b3c8ff3477c0 is integrated on the assigned feature
 branch. Conflict resolution retains provider/session fields alongside Artifact
 references, file ownership and the transactional DB migration. The main branch
-and production worktree are unchanged. Rerun the integrated final HEAD suite,
-real acceptance and browser tests before the final recommendation.
+and production worktree are unchanged. The final committed HEAD is rerun through
+the full offline regression and desktop/mobile browser suites before reporting.
 
 ## Known constraints / remaining acceptance
 
