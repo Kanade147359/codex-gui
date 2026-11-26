@@ -186,3 +186,34 @@ def test_claude_workflow_execution_preflight_stops_before_reservation(git_repo, 
         finally:
             await m.shutdown()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('phase', ['launch', 'execution'])
+def test_claude_workflow_needs_its_own_billing_confirmation(git_repo, make_manager, controlled_install, phase):
+    m = configure(make_manager())  # Global Provider confirmation alone is insufficient for this workflow.
+    ap = controlled_install(m)
+    raw = plan(git_repo, ('C',))
+    raw['policy']['extra_usage_disabled_confirmed'] = False
+    raw['nodes'][0].update(provider='claude', provider_options={'trusted_repository':True}, review_provider='codex')
+    async def scenario():
+        try:
+            identity = await register(ap, raw)
+            task = None
+            if phase == 'execution':
+                # A durable task reservation can survive a restart; recheck before any CLI launch.
+                task = await m.create_task(repository=str(git_repo), prompt='fixture C', provider='claude',
+                    provider_options={'trusted_repository':True}, _defer_dispatch=True)
+                ap.ledger.transition(identity + ':C', 'pending', 'implementing', task_id=task['id'])
+            await drive(m, lambda: ap.ledger.get('nodes', identity + ':C')['state'] == 'blocked_configuration')
+            node = ap.ledger.get('nodes', identity + ':C')
+            assert 'confirm extra usage' in node['reason']
+            assert not ap.ledger.rows('acceptances')
+            if task:
+                assert m.get(task['id'])['status'] == 'failed'
+                assert m.get(task['id'])['last_failure_kind'] == 'billing_confirmation'
+                assert not fixture_calls(task['worktree']).exists()
+            else:
+                assert node['task_id'] is None and not m.db.list_tasks()
+        finally:
+            await m.shutdown()
+    asyncio.run(scenario())

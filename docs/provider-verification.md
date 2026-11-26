@@ -220,6 +220,13 @@ per-case reruns and exact evidence are recorded in PR #19.
   reviewer path. A Fake CLI workflow with an alternate credential store and an
   unrelated OpenAI key completes through Codex review; the implementation child
   observes no API credentials. This does not claim real keychain E2E.
+- The fb7c4b9 repair review caught a lost workflow-level billing confirmation
+  check during that separation. Both global Provider confirmation and the
+  workflow's own confirmation are required. Launch and execution-after-reserved
+  task regressions verify an unconfirmed workflow cannot invoke the CLI.
+- Its full regression also caught the changed capitalization of the legacy
+  "Codex process is gone" log. Provider display labels now preserve that exact
+  Codex text while identifying Claude correctly; the existing assertion remains.
 
 Final follow-up review may cover only the repair delta against that witnessed
 full snapshot. In that case PR evidence records both SHAs, the earlier findings,

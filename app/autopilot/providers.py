@@ -251,11 +251,15 @@ def claude_error(events, version):
     return ProviderFailure(kind, "Claude review incomplete: " + str(e.get("subtype", "unknown")))
 
 
-def preflight_environment(policy):
-    if not policy["extra_usage_disabled_confirmed"]:
+def require_billing_confirmation(policy):
+    if policy.get("extra_usage_disabled_confirmed") is not True:
         raise ProviderFailure(
             "billing_confirmation", "Owner must confirm extra usage/credits disabled; no automatic verification API"
         )
+
+
+def preflight_environment(policy):
+    require_billing_confirmation(policy)
     forbidden = (
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",

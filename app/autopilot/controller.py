@@ -17,7 +17,7 @@ from . import git, inputs as fixed_inputs, decisions, planning, goals, replannin
 from .ledger import Ledger, unpack
 from .policy import canonical, digest, manifest, input_digest
 from .execution import resolve_execution, task_fields
-from .providers import ClaudeProvider, CodexProvider, ProviderFailure, validate_result, validate_codex_route
+from .providers import ClaudeProvider, CodexProvider, ProviderFailure, require_billing_confirmation, validate_result, validate_codex_route
 from .runner import Validator, InfrastructureUnavailable, redact
 
 log = logging.getLogger(__name__)
@@ -220,6 +220,8 @@ class Autopilot:
         workflow = self.ledger.get("workflows", node["workflow_id"])
         from .environment import preflight
 
+        if task["provider"] == "claude":
+            require_billing_confirmation(workflow["plan"]["policy"])
         await preflight(task["worktree"], node["spec"]["validation"])
         if task["provider"] == "claude":
             return  # Normal task provider already verified auth/billing, trust and sandbox settings.
@@ -569,6 +571,7 @@ class Autopilot:
         try:
             execution = resolve_execution(n["spec"], w["plan"])
             if execution["provider"] == "claude":
+                require_billing_confirmation(w["plan"]["policy"])
                 await self.manager.providers.get("claude").preflight(dict(
                     provider_options=canonical(execution["provider_options"]), model=execution["model"],
                     reasoning_effort=execution["reasoning_effort"]))

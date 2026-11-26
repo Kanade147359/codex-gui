@@ -1995,7 +1995,8 @@ class TaskManager(CodexExecution):
             TaskLog.note(self.log_path(task_id), note)
             self.db.update_task(task_id, status_detail="running without output capture (GUI restarted)")
             return True
-        self._process_lost(task, f"GUI restarted while this task was running and its {task['provider']} process is gone" if startup
+        label = getattr(self.providers.get(task["provider"]), "label", task["provider"])
+        self._process_lost(task, f"GUI restarted while this task was running and its {label} process is gone" if startup
                            else "the process that was running this task is gone")
         return True
 
