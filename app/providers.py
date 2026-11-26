@@ -512,8 +512,10 @@ class ProviderRegistry:
             config = self.config(name)
             if name == "claude":
                 provider.binary, provider.settings = config["binary"], config
+                self.runtime.claude_bin = config["binary"]
             elif "provider.codex" in self.db.get_settings():
                 provider.runner.codex_bin = config["binary"]
+                self.runtime.codex_bin = config["binary"]
 
     def get(self, name):
         if name not in self.providers:

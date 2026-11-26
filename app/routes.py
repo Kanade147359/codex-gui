@@ -311,20 +311,27 @@ class ProviderSettingsRequest(BaseModel):
 async def provider_settings(request: Request, provider: str, body: ProviderSettingsRequest):
     from .providers import ProviderError
     m = manager(request)
-    if m._jobs or m.autopilot.jobs or any(t["status"] in ("starting", "running") for t in m.db.list_tasks()):
+    if m._provider_reconfiguring or m._jobs or m.autopilot.jobs or any(t["status"] in ("starting", "running") for t in m.db.list_tasks()):
         raise HTTPException(409, "Provider settings can change after active turns finish")
+    m._provider_reconfiguring = True
     try:
-        settings = m.providers.save(provider, body.settings)
-    except ProviderError as e:
-        raise HTTPException(400, str(e)) from e
-    if provider == "codex":
-        if m._app_server is not None:
-            await m._app_server.close()
-            m._app_server = None
-        m.settings.codex_bin = settings["binary"]
-        request.app.state.catalog.codex_bin = settings["binary"]
-        request.app.state.catalog._cached = None
-    return settings
+        try:
+            settings = m.providers.save(provider, body.settings)
+        except ProviderError as e:
+            raise HTTPException(400, str(e)) from e
+        # Execution and independent reader adapters use the same configured CLI.
+        m.autopilot.providers[provider].binary = settings["binary"]
+        if provider == "codex":
+            if m._app_server is not None:
+                await m._app_server.close()
+                m._app_server = None
+            request.app.state.catalog.codex_bin = settings["binary"]
+            request.app.state.catalog._cached = None
+        return settings
+    finally:
+        m._provider_reconfiguring = False
+        m.scheduler.wake()
+
 
 
 @router.post("/api/providers/{provider}/resume-queue")

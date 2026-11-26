@@ -1,5 +1,3 @@
-import time
-
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -31,3 +29,36 @@ def test_provider_settings_api_execution_and_explicit_new_provider_session(setti
         assert client.put('/api/providers/claude/settings', json={'settings':{'api_key':'do-not-store'}}).status_code == 400
         assert 'do-not-store' not in str(app.state.manager.db.get_settings())
         assert client.post('/api/tasks', json=dict(repository=str(git_repo), prompt='x', provider='unknown')).status_code == 422
+
+
+def test_cli_paths_apply_to_independent_roles_and_survive_restart(settings):
+    from app.config import Settings
+    from app.database import Database
+    from app.task_manager import TaskManager
+    app = create_app(settings, FakeRunner())
+    with TestClient(app) as client:
+        for provider, binary in [('codex', '/configured/codex'), ('claude', FAKE)]:
+            response = client.put(f'/api/providers/{provider}/settings', json={'settings':{'binary':binary}})
+            assert response.status_code == 200
+            assert app.state.manager.autopilot.providers[provider].binary == binary
+        assert app.state.catalog.codex_bin == '/configured/codex'
+    db = Database(settings.db_path)
+    restarted_settings = Settings(home=settings.home, backend='exec')
+    other = TaskManager(restarted_settings, db, FakeRunner())
+    assert restarted_settings.codex_bin == '/configured/codex'
+    assert restarted_settings.claude_bin == FAKE
+    assert other.runner.codex_bin == '/configured/codex'
+    assert other.autopilot.providers['codex'].binary == '/configured/codex'
+    assert other.autopilot.providers['claude'].binary == FAKE
+    other.detach()
+    db.close()
+
+
+def test_legacy_new_session_reasoning_field_remains_compatible(settings, git_repo):
+    with TestClient(create_app(settings, FakeRunner())) as client:
+        task = client.post('/api/tasks', json=dict(repository=str(git_repo), prompt='ok')).json()
+        old = wait_done(client, task['id'])
+        response = client.post(f"/api/tasks/{task['id']}/new-session", json=dict(prompt='ok', reasoning_effort='high'))
+        assert response.status_code == 200
+        done = wait_done(client, task['id'])
+        assert done['status'] == 'completed' and done['reasoning_effort'] == old['reasoning_effort']

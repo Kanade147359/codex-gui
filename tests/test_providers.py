@@ -421,3 +421,19 @@ def test_claude_blocked_completion_holds_then_releases_codex_dependency(git_repo
         assert len(m.db.list_attempts(child['id'])) == 1
         await m.shutdown()
     asyncio.run(scenario())
+
+
+def test_provider_reconfiguration_defers_dispatch_without_duplicate_attempts(git_repo, make_manager):
+    m = make_manager()
+    async def scenario():
+        m._provider_reconfiguring = True
+        task = await m.create_task(repository=str(git_repo), prompt='ok')
+        m.tick()
+        assert m.get(task['id'])['status'] == 'queued' and not m._jobs
+        assert m.db.list_attempts(task['id']) == []
+        m._provider_reconfiguring = False
+        m.tick(); m.tick()
+        assert (await finished(m, task))['task_outcome'] == 'success'
+        assert len(m.db.list_attempts(task['id'])) == 1
+        await m.shutdown()
+    asyncio.run(scenario())

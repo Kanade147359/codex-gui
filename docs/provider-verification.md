@@ -9,7 +9,7 @@ by tests, no production service was restarted, and main was not merged.
 | Check | Result | Evidence / limits |
 | --- | --- | --- |
 | Full default suite | 1031 passed, 3 failed, 39 skipped | Three installed-Codex environment failures below; never reported as PASS. |
-| Final handoff/API/provider run | 36 passed | Covers the final new-provider handoff plus CLI/parser/security/evidence contracts. |
+| Final settings/restart/API/provider run | 46 passed | Covers CLI-path propagation to execution/readers, restart, configuration dispatch races, legacy API compatibility, handoff and provider contracts. |
 | Focused providers, recovery, Codex argv, sessions and heterogeneous workflows | 148 passed | Includes Claude fake subprocesses, actual streaming/parser/lifecycle, schema migrations and backups. |
 | Desktop/mobile task/browser regression | 14 passed | Real Chromium; new Claude task, image upload, same-session follow-up and scheduling; existing mobile/attachment flows. |
 | Autopilot browser regression | 3 passed | Real Chromium; independent review/fallback, Markdown revision/fix/integration and owner-approved replanning. |
@@ -18,8 +18,9 @@ by tests, no production service was restarted, and main was not merged.
 | Real Claude model E2E | **NOT_RUN** | Extra usage / purchased-credit disablement cannot be verified automatically and was not confirmed for this run. Opt-in test skips by default. |
 | Parallel development/review subagents | NOT_RUN | Requested subagent creation was rejected by the environment's agent-thread limit. Implementation/review proceeded serially. |
 
-The full-suite measurement precedes the final explicit provider-handoff adjustment;
-that change is covered by the final API/provider-focused run recorded below.
+The full-suite measurement precedes the final explicit provider-handoff and CLI
+settings propagation adjustments; those changes are covered by the final
+API/provider-focused run listed above.
 Earlier failures found during implementation were fixed and rerun; the numbers
 above are successful final runs for each listed group, not totals of repeated runs.
 
@@ -91,7 +92,7 @@ Commands used (replace the venv/Chromium locations as needed):
 ```bash
 python -m pytest -q
 python -m pytest -q tests/test_providers.py tests/test_recovery.py tests/test_codex_runner.py tests/test_sessions.py tests/test_autopilot_providers.py
-python -m pytest -q tests/test_provider_api.py tests/test_providers.py
+python -m pytest -q tests/test_provider_api.py tests/test_providers.py tests/test_api.py
 CODEX_GUI_BROWSER=1 CODEX_GUI_CHROMIUM=/path/to/chrome python -m pytest -q tests/test_provider_browser.py tests/test_ui_mobile_browser.py tests/test_ui_attachments_browser.py
 CODEX_GUI_BROWSER=1 CODEX_GUI_CHROMIUM=/path/to/chrome python -m pytest -q tests/test_autopilot_browser.py
 python -m pytest -q tests/test_real_claude.py

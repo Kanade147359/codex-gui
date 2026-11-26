@@ -140,6 +140,7 @@ class TaskManager(CodexExecution):
         self._stop_deadline: dict[str, float] = {}
         self._repo_locks: dict[str, asyncio.Lock] = {}
         self._shutting_down = False
+        self._provider_reconfiguring = False
         # Identifies this GUI process in claims. Recovery assumes one GUI process per database (see recover()).
         self.instance_id = uuid.uuid4().hex
         self._attempts: dict[str, int] = {}        # task id -> id of the attempt row being run
@@ -608,7 +609,7 @@ class TaskManager(CodexExecution):
                               service_tier="default", allow_subagents=int(defaults["default_subagents"]),
                               context_tokens=None, context_window=None, five_hour_used_before=None, five_hour_used_after=None,
                               weekly_used_before=None, weekly_used_after=None)
-            elif model is not None or reasoning_effort is not None or provider_options is not None:
+            elif model is not None or provider_options is not None:
                 raise TaskError("same-provider settings stay fixed; create a separate task to change them")
         except ProviderError as e:
             raise TaskError(str(e), 400, e.failure.kind) from e
@@ -680,7 +681,7 @@ class TaskManager(CodexExecution):
             asyncio.get_running_loop()
         except RuntimeError:
             return False  # not inside the event loop (a plain DB call): the scheduler's next tick starts it
-        if self._shutting_down:
+        if self._shutting_down or self._provider_reconfiguring:
             return False
         task = self.db.get_task(task_id)
         if task is None or task["status"] != "queued" or task["claimed_by"]:
