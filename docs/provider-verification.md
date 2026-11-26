@@ -227,6 +227,12 @@ per-case reruns and exact evidence are recorded in PR #19.
 - Its full regression also caught the changed capitalization of the legacy
   "Codex process is gone" log. Provider display labels now preserve that exact
   Codex text while identifying Claude correctly; the existing assertion remains.
+- The 1369c4d delta review caught Auto's misleading Effort label when the selected
+  Codex model defaults Low but Provider settings specify High. The label now
+  follows the same explicit Provider default as execution. Browser fixtures pin
+  model discovery even after settings invalidates the cache, and assert both
+  selected Auto and its High label at 375/1280 widths. Fake GUI readiness is
+  bounded with failure diagnostics rather than waiting forever on a failed CLI.
 
 Final follow-up review may cover only the repair delta against that witnessed
 full snapshot. In that case PR evidence records both SHAs, the earlier findings,

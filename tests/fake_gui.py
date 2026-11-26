@@ -27,10 +27,14 @@ async def main(home: str, repo: str, prompt: str, provider="codex", binary="") -
         manager.providers.save('claude', dict(binary=binary, billing_mode='subscription', extra_usage_disabled_confirmed=True))
         options = dict(trusted_repository=True)
     task = await manager.create_task(repository=repo, prompt=prompt, name="orphan", provider=provider, provider_options=options)
+    deadline = asyncio.get_running_loop().time() + 20
     while True:
         row = manager.get(task["id"])
         if row["status"] == "running" and session_id(row):
             break
+        if row["status"] in ("failed", "stopped", "waiting-for-quota") or asyncio.get_running_loop().time() >= deadline:
+            await manager.shutdown()
+            raise RuntimeError(f"fake GUI readiness failed: {row['status']}: {row['last_failure_kind']}: {row['last_failure_message']}")
         await asyncio.sleep(0.05)
     print("READY", task["id"], row["pid"], flush=True)
     await asyncio.sleep(3600)

@@ -21,6 +21,11 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
         return dict(id='codex', available=True, version='fake', authenticated=True, billing='subscription',
                     capabilities={}, models=[])
     app.state.manager.providers.get('codex').describe = offline_codex
+    async def offline_catalog():
+        return dict(models=[dict(slug='fixture-codex', name='Fixture Codex', efforts=['low', 'high'],
+                    default_effort='low', service_tiers=[])], recommended_model='fixture-codex',
+                    default_model='', default_effort='low', error='')
+    app.state.catalog.get = offline_catalog  # Settings invalidates the cache; discovery must stay offline too.
     context = browser.new_context(base_url=url, viewport={'width':width, 'height':900})
     page = context.new_page()
     errors = []
@@ -40,6 +45,7 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
     expect(page.locator('[name="service_tier"]')).not_to_be_visible()
     assert page.locator('#effort-select option').evaluate_all('(options) => options.map(o => o.value)') == ['default', 'low', 'medium', 'high', 'xhigh', 'max']
     expect(page.locator('#effort-select')).to_have_value('default')
+    expect(page.locator('#effort-select option[value="default"]')).to_contain_text('High')
     page.locator('[name="repository"]').fill(str(git_repo))
     page.locator('[name="prompt"]').fill('subagents')
     page.locator('[name="claude_trusted"]').check()
@@ -86,7 +92,9 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
     page.goto(url)
     page.locator('#new-task-btn').click()
     page.locator('#provider-select').select_option('codex')
+    expect(page.locator('#model-select')).to_have_value('fixture-codex')
     expect(page.locator('#effort-select')).to_have_value('default')
+    expect(page.locator('#effort-select option[value="default"]')).to_contain_text('High')
     page.locator('#effort-select').select_option('low')
     page.locator('#model-select').select_option('__custom__')
     expect(page.locator('#effort-select')).to_have_value('low')
