@@ -15,8 +15,8 @@ by tests, no production service was restarted, and main was not merged.
 | Final HEAD desktop/mobile/Autopilot browser regression | See PR #19 acceptance evidence | All five modules containing opt-in browser tests run together after the final commit; real Chromium with isolated servers and fake execution providers. |
 | Ruff undefined-name/unused-import checks on provider/lifecycle/role modules | PASS | `F821,F822,F823,F401`; JavaScript syntax checks also passed. |
 | Installed Claude metadata | CHECKED, not execution E2E | Version 2.1.185, supported help flags/effort/modes, subscription auth classification. No credentials persisted in GUI DB. |
-| Real Claude model E2E | **NOT_RUN** | Extra usage / purchased-credit disablement cannot be verified automatically and was not confirmed for this run. Opt-in test skips by default. |
-| Independent final subagent code review | **NOT_RUN** | Requested again for final acceptance; creation was rejected with `agent thread limit reached`. Local review is not reported as independent review. |
+| Real Claude model E2E | **PASS (pre-integration)** | Owner confirmation received 2026-11-27; official 2.1.185 / Sonnet 4.6, private staged OAuth, real new/resumed turns. |
+| Independent final subagent code review | Pending | Codex collaboration slot is unavailable; separate native Claude Explore agents will review an isolated final snapshot. |
 
 The final HEAD regression/browser results and SHA are recorded in the PR after
 the commit, avoiding a self-referential commit hash in this document. The earlier
@@ -133,44 +133,80 @@ provider fallback is allowed.
 
 ## Real acceptance matrix / merge decision
 
-The owner has been asked to confirm Extra usage and purchased-credit usage are
-disabled. No confirmation was received during this acceptance run; no real Claude
-model execution was started. Saved GUI settings or subscription login metadata
-do not replace the requested owner confirmation.
+The owner confirmed additional paid usage is disabled on 2026-11-27. Fresh
+CLI metadata confirmed the first-party subscription route. All actual CLI state,
+OAuth staging, GUI SQLite databases, repositories and worktrees are temporary;
+account credentials are removed at teardown. No production data/processes or
+permissions are changed. Remaining quota and invoice charges stay Unknown.
 
-| Required isolated real acceptance | Status | Remaining evidence |
+These measurements precede integration with the advanced main branch; final
+HEAD reruns and exact evidence are recorded in PR #19.
+
+| Isolated real acceptance | Result | Evidence |
 | --- | --- | --- |
-| Claude code editing and test execution | **NOT_RUN** | Actual changed files and successful test tool output. |
-| Same-session continuation and GUI restart/resume | **NOT_RUN** | One persisted real Session ID across turns and a new GUI process. |
-| Codex + Claude concurrent execution | **NOT_RUN** | Overlapping real runs in separate worktrees. |
-| Claude native Subagent | **NOT_RUN** | Actual Agent invocation/result and GUI status. |
-| Claude image attachment | **NOT_RUN** | Real visual recognition on initial/resumed messages. |
-| Claude sandbox permission enforcement | **NOT_RUN** | Real denied out-of-scope write and successful allowed work. Codex's offline real-tool denial is a separate PASS. |
-| Codex implementation → Claude review | **NOT_RUN** | Real providers with an isolated review and completion decision. |
-| Claude implementation → Codex review | **NOT_RUN** | Real providers, including repair/re-review when applicable. |
-| Completion Gate / dependency release | **NOT_RUN** | Real blocked/evidence-failed turn holds dependencies until verified success. |
-| Interrupt / process collection / updater Drain | **NOT_RUN** | Real Claude process tree cleanup and isolated self-updater entry point. |
-| Independent final subagent review | **NOT_RUN** | Requires an available independent-agent slot. |
+| Claude code editing and test execution | PASS | Native Agent changes calculator.py; parent Bash runs unittest; unchanged assertions and Completion validation pass. |
+| Same-session continuation and GUI restart/resume | PASS | One UUID and worktree across image follow-up and a new GUI process; subtract and its test added after restart. |
+| Codex + Claude concurrent execution | PASS | Both real shell commands create separate worktree artifacts and wait concurrently on a test-owned release signal. |
+| Claude native Subagent | PASS | Actual Agent invocation/result, completed native status, real tool output. |
+| Claude image attachment | PASS | NATIVE742 recognized from the attached PNG and persisted in message history. |
+| Claude sandbox permission enforcement | PASS | A parent-writable test path outside the task worktree fails inside native Bash with read-only filesystem; no fallback or edit-tool retry. |
+| Desktop/mobile real-task GUI display | PASS | Chromium at widths 375/1280 shows Claude and completed native Subagent status. |
+| Codex implementation → Claude review | PASS | Real Autopilot independent review APPROVE, no fallback. |
+| Claude implementation → Codex review | PASS | Real Autopilot independent review APPROVE with a distinct thread. |
+| Completion Gate / dependency release | PASS | Missing evidence holds a real Codex dependent with zero attempts; same-Claude-session repair releases exactly one execution. |
+| Interrupt / native child collection / GUI shutdown | PASS | Stop and real GUI SIGTERM collect shell descendants; preserved sessions resume after stop/restart. |
+| Dedicated self-updater Drain | NOT_RUN | No updater entry point identified in this checkout; owner asked for the normal update command. GUI shutdown is a separate real PASS. |
+| Independent final subagent review | Pending | Native-agent snapshot review will run after conflict resolution. |
 
-Fake CLI tests cover the corresponding session, DAG, review, attachment and
-shutdown state transitions; they do not establish native Claude behavior. In
-particular, `test_stop_resume_timeout_and_drain` exercises `TaskManager.shutdown`,
-not an end-to-end self-updater. Real updater Drain remains NOT_RUN. The existing
-real-Claude test is only a new/resumed structured-output smoke test and is not a
-substitute for this entire matrix.
+### Actual failures and repairs
 
-**Merge decision: HOLD / keep draft.** Resolving the old three failures does not
-satisfy the remaining real acceptance and independent-review requirements. After
-owner confirmation, execute each matrix item in temporary GUI data/repositories,
-fix and rerun any failures, then record the final tested SHA and evidence in PR
-#19. No production restart or main merge is part of acceptance.
+- Linux lacked socat. The enforced sandbox refused startup before a model call.
+  An Ubuntu socat package was extracted under `/tmp` and added only to the test
+  PATH. System packages/permissions and failIfUnavailable were not changed.
+- CLI 2.1.185 can emit exact Completion JSON in terminal result without
+  structured_output. The provider now passes only that entire terminal string
+  through the existing strict parser. Duplicate keys, prose/fences, blank reasons
+  and extra fields remain rejected; malformed structured_output cannot fall back.
+- A resumed model response included prose before JSON. Completion Gate correctly
+  held it. No tail extraction was added. Every CLI invocation now carries the
+  completion protocol as an appended system instruction; the restart acceptance
+  prompt explicitly requests StructuredOutput. Models can still be noncompliant,
+  in which case the gate continues to hold them.
+- Complex multiline inline Python required Claude permission approval, and a
+  shutdown witness outside the worktree was denied by the native sandbox.
+  Trusted fixture scripts and in-worktree witness files exercise the intended
+  operations without weakening CLI permissions or sandbox policy.
+- A shell-wrapper CLI path was inaccessible inside the independent Codex review
+  sandbox. The test GUI now owns private runtime mounts and hands reviewers the
+  real CLI executable. Both actual review directions passed after this fix.
+- Test diagnostics originally assumed capitalized shell errors and a non-null
+  raw event; zsh uses lowercase and system log events have no raw payload. The
+  harness normalizes case, checks actual tool results and handles absent events;
+  denial/no-artifact and semantic success assertions remain unchanged.
+
+Reproduce with bubblewrap and socat on PATH and the owner's confirmation:
+
+```bash
+CODEX_GUI_REAL_CLAUDE=1 CODEX_GUI_CLAUDE_EXTRA_USAGE_DISABLED=1 python -m pytest -q -s -x tests/test_real_claude.py
+CODEX_GUI_REAL_CLAUDE=1 CODEX_GUI_CLAUDE_EXTRA_USAGE_DISABLED=1 CODEX_GUI_CHROMIUM=/path/to/chrome python -m pytest -q -s -x tests/test_real_provider_acceptance.py tests/test_real_provider_workflows.py
+CODEX_GUI_REAL_CLAUDE=1 CODEX_GUI_CLAUDE_EXTRA_USAGE_DISABLED=1 CODEX_GUI_REAL_FINAL_REVIEW=1 python -m pytest -q -s -x tests/test_real_provider_review.py
+```
+
+Codex model calls additionally require fresh included-plan usage confirmation;
+unknown availability skips rather than using purchased credits or API billing.
+Native final review uses isolated repository clones and read-only Explore agents,
+not implementation-session self-review. Its full coverage/results are saved as
+JSON evidence and reviewed before a merge recommendation.
+
+**Merge decision: HOLD pending integration and final review.** GitHub's current
+base advanced to c51e99d92e6d81620acc86cf3ad6b3c8ff3477c0 and PR #19 has conflicts.
+Resolve them on the assigned branch, then rerun the integrated final HEAD suite,
+real acceptance and browser tests. No main merge or production restart is authorized.
 
 ## Known constraints / remaining acceptance
 
-- Real Claude execution, image/model compatibility, native subagent behavior and
-  native Bash sandbox enforcement remain **unverified**. Metadata and synthetic
-  protocol fixtures do not establish them. Keep the PR in draft until the
-  no-extra-usage real E2E can be performed in a suitable local environment.
+- Real acceptance is version/model/environment specific: Claude 2.1.185, Sonnet
+  4.6 and Linux bubblewrap/socat. Other versions/models are not inferred to PASS.
 - CLI settings are pinned for safe-mode execution; repository/user Claude
   customizations are intentionally not loaded. Managed organization policies
   still have precedence, and remote managed policy is not fully introspectable.

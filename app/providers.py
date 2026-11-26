@@ -18,7 +18,7 @@ from typing import Protocol
 from . import recovery
 from .codex_runner import STREAM_LIMIT, parse_line, terminate_process
 from .appserver import subscription_env
-from .completion import SCHEMA_PATH
+from .completion import SCHEMA_PATH, RESULT_INSTRUCTION, parse_result
 from .ctx_config import task_cwd
 
 
@@ -195,7 +195,8 @@ class CodexProvider:
 
 
 CLAUDE_FLAGS = ("--resume", "--output-format", "--include-partial-messages", "--json-schema", "--input-format",
-                "--permission-mode", "--setting-sources", "--settings", "--strict-mcp-config", "--safe-mode")
+                "--permission-mode", "--setting-sources", "--settings", "--strict-mcp-config", "--safe-mode",
+                "--append-system-prompt")
 PERMISSION_MODES = ("dontAsk", "acceptEdits", "plan", "auto", "default")
 CLAUDE_SETTINGS = {
     "disableAllHooks": True, "forceLoginMethod": "claudeai", "enabledPlugins": {},
@@ -331,8 +332,13 @@ class ClaudeCodeProvider:
             cmd += ["--effort", safe_value(task["reasoning_effort"], "effort")]
         if not task.get("allow_subagents"):
             cmd += ["--disallowedTools", "Agent,Task"]
+        protocol = (RESULT_INSTRUCTION + " Use the StructuredOutput tool when available. "
+                    "The final response must be exactly that JSON object, with no preamble, Markdown, or trailing prose. "
+                    "Tool success alone does not establish task success.")
         if self.instructions and not session_id:
-            cmd += ["--append-system-prompt", self.instructions]
+            protocol += "\n" + self.instructions
+        # Every invocation, including resume, needs the same completion protocol.
+        cmd += ["--append-system-prompt", protocol]
         if session_id:
             try:
                 uuid.UUID(session_id)
@@ -387,6 +393,13 @@ class ClaudeCodeProvider:
             structured = value.get("structured_output")
             if isinstance(structured, dict):
                 result.append(Event("final", {"text": json.dumps(structured, ensure_ascii=False)}))
+            elif "structured_output" not in value:
+                # Installed CLI 2.1.185 may return exact Completion JSON as its
+                # terminal result without invoking the structured-output tool.
+                # Never score assistant/tool text, prose, or malformed envelopes.
+                parsed = parse_result(value.get("result"))
+                if parsed is not None:
+                    result.append(Event("final", {"text": json.dumps(parsed, ensure_ascii=False)}))
             return result
         if kind in ("assistant", "user", "stream_event"):
             result = [Event("started", {})]

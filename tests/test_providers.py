@@ -41,6 +41,53 @@ def test_claude_discovery_is_local_only():
     assert not info['capabilities']['compaction']
 
 
+@pytest.mark.parametrize('status', ['SUCCESS', 'BLOCKED', 'NEEDS_INPUT', 'PARTIAL'])
+def test_terminal_completion_json_uses_the_existing_strict_contract(status):
+    provider = ClaudeCodeProvider(FAKE)
+    events = provider.events(dict(type='result', subtype='success', is_error=False,
+                                 result=json.dumps(dict(status=status, reason='actual terminal result'))))
+    final = [event for event in events if event.kind == 'final']
+    assert len(final) == 1
+    assert json.loads(final[0].data['text']) == dict(status=status, reason='actual terminal result')
+
+
+@pytest.mark.parametrize('text', [
+    'done', '```json\n{"status":"SUCCESS","reason":"wrapped"}\n```',
+    '{"status":"PARTIAL","status":"SUCCESS","reason":"duplicate"}',
+    '{"status":"SUCCESS","reason":""}', '{"status":"SUCCESS","reason":"ok","extra":true}',
+])
+def test_terminal_prose_and_invalid_json_do_not_satisfy_completion(text):
+    events = ClaudeCodeProvider(FAKE).events(dict(type='result', subtype='success', is_error=False, result=text))
+    assert not any(event.kind == 'final' for event in events)
+
+
+def test_malformed_structured_output_cannot_fall_back_to_other_terminal_text():
+    events = ClaudeCodeProvider(FAKE).events(dict(type='result', subtype='success', is_error=False,
+              structured_output=None, result='{"status":"SUCCESS","reason":"must not replace invalid envelope"}'))
+    assert not any(event.kind == 'final' for event in events)
+
+
+def test_completion_protocol_is_system_instruction_on_initial_and_resumed_turns():
+    provider = ClaudeCodeProvider(FAKE)
+    for sid in (None, '11111111-1111-4111-8111-111111111111'):
+        argv = provider.build_command(dict(provider_options='{}'), sid)
+        protocol = argv[argv.index('--append-system-prompt') + 1]
+        assert 'SUCCESS means the entire request is fulfilled' in protocol
+        assert 'no preamble, Markdown, or trailing prose' in protocol
+
+
+def test_terminal_json_completion_through_the_real_process_pipeline(git_repo, make_manager):
+    manager = configure(make_manager())
+    async def scenario():
+        try:
+            task = await create(manager, git_repo, 'terminal-json')
+            row = await finished(manager, task)
+            assert row['status'] == 'completed' and row['task_outcome'] == 'success'
+        finally:
+            await manager.shutdown()
+    asyncio.run(scenario())
+
+
 def test_new_resume_schedule_and_restart(git_repo, make_manager):
     m = configure(make_manager())
     async def scenario():

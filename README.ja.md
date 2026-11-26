@@ -574,6 +574,10 @@ New TaskのProviderで **Codex / Claude Code** を選択できます。Claude未
 Provider別同時実行上限を設定できます。ClaudeのモデルはCLIのaliasまたは完全IDを
 手入力でき、EffortとPermission Modeの候補はインストール済みCLIから取得します。
 
+LinuxでClaudeのsandboxを使用するには`bubblewrap`と`socat`が必要です。不足時は
+sandboxを無効化せず実行前に停止します。終端のCompletion JSONは厳密に検証し、
+説明文付きの応答や不正JSONで依存タスクを解放しません。
+
 Claudeは公式CLIのログイン状態を使用します。実行にはSubscriptionの明示選択、
 アカウントの追加従量課金／購入クレジットが無効であることの確認、対象Repositoryの
 信頼確認が必要です。課金方式不明・認証切れは実行前に停止し、API課金へ自動切替

@@ -18,7 +18,7 @@ if '--help' in sys.argv:
 --plugin-dir
 --effort <level> Effort level for the current session
  (low, medium, high, xhigh, max)
---setting-sources --settings --strict-mcp-config --safe-mode''')
+--setting-sources --settings --strict-mcp-config --safe-mode --append-system-prompt''')
     sys.exit(0)
 if sys.argv[1:3] == ['auth', 'status']:
     print(json.dumps(dict(loggedIn=AUTH, authMethod='claude.ai' if BILLING == 'subscription' else 'api_key',
@@ -102,6 +102,8 @@ if command == 'permission':
     result['permission_denials'] = [dict(tool_name='Bash')]
 if command == 'no-structured':
     result.pop('structured_output')
+if command == 'terminal-json':
+    result['result'] = json.dumps(result.pop('structured_output'))
 emit(result)
 if command == 'duplicate-result':
     emit(result)
