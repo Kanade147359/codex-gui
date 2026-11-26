@@ -12,7 +12,7 @@ by tests, no production service was restarted, and main was not merged.
 | Installed-Codex runtime, app-server and lifecycle regression | **58 passed, 1 skipped, no warnings** | Includes all three previously failing tests, real read-only sandbox denial and exited-leader descendant cleanup. |
 | Final settings/restart/API/provider run | 46 passed | Covers CLI-path propagation to execution/readers, restart, configuration dispatch races, legacy API compatibility, handoff and provider contracts. |
 | Focused providers, recovery, Codex argv, sessions and heterogeneous workflows | 148 passed | Includes Claude fake subprocesses, actual streaming/parser/lifecycle, schema migrations and backups. |
-| Final HEAD desktop/mobile/Autopilot browser regression | See PR #19 acceptance evidence | All five modules containing opt-in browser tests run together after the final commit; real Chromium with isolated servers and fake execution providers. |
+| Final HEAD desktop/mobile/Autopilot browser regression | See PR #19 acceptance evidence | All modules containing opt-in browser tests run together after the final commit; real Chromium with isolated servers and fake execution providers. |
 | Ruff undefined-name/unused-import checks on provider/lifecycle/role modules | PASS | `F821,F822,F823,F401`; JavaScript syntax checks also passed. |
 | Installed Claude metadata | CHECKED, not execution E2E | Version 2.1.185, supported help flags/effort/modes, subscription auth classification. No credentials persisted in GUI DB. |
 | Real Claude model E2E | **PASS (pre-integration)** | Owner confirmation received 2026-11-27; official 2.1.185 / Sonnet 4.6, private staged OAuth, real new/resumed turns. |
@@ -198,10 +198,12 @@ Native final review uses isolated repository clones and read-only Explore agents
 not implementation-session self-review. Its full coverage/results are saved as
 JSON evidence and reviewed before a merge recommendation.
 
-**Merge decision: HOLD pending integration and final review.** GitHub's current
-base advanced to c51e99d92e6d81620acc86cf3ad6b3c8ff3477c0 and PR #19 has conflicts.
-Resolve them on the assigned branch, then rerun the integrated final HEAD suite,
-real acceptance and browser tests. No main merge or production restart is authorized.
+**Merge decision: HOLD pending final qualification and review.** Current main
+c51e99d92e6d81620acc86cf3ad6b3c8ff3477c0 is integrated on the assigned feature
+branch. Conflict resolution retains provider/session fields alongside Artifact
+references, file ownership and the transactional DB migration. The main branch
+and production worktree are unchanged. Rerun the integrated final HEAD suite,
+real acceptance and browser tests before the final recommendation.
 
 ## Known constraints / remaining acceptance
 
@@ -218,6 +220,9 @@ real acceptance and browser tests. No main merge or production restart is author
   an explicit owner assertion, not an automatically verified account setting.
 - Existing workflows without explicit `allow_provider_fallback` now wait at
   included-quota exhaustion rather than silently choosing another provider.
+- Release records in `docs/releases/gui-release-01.json` and
+  `docs/releases/gui-release-01-artifact.json` also identify self-update as absent
+  and defer it to a separate update task; no replacement updater was invented.
 - No real self-update/restart of production was performed. Shutdown and
   backup/restore were tested with isolated application state only; an actual
   updater Drain is not established by those tests.

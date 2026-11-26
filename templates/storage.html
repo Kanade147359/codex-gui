@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Storage - Codex GUI{% endblock %}
+{% block page %}storage{% endblock %}
+{% block content %}
+<section>
+  <h1>Build artifact GC</h1>
+  <p>終了したタスクの再生成可能なビルドキャッシュを毎日調査します。初期設定は5日保持・Dry Runです。</p>
+  <p class="muted">利用日時が不明、Needs Review、稼働中、共有、symlink、Git管理対象、明示的な成果物は除外します。
+    残したいキャッシュには <code>.codex-gui-keep</code> を配置できます。</p>
+  <form id="gc-settings" class="inline-actions">
+    <label>保持日数 <input id="gc-days" type="number" min="1" max="3650" required value="5" style="width:6em"></label>
+    <label><input id="gc-delete" type="checkbox"> 自動削除を有効にする（毎日実削除）</label>
+    <button type="submit">設定を保存</button>
+  </form>
+  <div class="inline-actions">
+    <button id="gc-dry-run" class="primary">Dry Run</button>
+    <button id="gc-run" disabled>GC実行</button>
+    <button id="gc-refresh">更新</button>
+  </div>
+  <p id="gc-message" role="status" aria-live="polite"></p>
+</section>
+<section>
+  <h2>候補と除外理由</h2>
+  <p id="gc-summary">Dry Runを実行すると候補を表示します。</p>
+  <p id="gc-reasons" class="muted"></p>
+  <div style="overflow-x:auto">
+    <table><thead><tr><th>パス / 所有タスク</th><th>容量</th><th>最終利用日時</th><th>判定</th></tr></thead><tbody id="gc-items"></tbody></table>
+  </div>
+</section>
+<section>
+  <h2>実行履歴</h2>
+  <div id="gc-history"></div>
+</section>
+<script src="{{ static_url('storage.js') }}" defer></script>
+{% endblock %}

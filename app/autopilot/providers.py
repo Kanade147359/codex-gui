@@ -61,15 +61,27 @@ REVIEW_SCHEMA = dict(
 
 
 def review_schema(candidate):
-    """Constrain coverage to the fixed changed paths without relaxing the acceptance gate."""
+    """Pin output identity and source IDs as well as coverage; validation remains independent."""
     changed_paths = candidate["payload"].get("changed_paths", [])
-    if not changed_paths and not candidate["payload"].get("read_protocol") and not goals.required(candidate):
-        return REVIEW_SCHEMA
     if not isinstance(changed_paths, list) or any(not isinstance(path, str) for path in changed_paths):
         raise ValueError("invalid candidate changed paths")
     schema = copy.deepcopy(REVIEW_SCHEMA)
+    schema["properties"]["candidate_id"]["enum"] = [candidate["id"]]
+    schema["properties"]["run_generation"]["enum"] = [candidate["run_generation"]]
+    for key, value in candidate["payload"]["scope"].items():
+        schema["properties"]["scope"]["properties"][key]["enum"] = [value]
     if goals.required(candidate):
-        schema["properties"]["goal_review"] = goals.GOAL_SCHEMA
+        report = copy.deepcopy(goals.GOAL_SCHEMA)
+        bundle = candidate["payload"]["requirements"]
+        report["properties"]["requirements_digest"]["enum"] = [bundle["digest"]]
+        known = sorted({g["id"] for g in bundle.get("goals", [])})
+        for assessment in report["properties"]["assessments"]["properties"].values():
+            ids = assessment["properties"]["goal_ids"]
+            if known:
+                ids["items"]["enum"] = known
+            else:
+                ids["maxItems"] = 0
+        schema["properties"]["goal_review"] = report
         schema["required"].append("goal_review")
     if changed_paths:
         schema["properties"]["coverage"]["items"]["enum"] = sorted(set(changed_paths))
@@ -140,12 +152,19 @@ def validate_result(value, candidate):
         raise ValueError("invalid snapshot read requests")
     if reads and value.get("verdict") != "INCONCLUSIVE":
         raise ValueError("requested snapshot reads cannot accompany a final verdict")
-    if (
-        value["candidate_id"] != candidate["id"]
-        or value["run_generation"] != candidate["run_generation"]
-        or value["scope"] != candidate["payload"]["scope"]
-    ):
-        raise ValueError("review candidate/scope/generation mismatch")
+    mismatched = []
+    if value["candidate_id"] != candidate["id"]:
+        mismatched.append("candidate_id")
+    if type(value["run_generation"]) is not int or value["run_generation"] != candidate["run_generation"]:
+        mismatched.append("run_generation")
+    if value["scope"] != candidate["payload"]["scope"]:
+        scope_mismatches = [
+            "scope." + key for key, expected in candidate["payload"]["scope"].items()
+            if not isinstance(value["scope"], dict) or value["scope"].get(key) != expected
+        ]
+        mismatched.extend(scope_mismatches or ["scope fields"])
+    if mismatched:
+        raise ValueError("review candidate/scope/generation mismatch: " + ", ".join(mismatched))
     if value["verdict"] not in VERDICTS:
         raise ValueError("invalid verdict")
     for key in ("coverage", "unverified", "resolved"):
@@ -168,7 +187,9 @@ def validate_result(value, candidate):
     if value["verdict"] == "CHANGES_REQUESTED" and not value["blocking"]:
         raise ValueError("CHANGES_REQUESTED requires actionable blocking findings")
     if value["verdict"] == "APPROVE" and (value["blocking"] or value["unverified"] or not value["coverage"]):
-        raise ValueError("APPROVE has incomplete evidence")
+        raise ValueError("APPROVE has incomplete evidence: " + canonical(dict(
+            blocking=[f["id"] for f in value["blocking"]], unverified=value["unverified"],
+            missing_coverage=sorted(set(candidate["payload"].get("changed_paths", [])) - set(value["coverage"])))))
     changed_paths = set(candidate["payload"].get("changed_paths", []))
     if value["verdict"] == "APPROVE" and changed_paths and (set(value["coverage"]) != changed_paths):
         raise ValueError("APPROVE coverage must list exact changed paths, without descriptions")

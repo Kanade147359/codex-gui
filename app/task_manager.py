@@ -32,6 +32,7 @@ from .codex_execution import CodexExecution
 from .codex_login import CodexLogin
 from .codex_runner import WEB_SEARCH_MODES, CodexRunner, terminate_process
 from .attachments import AttachmentError, AttachmentStore
+from .artifact_gc import ArtifactGC, launch_guard
 from .config import Settings
 from .database import Database, DependencyError, ScheduledError
 from .instructions import load_instructions
@@ -126,7 +127,11 @@ class TaskManager(CodexExecution):
                  app_server: Optional[AppServerClient] = None):
         self.settings = settings
         self.db = db
-        self.attachments = AttachmentStore(settings.home / "attachments", db)
+        self.attachments = AttachmentStore(settings.home / "attachments", db, settings)
+        from .task_files import TaskFiles
+        from .artifacts import ArtifactStore
+        self.files = TaskFiles(self)
+        self.artifacts = ArtifactStore(self)
         self.runner = runner or CodexRunner(settings.codex_bin, settings.subscription_only)
         self.runner.instructions = load_instructions(settings.instructions_path)
         self.providers = ProviderRegistry(db, settings, self.runner)
@@ -146,6 +151,8 @@ class TaskManager(CodexExecution):
         self._attempts: dict[str, int] = {}        # task id -> id of the attempt row being run
         self._adopted: set[str] = set()            # running tasks of a previous GUI whose process is still alive
         self.scheduler = Scheduler(self.tick, settings.scheduler_interval_seconds)
+        self.artifact_gc = ArtifactGC(settings.home, db)
+        self._gc_job: Optional[asyncio.Task] = None
         self.db.add_status_listener(self._status_changed)
         self._slots = asyncio.Semaphore(settings.max_concurrent) if settings.max_concurrent > 0 else None
         from .autopilot.controller import Autopilot
@@ -281,7 +288,7 @@ class TaskManager(CodexExecution):
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
                           allow_subagents: Optional[bool] = None, tool_profile: str = "full", cwd_subdir: str = "",
-                          completion_contract: Optional[dict] = None, attachment_ids=(),
+                          completion_contract: Optional[dict] = None, attachment_ids=(), artifact_refs=(),
                           _defer_dispatch: bool = False, _task_id: Optional[str] = None, _branch: Optional[str] = None) -> dict:
         try:
             engine = self.providers.get(provider)
@@ -310,10 +317,24 @@ class TaskManager(CodexExecution):
         except ValueError as e:
             raise TaskError(str(e)) from e
         prompt = prompt.strip()
-        if not prompt and not attachment_ids:
+        if not prompt and not attachment_ids and not artifact_refs:
             raise TaskError("prompt is required")
+        from .task_files import parts
+        if len(artifact_refs) > 16:
+            raise TaskError("Artifact参照は16件までです。")
+        refs = []
+        for ref in artifact_refs:
+            if not isinstance(ref, dict) or not isinstance(ref.get("source_task_id"), str):
+                raise TaskError("Artifact参照が不正です。")
+            parts(ref.get("path", ""))
+            self.get(ref.get("source_task_id", ""))
+            if ref in refs:
+                raise TaskError("Artifact参照が重複しています。")
+            refs.append(ref)
         await self._check_images(attachment_ids, provider=provider)
-        name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Image task")
+        if len(refs) + sum(self.attachments.get(aid)["kind"] == "file" for aid in attachment_ids) > 16:
+            raise TaskError("入力ファイルとArtifact参照は合計16件までです。")
+        name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Attachment task")
         model = model.strip()
         if model.startswith("-") or len(model) > 256 or any(ord(c) < 32 for c in model):
             raise TaskError("invalid model name")
@@ -344,6 +365,7 @@ class TaskManager(CodexExecution):
         if dependency_policy not in DEPENDENCY_POLICIES:
             raise TaskError(f"invalid dependency policy: {dependency_policy} (allowed: {', '.join(DEPENDENCY_POLICIES)})")
         deps = self._check_dependency_ids(depends_on)
+        deps = list(dict.fromkeys([*deps, *(r["source_task_id"] for r in refs)]))
 
         repo_input = Path(repository.strip()).expanduser()
         if not repository.strip() or not repo_input.is_dir():
@@ -382,6 +404,7 @@ class TaskManager(CodexExecution):
 
         try:
             self.db.create_task(
+                artifact_refs=refs,
                 depends_on=deps, message=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).message(),
                 id=task_id, name=name, provider=provider, provider_options=json.dumps(provider_options or {}), repository=repo, worktree=str(wt), branch=branch,
                 base_ref=base_ref, base_sha=base_sha, prompt=prompt, model=model,
@@ -398,6 +421,16 @@ class TaskManager(CodexExecution):
             )
         except DependencyError as e:
             raise TaskError(str(e), 400, e.code) from e
+        except AttachmentError as e:
+            # Another task can win ownership while Git creates this task's worktree.
+            # Remove only this just-created, unstarted worktree and its branch.
+            if not deps:
+                try:
+                    await git.remove_worktree(repo, wt)
+                    await git.delete_branch(repo, branch)
+                except git.GitError:
+                    logger.exception("could not remove unstarted worktree after attachment conflict: %s", wt)
+            raise TaskError(str(e), 400, "invalid_attachment") from e
         self.db.touch_repo(repo, now_iso())
         if ctx_fields["tool_profile"] != "full":
             self._verify_in_background(task_id)
@@ -480,17 +513,18 @@ class TaskManager(CodexExecution):
             raise TaskError("task is blocked by a prerequisite; use Run Anyway or fix the dependency", 409, "blocked")
         self._require_worktree(task)
 
-    async def _check_images(self, ids, resume=False, provider="codex") -> None:
+    async def _check_images(self, ids, resume=False, provider="codex", task_id=None) -> None:
         if not ids:
             return
         try:
-            await asyncio.to_thread(self.attachments.resolve, ids)
-            if provider == "codex":
+            await asyncio.to_thread(self.attachments.resolve, ids, task_id)
+            if provider == "codex" and self.attachments.paths(ids):
                 await self.runner.check_image_support(self.settings.backend, resume)
         except AttachmentError as e:
             raise TaskError(str(e), 400, "invalid_attachment") from e
 
     def _image_input(self, prompt: str, ids) -> list[dict]:
+        prompt = self.attachments.file_prompt(prompt, ids)
         return ([{"type": "text", "text": prompt}] if prompt else []) + [
             {"type": "localImage", "path": path} for path in self.attachments.paths(ids)]
 
@@ -506,7 +540,7 @@ class TaskManager(CodexExecution):
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("instruction is required")
-        await self._check_images(attachment_ids, resume=True, provider=self.get(task_id)["provider"])
+        await self._check_images(attachment_ids, resume=True, provider=self.get(task_id)["provider"], task_id=task_id)
         tier = self._turn_tier(service_tier)
         task = self.get(task_id)
         if task["provider"] != "codex" and tier not in (None, "default"):
@@ -550,6 +584,7 @@ class TaskManager(CodexExecution):
         if not info or not info.get("turn") or task["status"] != "running":
             raise TaskError("the turn has not started yet; try again in a moment", 409, "active")
         try:
+            self.db.claim_files(task["id"], attachment_ids)
             await (await self.client()).request(
                 "turn/steer", {"threadId": info["thread"], "expectedTurnId": info["turn"],
                                "input": self._image_input(prompt, attachment_ids)}, timeout=30)
@@ -613,7 +648,7 @@ class TaskManager(CodexExecution):
                 raise TaskError("same-provider settings stay fixed; create a separate task to change them")
         except ProviderError as e:
             raise TaskError(str(e), 400, e.failure.kind) from e
-        await self._check_images(attachment_ids, provider=target)
+        await self._check_images(attachment_ids, provider=target, task_id=task_id)
         if target != task["provider"]:
             handoff = {
                 "previous_provider": task["provider"], "previous_session_id": session_id(task),
@@ -675,6 +710,14 @@ class TaskManager(CodexExecution):
         return _Turn.from_json(task["pending_turn"]) or _Turn(task["last_prompt"] or task["prompt"], trigger="initial")
 
     def _dispatch(self, task_id: str) -> bool:
+        # GC runs in a worker thread. A nonblocking interprocess gate keeps the event loop responsive;
+        # queued tasks remain protected and the scheduler dispatches them after collection finishes.
+        with launch_guard(self.settings.home) as acquired:
+            if not acquired:
+                return False
+            return self._dispatch_guarded(task_id)
+
+    def _dispatch_guarded(self, task_id: str) -> bool:
         """Claim a queued task and start its job. The claim is an atomic UPDATE: of any number of callers (a request, the
         scheduler, a status listener) exactly one wins, so a task is never started twice. False if this call did not start it."""
         try:
@@ -788,8 +831,13 @@ class TaskManager(CodexExecution):
         """Before Codex is started: the worktree must exist (a waiting task gets it now), and before a retry its state is
         recorded. Nothing is reset, cleaned or checked out. False if the run cannot go on (the task is settled already)."""
         try:
-            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread), provider=self.get(task_id)["provider"])
-        except TaskError as e:
+            from .task_files import FileError
+            requests = self.db.artifact_requests(task_id)
+            if turn.trigger == "initial" or any(not r["attachment_id"] for r in requests):
+                await asyncio.to_thread(self.artifacts.prepare_requests, task_id, turn)
+            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread),
+                                     provider=self.get(task_id)["provider"], task_id=task_id)
+        except (TaskError, FileError, AttachmentError) as e:
             self._settle(task_id, log, turn, "failed", failure=Failure("invalid_attachment", recovery.NON_RETRYABLE, str(e)))
             return False
         task = self.get(task_id)
@@ -1058,7 +1106,7 @@ class TaskManager(CodexExecution):
 
         async def feed_prompt():
             try:
-                prompt = turn.prompt + "\n\n" + completion.RESULT_INSTRUCTION
+                prompt = self.attachments.file_prompt(turn.prompt, turn.attachment_ids) + "\n\n" + completion.RESULT_INSTRUCTION
                 rules = json.loads(task["completion_contract"] or "{}")
                 if rules:
                     prompt += "\nCompletion contract: " + json.dumps(rules)
@@ -1480,6 +1528,9 @@ class TaskManager(CodexExecution):
         self._shutting_down = True
         await self.autopilot.shutdown()
         await self.scheduler.stop()
+        if self._gc_job is not None:
+            # Cancelling to_thread does not stop removal. Drain it before closing the DB or the app.
+            await asyncio.shield(asyncio.gather(self._gc_job, return_exceptions=True))
         self.db.remove_status_listener(self._status_changed)
         for task_id in list(self._jobs):
             task = self.db.get_task(task_id)
@@ -1670,11 +1721,33 @@ class TaskManager(CodexExecution):
         if self._shutting_down:
             return
         for name, step in (("autopilot", self.autopilot.tick), ("dependencies", self._tick_dependencies), ("retries", self._tick_retries),
-                           ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue)):
+                           ("orphans", self._tick_orphans), ("scheduled", self._tick_scheduled), ("queue", self._tick_queue),
+                           ("artifact_gc", self._tick_artifact_gc)):
             try:
                 step()
             except Exception:
                 logger.exception("scheduler step %s failed", name)
+
+    def start_artifact_gc(self, dry_run=True, trigger="manual") -> asyncio.Task:
+        if self._shutting_down or (self._gc_job is not None and not self._gc_job.done()):
+            raise TaskError("Build artifact GC is already running or shutting down", 409, "gc_busy")
+        self._gc_job = asyncio.create_task(asyncio.to_thread(self.artifact_gc.run, dry_run, trigger))
+        def finished(job):
+            if not job.cancelled() and job.exception() is not None:
+                logger.error("build artifact GC failed: %s", job.exception())
+            self.scheduler.wake()
+        self._gc_job.add_done_callback(finished)
+        return self._gc_job
+
+    def _tick_artifact_gc(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._gc_job is not None and not self._gc_job.done():
+            return
+        if self.artifact_gc.due():
+            self.start_artifact_gc(dry_run=not self.artifact_gc.settings()["auto_delete"], trigger="daily")
 
     # ---------- scheduled instructions (a follow-up turn for an existing thread, after other tasks) ----------
 
@@ -1687,7 +1760,7 @@ class TaskManager(CodexExecution):
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("instruction is required", 400, "empty")
-        await self._check_images(attachment_ids, resume=True, provider=self.get(task_id)["provider"])
+        await self._check_images(attachment_ids, resume=True, provider=self.get(task_id)["provider"], task_id=task_id)
         task = self.get(task_id)
         tier = self._turn_tier(service_tier) or "default"
         if task["provider"] != "codex" and tier != "default":
@@ -2083,6 +2156,7 @@ class TaskManager(CodexExecution):
         task = self._present(dict(task), latest, scheduled=self.db.scheduled_counts())
         task["messages"] = [row | {"attachments": self.attachments.views(row["attachment_ids"])}
                             for row in self.db.list_messages(task["id"])]
+        task["artifact_requests"] = self.db.artifact_requests(task["id"])
         task["scheduled_instructions"] = [self._scheduled_view(r) for r in self.db.list_scheduled(task["id"])]
         task["dependents"] = [{"id": d["id"], "name": d["name"], "status": d["status"]}
                               for d in map(self.db.get_task, self.db.dependents_of(task["id"])) if d]

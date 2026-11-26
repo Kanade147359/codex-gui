@@ -12,6 +12,8 @@ Codex CLI を複数同時に動かして一画面で管理する、ローカル 
 - Stop、Commit / Push、Worktree / Branch の削除、SQLite による履歴保存
 - [Autopilot](docs/autopilot/README.md): Markdownから大タスクを登録し、検証・独立レビュー・修正・統合を管理。基本モデルを指定でき、推論強度は既定High、Markdown指定を優先します。[大タスク詳細とメンター](docs/autopilot/workflow-controls.md)から、進捗・集約した確認事項・追加指示・追加タスクを操作できます。
 
+- ファイルの添付・Filesタブでの取得・不変Artifactのタスク間転送（[操作・API・安全性と検証](docs/file-transfer/README.md)）
+
 > **注意:** この GUI 自体にはログイン（認証）がありません。公開する前に[セキュリティ](#セキュリティ)を読んでください。
 
 ## 目次

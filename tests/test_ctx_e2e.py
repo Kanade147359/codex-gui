@@ -30,7 +30,7 @@ SPAWN = ("call", "spawn_agent", {"task_name": "child", "message": "x", "fork_tur
 
 
 @pytest.fixture
-def stack(tmp_path, settings, db, monkeypatch):
+def stack(tmp_path, settings, db, monkeypatch, private_codex_runtime):
     """A TaskManager on the real codex app-server whose model is the fake endpoint. Returns (manager, mock, make_task)."""
     mock = MockResponses().start()
     home = codex_home(tmp_path / "codexhome", f'''

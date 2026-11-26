@@ -111,8 +111,11 @@ async def changed_paths(root, base, head="HEAD"):
 async def submit_head(task, spec, permission):
     root = task["worktree"]
     paths = await changed_paths(root, task["base_sha"])
-    if any(not owns(p, spec["paths"]) for p in paths):
-        raise ValueError("candidate contains changes outside approved edit ownership")
+    outside = sorted(p for p in paths if not owns(p, spec["paths"]))
+    if outside:
+        raise ValueError("candidate contains changes outside approved edit ownership: "
+                         f"base={task['base_sha']}; head={await sha(root)}; "
+                         f"unowned_paths={outside[:8]} (total={len(outside)})")
     _, dirty, _ = await git(
         root, "status", "--porcelain", "--", ".", ":(exclude).autopilot-inputs", ":(exclude).autopilot-fix"
     )

@@ -1,0 +1,35 @@
+Review-stop regression validation
+Branch: codex-gui/118133d6-task
+Date: 2026-10-19 JST
+
+Regression baseline (archived c4ec1e338924e234f391a5396aa493d22b71a9a1 app):
+  python -m pytest -q tests/test_autopilot_review_stops.py --tb=short
+  Exit 1: 10 failed, 7 passed in 0.32s
+  Failure names: review-stops-before-results.txt
+
+After fixes, focused sanitized regressions:
+  python -m pytest -q tests/test_autopilot_review_stops.py --tb=short
+  Exit 0: 17 passed
+
+Combined validation, temporary settings/databases/repos only:
+  CODEX_GUI_AUTOPILOT_CLI_SMOKE=1 PYTHONDONTWRITEBYTECODE=1 \
+    /home/kanade/workspace/codex-gui/.venv/bin/python -m pytest -q \
+    tests/test_autopilot_review_stops.py tests/test_autopilot.py tests/test_autopilot_goals.py \
+    tests/test_autopilot_review_summary.py tests/test_autopilot_safety_regressions.py \
+    tests/test_autopilot_execution_mentor.py tests/test_autopilot_workflow_controls.py \
+    tests/test_autopilot_documents.py tests/test_autopilot_api.py tests/test_autopilot_toolchains.py \
+    tests/test_autopilot_cli_smoke.py --tb=short
+  Exit 0: 188 passed, 1 skipped, 2 warnings in 52.65s
+  Skip: opt-in installed Rust/Node/Python offline sandbox build.
+  Warnings: existing Starlette/httpx deprecation; deliberately duplicated ZIP entry in negative test.
+  Installed CLI smoke uses MockResponses, isolated scratch, no live model/auth/billing.
+
+Additional read-only replay against the five stored candidate snapshots:
+  R149: 3 partitions; all 3 required artifact bodies complete, eof=True.
+  R157: 3 partitions; all 3 required artifact bodies complete, eof=True.
+  R158: 3 partitions; all 3 required artifact bodies complete, eof=True.
+  R160: 3 partitions; all 3 required artifact bodies complete, eof=True (RESULTS.json: 237 lines).
+  R161: 3 partitions; all 3 required artifact bodies complete, eof=True.
+
+No production server or workflow was started/restarted/resumed by this task.
+Concurrent owner_turn records in production are documented separately in review-stops-38e8e79a.txt.

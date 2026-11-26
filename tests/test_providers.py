@@ -88,6 +88,31 @@ def test_terminal_json_completion_through_the_real_process_pipeline(git_repo, ma
     asyncio.run(scenario())
 
 
+def test_regular_file_inputs_remain_scoped_and_are_not_encoded_as_claude_images(git_repo, make_manager):
+    manager = configure(make_manager())
+    payload = b'opaque-file-content-never-inline-93e1'
+    async def stream():
+        yield payload
+    async def scenario():
+        try:
+            upload = await manager.attachments.upload_file(stream(), 'input.txt')
+            task = await create(manager, git_repo, 'Read the file', attachment_ids=[upload['id']])
+            first = await finished(manager, task)
+            assert first['task_outcome'] == 'success'
+            await manager.send_instruction(task['id'], 'Read the same input again', attachment_ids=[upload['id']])
+            done = await finished(manager, task)
+            assert done['task_outcome'] == 'success' and session_id(done) == session_id(first)
+            calls = [json.loads(line) for line in fixture_calls(done['worktree']).read_text().splitlines()]
+            assert len(calls) == 2
+            for call in calls:
+                assert 'Attached input files' in call['prompt'] and 'input.txt' in call['prompt']
+                assert payload.decode() not in call['prompt']
+                assert call['images'] == 0
+        finally:
+            await manager.shutdown()
+    asyncio.run(scenario())
+
+
 def test_new_resume_schedule_and_restart(git_repo, make_manager):
     m = configure(make_manager())
     async def scenario():

@@ -1,0 +1,630 @@
+{
+  "R149": {
+    "source_review_id": "1da1e31e62964f1380afb57d7d2fbfe7",
+    "source_file": "part-1.jsonl",
+    "candidate": {
+      "id": "candidate-R149",
+      "run_generation": 1,
+      "payload": {
+        "scope": {
+          "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "changed_paths": [
+          "audit/R149/HANDOFF.md",
+          "audit/R149/REPORT.md",
+          "audit/R149/RESULTS.json"
+        ],
+        "requirements": {
+          "version": 2,
+          "digest": "requirements-fixed",
+          "goals": [
+            {
+              "id": "G-EVIDENCE"
+            },
+            {
+              "id": "I-FAIL-CLOSED"
+            },
+            {
+              "id": "I-NO-MERGE"
+            },
+            {
+              "id": "I-AUTHORITY"
+            },
+            {
+              "id": "G-INTEGRATION"
+            }
+          ],
+          "documents": [
+            {
+              "name": "documents/COMMON.md"
+            }
+          ]
+        }
+      }
+    },
+    "result": {
+      "candidate_id": "candidate-R149",
+      "run_generation": 1,
+      "scope": {
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "verdict": "APPROVE",
+      "blocking": [],
+      "nonblocking": [],
+      "resolved": [],
+      "coverage": [
+        "audit/R149/REPORT.md"
+      ],
+      "unverified": [
+        "audit/R149/RESULTS.json",
+        "audit/R149/HANDOFF.md"
+      ],
+      "goal_review": {
+        "version": 2,
+        "requirements_digest": "requirements-fixed",
+        "assessments": {
+          "task_correctness": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (task_correctness)."
+          },
+          "goal_alignment": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED",
+              "I-NO-MERGE",
+              "I-AUTHORITY",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (goal_alignment)."
+          },
+          "architectural_consistency": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "I-AUTHORITY",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (architectural_consistency)."
+          },
+          "evidence_completeness": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (evidence_completeness)."
+          }
+        },
+        "root_causes": []
+      },
+      "requested_reads": []
+    }
+  },
+  "R157": {
+    "source_review_id": "5fafdb2d6a894aa2806bf0efd0b080fd",
+    "source_file": "part-0.jsonl",
+    "candidate": {
+      "id": "candidate-R157",
+      "run_generation": 1,
+      "payload": {
+        "scope": {
+          "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "changed_paths": [
+          "audit/R157/HANDOFF.md",
+          "audit/R157/REPORT.md",
+          "audit/R157/RESULTS.json"
+        ],
+        "requirements": {
+          "version": 2,
+          "digest": "requirements-fixed",
+          "goals": [
+            {
+              "id": "G-EVIDENCE"
+            },
+            {
+              "id": "I-FAIL-CLOSED"
+            },
+            {
+              "id": "I-NO-MERGE"
+            },
+            {
+              "id": "I-AUTHORITY"
+            },
+            {
+              "id": "G-INTEGRATION"
+            }
+          ],
+          "documents": [
+            {
+              "name": "documents/COMMON.md"
+            }
+          ]
+        }
+      }
+    },
+    "result": {
+      "candidate_id": "candidate-R157",
+      "run_generation": 1,
+      "scope": {
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "verdict": "APPROVE",
+      "blocking": [],
+      "nonblocking": [
+        {
+          "id": "NB-R157-HANDOFF-01",
+          "path": "audit/R157/HANDOFF.md",
+          "line": 4,
+          "reason": "Bullet 2 asserts independent re-runs of D0 2/2 and PostgreSQL 18.6 21/21 cases. Verbatim log excerpts and build commands that substantiate these claims belong in REPORT.md/RESULTS.json (other partitions). If those companion files omit the supporting log excerpts, I-FAIL-CLOSED is at risk in those partitions. Non-blocking at HANDOFF.md level because HANDOFF is a summary document and the validation script confirmed companion files pass all schema and size checks."
+        }
+      ],
+      "resolved": [],
+      "coverage": [
+        "audit/R157/HANDOFF.md"
+      ],
+      "unverified": [
+        "audit/R157/REPORT.md",
+        "audit/R157/RESULTS.json"
+      ],
+      "goal_review": {
+        "version": 2,
+        "requirements_digest": "requirements-fixed",
+        "assessments": {
+          "task_correctness": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (task_correctness)."
+          },
+          "goal_alignment": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED",
+              "I-NO-MERGE",
+              "I-AUTHORITY",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (goal_alignment)."
+          },
+          "architectural_consistency": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "I-NO-MERGE",
+              "I-AUTHORITY"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (architectural_consistency)."
+          },
+          "evidence_completeness": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (evidence_completeness)."
+          }
+        },
+        "root_causes": []
+      },
+      "requested_reads": []
+    },
+    "orphan_root_cause": {
+      "finding_id": "F-R157-01",
+      "classification": "TASK_ASSUMPTION_FALSE",
+      "reproduction": "Check the pinned subject diff.",
+      "observed": "Subject log has trailing whitespace.",
+      "expected": "Scope the subject check accurately.",
+      "requirement_refs": [
+        "G-EVIDENCE",
+        "I-FAIL-CLOSED"
+      ],
+      "counterexample": "Clean working tree does not prove clean pinned diff.",
+      "evidence_refs": [
+        "snapshot:audit/R157/RESULTS.json:90"
+      ]
+    }
+  },
+  "R158": {
+    "source_review_id": "7ddd1193a83942ffbd986a18aff151fb",
+    "source_file": "part-0.jsonl",
+    "candidate": {
+      "id": "candidate-R158",
+      "run_generation": 1,
+      "payload": {
+        "scope": {
+          "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "changed_paths": [
+          "audit/R158/HANDOFF.md",
+          "audit/R158/REPORT.md",
+          "audit/R158/RESULTS.json"
+        ],
+        "requirements": {
+          "version": 2,
+          "digest": "requirements-fixed",
+          "goals": [
+            {
+              "id": "G-EVIDENCE"
+            },
+            {
+              "id": "I-FAIL-CLOSED"
+            },
+            {
+              "id": "I-NO-MERGE"
+            },
+            {
+              "id": "I-AUTHORITY"
+            },
+            {
+              "id": "G-INTEGRATION"
+            }
+          ],
+          "documents": [
+            {
+              "name": "documents/COMMON.md"
+            }
+          ]
+        }
+      }
+    },
+    "result": {
+      "candidate_id": "candidate-R158",
+      "run_generation": 1,
+      "scope": {
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "verdict": "INCONCLUSIVE",
+      "blocking": [],
+      "nonblocking": [],
+      "resolved": [],
+      "coverage": [
+        "audit/R158/HANDOFF.md"
+      ],
+      "unverified": [
+        "audit/R158/REPORT.md",
+        "audit/R158/RESULTS.json"
+      ],
+      "goal_review": {
+        "version": 2,
+        "requirements_digest": "requirements-fixed",
+        "assessments": {
+          "task_correctness": {
+            "status": "UNKNOWN",
+            "goal_ids": [
+              "AC-PR158-INDEPENDENT-AUDIT"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (task_correctness)."
+          },
+          "goal_alignment": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-INTEGRATION",
+              "I-FAIL-CLOSED",
+              "I-NO-MERGE"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (goal_alignment)."
+          },
+          "architectural_consistency": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "I-AUTHORITY",
+              "I-NO-MERGE"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (architectural_consistency)."
+          },
+          "evidence_completeness": {
+            "status": "UNKNOWN",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (evidence_completeness)."
+          }
+        },
+        "root_causes": []
+      },
+      "requested_reads": [
+        {
+          "path": "audit/R158/REPORT.md",
+          "start": 1,
+          "end": 240
+        },
+        {
+          "path": "audit/R158/RESULTS.json",
+          "start": 1,
+          "end": 240
+        }
+      ]
+    }
+  },
+  "R160": {
+    "source_review_id": "b77fb9360ed34dc894bcba2eeeb376e9",
+    "source_file": "part-0.jsonl",
+    "candidate": {
+      "id": "candidate-R160",
+      "run_generation": 1,
+      "payload": {
+        "scope": {
+          "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "changed_paths": [
+          "audit/R160/HANDOFF.md",
+          "audit/R160/REPORT.md",
+          "audit/R160/RESULTS.json"
+        ],
+        "requirements": {
+          "version": 2,
+          "digest": "requirements-fixed",
+          "goals": [
+            {
+              "id": "G-EVIDENCE"
+            },
+            {
+              "id": "I-FAIL-CLOSED"
+            },
+            {
+              "id": "I-NO-MERGE"
+            },
+            {
+              "id": "I-AUTHORITY"
+            },
+            {
+              "id": "G-INTEGRATION"
+            }
+          ],
+          "documents": [
+            {
+              "name": "documents/COMMON.md"
+            }
+          ]
+        }
+      }
+    },
+    "result": {
+      "candidate_id": "candidate-R160",
+      "run_generation": 1,
+      "scope": {
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "verdict": "APPROVE",
+      "blocking": [],
+      "nonblocking": [],
+      "resolved": [],
+      "coverage": [
+        "audit/R160/HANDOFF.md"
+      ],
+      "unverified": [
+        "audit/R160/REPORT.md",
+        "audit/R160/RESULTS.json"
+      ],
+      "goal_review": {
+        "version": 2,
+        "requirements_digest": "requirements-fixed",
+        "assessments": {
+          "task_correctness": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (task_correctness)."
+          },
+          "goal_alignment": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED",
+              "I-NO-MERGE",
+              "I-AUTHORITY",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (goal_alignment)."
+          },
+          "architectural_consistency": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "I-AUTHORITY",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (architectural_consistency)."
+          },
+          "evidence_completeness": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (evidence_completeness)."
+          }
+        },
+        "root_causes": []
+      },
+      "requested_reads": []
+    },
+    "subject_artifact": {
+      "pr": 160,
+      "base_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "head_sha": "ffffffffffffffffffffffffffffffffffffffff",
+      "verdict": "CHANGES_REQUIRED",
+      "findings": [
+        {
+          "id": "R160-01",
+          "classification": "IMPLEMENTATION_DEFECT",
+          "path": "src/content_replication/journal.rs",
+          "line": 37,
+          "observed": "Journal::open initializes attempts=0 and bytes=0 whenever the path is absent, even with an existing placement; no fresh authority or new placement ID is required."
+        },
+        {
+          "id": "R160-02",
+          "classification": "IMPLEMENTATION_DEFECT",
+          "path": "src/content_replication/sink.rs",
+          "line": 40,
+          "observed": "The same-placement second PUT exits 0 after restart because Sink::open creates empty requests/budgets for an existing data directory when sink.json is absent."
+        }
+      ]
+    }
+  },
+  "R161": {
+    "source_review_id": "1c41c67dab594c2da2e42e7a69357d1e",
+    "source_file": "part-1.jsonl",
+    "candidate": {
+      "id": "candidate-R161",
+      "run_generation": 1,
+      "payload": {
+        "scope": {
+          "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "changed_paths": [
+          "audit/R161/HANDOFF.md",
+          "audit/R161/REPORT.md",
+          "audit/R161/RESULTS.json"
+        ],
+        "requirements": {
+          "version": 2,
+          "digest": "requirements-fixed",
+          "goals": [
+            {
+              "id": "G-EVIDENCE"
+            },
+            {
+              "id": "I-FAIL-CLOSED"
+            },
+            {
+              "id": "I-NO-MERGE"
+            },
+            {
+              "id": "I-AUTHORITY"
+            },
+            {
+              "id": "G-INTEGRATION"
+            }
+          ],
+          "documents": [
+            {
+              "name": "documents/COMMON.md"
+            }
+          ]
+        }
+      }
+    },
+    "result": {
+      "candidate_id": "candidate-R161",
+      "run_generation": 1,
+      "scope": {
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "bbbbbbbbbbbbbbbbbfbbbbbbbbbbbbbbbbbbbbbb",
+        "tree_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "diff_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "verdict": "INCONCLUSIVE",
+      "blocking": [],
+      "nonblocking": [],
+      "resolved": [],
+      "coverage": [
+        "audit/R161/REPORT.md"
+      ],
+      "unverified": [
+        "Companion audit artifacts not supplied."
+      ],
+      "goal_review": {
+        "version": 2,
+        "requirements_digest": "requirements-fixed",
+        "assessments": {
+          "task_correctness": {
+            "status": "UNKNOWN",
+            "goal_ids": [
+              "G-EVIDENCE"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (task_correctness)."
+          },
+          "goal_alignment": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "I-FAIL-CLOSED",
+              "G-INTEGRATION"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (goal_alignment)."
+          },
+          "architectural_consistency": {
+            "status": "ALIGNED",
+            "goal_ids": [
+              "I-AUTHORITY",
+              "I-NO-MERGE"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (architectural_consistency)."
+          },
+          "evidence_completeness": {
+            "status": "UNKNOWN",
+            "goal_ids": [
+              "G-EVIDENCE",
+              "I-FAIL-CLOSED"
+            ],
+            "evidence": "Sanitized: inspected audit document against fixed requirements (evidence_completeness)."
+          }
+        },
+        "root_causes": []
+      },
+      "requested_reads": [
+        {
+          "path": "audit/R161/RESULTS.json",
+          "start": 1,
+          "end": 240
+        },
+        {
+          "path": "audit/R161/HANDOFF.md",
+          "start": 1,
+          "end": 240
+        }
+      ]
+    }
+  },
+  "R150": {
+    "source_task_id": "173e0e86",
+    "owned_paths": [
+      "audit/R150"
+    ],
+    "registered_base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "actual_parent": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "changed_count": 404,
+    "outside_ownership_count": 401,
+    "example_outside_paths": [
+      "AGENTS.md",
+      "README.md",
+      "src/agent.rs"
+    ]
+  }
+}

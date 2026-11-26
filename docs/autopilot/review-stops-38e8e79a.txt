@@ -1,0 +1,252 @@
+Autopilot 6件の停止調査・最小修正
+調査日: 2026-10-19 JST
+workflow: 38e8e79a45b24ad9a8a1f0bd415f754d
+修正branch: codex-gui/118133d6-task
+修正前SHA: c4ec1e338924e234f391a5396aa493d22b71a9a1
+以下の6件の原因は、調査開始時に保存した2026-10-15の失敗試行と候補を基準にしている。
+調査途中に別途owner_turnが登録されたため、最終確認時の稼働状態とは区別する（末尾参照）。
+
+結論
+6件とも「監査対象PRの不承認」と「監査文書作成タスクの不承認」を区別する必要がある。
+R150はcandidate作成前のownership拒否。残り5件は構造的なvalidatorがPASSした後、
+レビュー応答の意味・参照・同一性検査で拒否された。承認ゲートの拒否自体は正しい。
+ただし必須の補助成果物が初回partition入力から落ちる構成、固定値を制約しない出力schema、
+不足項目を特定できないエラー、ownershipをモデル設定に誘導する表示に改善余地があった。
+これらだけを修正し、既存成果物・候補・DB状態・retry budgetは変更していない。
+
+調査方法と証跡の所在
+本番DBは sqlite3 の file:...?...mode=ro 接続でSELECTのみ実施した。
+本番DBをアプリのDatabaseクラスで開いたり、migrationや状態更新を実行したりしていない。
+対象task/node/candidate/review/validationの必要レコードだけを/tmpへ保存して照合した。
+入力は各taskと固定snapshotの .autopilot-inputs/requirements.json およびそのdocuments/rules。
+6タスクのbundleと本文digest、5候補の保存requirementsとsnapshotのbundleは一致した。
+本文の照合はreadのみで行い、materialize/verify関数は呼んでいない（verifyはmaterializeを呼ぶ）。
+
+以下の証跡パスは本番データ側の読取専用参照であり、このbranchにログ全文は複製していない。
+  DB: ~/.local/share/codex-gui/codex-gui.db
+  実装実行ログ: ~/.local/share/codex-gui/logs/<task_id>.jsonl
+  レビューログ: ~/.local/share/codex-gui/autopilot/logs/<review_id>/<file>.jsonl
+  snapshot: ~/.local/share/codex-gui/autopilot/snapshots/<candidate_id>/
+  成果物prefix: docs/reviews/autopilot-storage-wave-20261016/<node>/
+
+review.payload.redacted_event_logはevents.jsonlを指すが、今回のpartition実行では
+実ファイルはpart-N.jsonl/read-N.jsonlだった。events.jsonlの不存在をモデル出力の未生成とは扱わない。
+Claudeの最終type=result.structured_outputと、Codexのitem/completed.agentMessageを検査した。
+Claudeへ送ったstdinそのものの保存ファイルは確認できないため、当時の入力は固定候補・
+validator・実装から再構成した。欠落とread要求はモデル応答にも明記されている。
+Codex R161ではuserMessageに実際のJSON入力が残り、固定scopeの正しさも直接確認できた。
+
+targetと各SHA・世代の意味
+app/autopilot/decisions.py:target はnode ID/spec/candidate ID/node generation/
+decision_epoch/authorization/workflow run_generation/reasonをdigestした決定対象トークン。
+Git SHAではない。review_summaryのtargetはこのdecision_targetを表示している。
+候補scopeはgit.py:scopeのbase_sha/head_sha/tree_sha/diff_digestの組である。
+run_generationはworkflowの実行世代、candidate.generationはnodeの候補世代、
+review.generationはその候補へのレビュー試行番号であり、互いに置き換えられない。
+なおR160の監査指示にあるvalidate.py --targetは試験出力ディレクトリで、これらとも別物。
+
+全タスクの登録比較基点:
+  8498249670322f3cf94587675086bf2e20c4c976
+監査文書のCOMMON.md:32で指示される監査開始時main基点:
+  c06a82f7f6473f7e0781f7cd79db8c78c42843c2
+COMMON.md:34,60および各Rn.md:69は、SUCCESSが監査成果物提出を意味し、
+元PRのAPPROVEや本番運用資格ではないことを明記している。
+
+DBのtasks.branchと、実際にworktreeでcheckoutされているbranchも区別した。
+R149のDB branchはcodex-gui/e8b34b24-autopilot-markdown-workflow-r1、
+R150はcodex-gui/173e0e86-autopilot-markdown-workflow-r1で、両refのHEADは登録base84982496...。
+実際のcheckout先はそれぞれreview/pr149-independent-r149と
+review/autopilot-storage-r150-20261016へ変わっており、下表は実worktree/候補のHEADである。
+他4件はDB branchとcheckout先が一致する。いずれも監査対象コードのHEADとは別である。
+
+調査開始時の候補HEAD（監査文書）と監査対象コードHEAD（RESULTS.json.head_sha）
+R149 candidate 6bfb6411bc3f4d429ef6b134767b429f
+  文書HEAD c89badec0b29d8a9a02af15094fb79e966c6ad2a
+  対象HEAD e385becda0fda1e50848280b1baf8645612334a2
+R150 candidateなし
+  現在の結果branch HEAD c2c8669adc4aa1f23e2d5634dee91cb093f285c7
+  対象HEAD b066e8233a503fd675a934a65def1613273a1281
+R157 candidate 6052446cf60a40129d0178e08fb798b9
+  文書HEAD c2bc1dc0046e338bf0261fd75eb4c6ce964a1208
+  対象HEAD 7a716867d62704b08d90536ad648844f318e163f
+R158 candidate 4be36c6c203149048e0a54d847a84531
+  文書HEAD 0e1732f255a23f8bf4654d4d3fd64d11f3e6c280
+  対象HEAD 3a73393ad0c72470cd91c7c0a8c18a7179b78041
+R160 candidate 31fd4a64b12045688ff2cac6060631f1
+  文書HEAD bf6a08ec2617a242bdc86329e55c5dc4c9630dc1
+  対象HEAD 2c0c9fc504bdb4f27816144aa18424fff370ab74
+R161 candidate 5d5f6e723c4545efb8c08b94bbcc44fe
+  文書HEAD 9a8fd3e8416be3532a340fdcd26190c395db30c8
+  対象HEAD 98c7bc0665f2d06c5c64ae36d923261b1497176f
+
+各停止の原因・根拠・修正・残作業
+
+R149 / e8b34b24
+  状態: blocked_infrastructure、Review retry budget exhausted: APPROVE has incomplete evidence。
+  validator 80241c4eaabb4828a7a48746781b4243 はPASS。
+  試行1: review 423b4b3266d84759b3431cd5c2465c32/part-0.jsonl:830。
+    HANDOFFのみcoverage、APPROVEなのにunverifiedにREPORT、RESULTS、16件cargo testの生ログ。
+    task_correctness.goal_idsにAC-PR149-INDEPENDENT-AUDITも混入（前段の不足証跡検査で停止）。
+  試行2/3: HANDOFFからのread要求にはREPORT/RESULTSが渡り、read-0でunverified=[]。
+    しかし次のREPORT partitionは再び補助文書を受け取らず、APPROVEと未確認を併記した。
+    試行3 review 1da1e31e62964f1380afb57d7d2fbfe7/part-1.jsonl:595 は
+    unverified=[RESULTS.json,HANDOFF.md]、blocking=[]、REPORTのcoverageは存在する。
+  分類: 文書は生成・commit・snapshot保存済みだが、初回partition関連入力に渡されなかった。
+    生cargoログの全保管場所や未生成までは確認できず、snapshotで利用できないとの応答である。
+  修正: 必須文書のbounded readを全partition/overallのrelatedへ供給。goal ID schema制約と診断詳細化。
+  残作業: 必要と判断される追加生ログの所在・保存性、文書の実質的妥当性は新たな独立レビューが必要。
+    本修正だけで自動的にAPPROVEとはしない。対象PR/本番受入も未承認のまま。
+
+R150 / 173e0e86
+  状態: blocked_configuration、candidate contains changes outside approved edit ownership。
+  candidate/review/validatorレコードはない。モデル設定の障害を示す証跡もない。
+  ownership: docs/reviews/autopilot-storage-wave-20261016/R150配下のみ。
+  実装ログ173e0e86.jsonl:134,136,137に
+    git switch -c review/autopilot-storage-r150-20261016 origin/main
+  が保存されている。結果commitの親はc06a82f7...、固定タスクbaseは84982496...。
+  HEAD単体は監査文書3件のみだが、固定base..HEADには404パス、うち401パスがownership外。
+  例: AGENTS.md、README.md、apps/console配下、src/agent.rs等。
+  固定baseはHEADの祖先（merge-base --is-ancestor exit 0）で、base..HEADは68 commits。
+  比較基点の相違による履歴の混入であり、直前commitだけでownershipを検査してはならない。
+  COMMON.mdの監査基点c06a...と登録base8498...が異なることも明示的な整合確認事項である。
+  分類: 成果物の生成失敗やレビュー受渡し漏れではなく、候補branchの基点と承認scopeの不一致。
+  修正: 拒否ロジックは維持。新規エラーにbase/head/ownership外パス例と総数を記録。
+    既存の汎用「モデル・プロバイダー・検証設定」案内をownership原因の場合だけ適切な案内へ変更。
+  残作業: 別途認可された作業で、登録基点を保持する候補に監査文書のみを載せ直すか、
+    正当な要件変更手続で計画・基点を整合させる。このタスクではbranch/成果物を操作しない。
+
+R157 / c048c7e2
+  状態: blocked_infrastructure、最終理由はAPPROVE has incomplete evidence。
+  validator 8003929e9a6d4f22930405e0423efb23 はPASS。
+  試行1 review c5e7eebee34b4c248509fd3583dbc155/read-0.jsonl:765 は
+    blocking=[]なのにgoal_review.root_causesにF-R157-01（TASK_ASSUMPTION_FALSE）を記載。
+    拒否理由はeach blocking finding requires an evidence-backed classification。
+    これは監査対象のログ末尾空白とdiff --checkのscopeの指摘で、監査文書に保存されたfinding。
+    監査提出自体のblockingに対応しないroot_causesを作った応答契約違反である。
+  試行2 review 09e21ce39c1c483ba3a6f2cfc4cd2b08 はerror_max_structured_output_retries。
+    part-1には受理可能な最終structured_outputが生成されていない。
+  試行3 review 5fafdb2d6a894aa2806bf0efd0b080fd/part-0.jsonl:55 は
+    HANDOFFのAPPROVEにunverified=[REPORT.md,RESULTS.json]、blocking=[]。
+  分類: 最終停止は生成済み補助文書の受渡し不足。別試行には最終出力未生成・参照対応違反もある。
+  修正: 文書受渡し・不足診断を修正。監査対象のfindingと監査提出のblocking/root_causesを分離する
+    review指示を明示した。孤立root_causeを削除して承認するような変換は加えていない。
+  残作業: 監査文書そのものを再評価する独立レビュー。元findingの否定・解消は行っていない。
+
+R158 / 5d8fd2c0
+  状態: blocked_infrastructure、goal review needs source-backed IDs and evidence。
+  validator 7c4da1196b5f41c9a2bf03abf915f0f5 はPASS。
+  試行1/2にはR149同様の補助文書の未確認も存在する。
+  最終review 7ddd1193a83942ffbd986a18aff151fb/part-0.jsonl:753 の
+    goal_review.assessments.task_correctness.goal_ids=[AC-PR158-INDEPENDENT-AUDIT]。
+    4軸すべてのevidence文字列は非空であり、空欄が直接の原因ではない。
+  正規のID集合: requirements.goals[].id の
+    G-EVIDENCE / I-FAIL-CLOSED / I-NO-MERGE / I-AUTHORITY / G-INTEGRATION。
+  これらはCOMMON.md front matterの所有者明示goal/invariant/prohibitionから正規化され、
+  plan.goals→固定requirements.goals→candidateへ保存される（importer/policy/inputs.py）。
+  requirements.acceptance_idsのAC-PR158-INDEPENDENT-AUDITは別種のIDで、goal_idsではない。
+  root_causes.requirement_refsで許可されるのは既知goal IDs、documents[].name、
+    task:instruction、task:contract。validation ID/snapshot:path:lineはevidence_refs側の証跡。
+  今回は存在するacceptance IDを別のID欄へ入れた紐付け違い。IDを新規追加してはならない。
+  修正: 軸ごとに既知goal ID enumをschemaへ設定、ID種別を指示に明記し、未知ID/軸/空証跡を診断。
+  残作業: 元の資料に基づく正しいIDと証跡の対応づけを新しい独立応答で評価する。
+    アプリがacceptance IDをgoal IDへ自動置換したり、evidenceを補完したりはしない。
+
+R160 / 14ee216a
+  状態: blocked_infrastructure、APPROVE has incomplete evidence。
+  validator 1e05726d1a6d49818b423422729bcfef はPASS。
+  試行1 review 1287fba3326c4d35ac7998a19583ee21 はHANDOFF read後には未確認が消えるが、
+    part-1.jsonl:1028のREPORTでRESULTS/HANDOFFが再びunverifiedに残る。
+  最終review b77fb9360ed34dc894bcba2eeeb376e9/part-0.jsonl:689 は
+    HANDOFFのみcoverage、unverified=[REPORT.md,RESULTS.json]、blocking=[]なのにAPPROVE。
+  分類: 必須文書は生成済みで、review inputの初回partitionに未供給。
+  原本RESULTS.json、文書HEADのGit blob、固定snapshotのbytesは完全一致。
+    SHA-256: ad855e2ee102a15c8527be5bdda477b071e9c3a858d24be38cb328e6872d9a6d
+    verdict=CHANGES_REQUIRED
+    R160-01 IMPLEMENTATION_DEFECT / HIGH / src/content_replication/journal.rs:37
+      journal消失時、同じplacementでcaller attempts/bytesを0へ戻せてしまう。
+    R160-02 IMPLEMENTATION_DEFECT / HIGH / src/content_replication/sink.rs:40
+      receiver journal消失・再起動時、同じplacementの消費済みbudgetを再取得できてしまう。
+  recorded_completionにもCHANGES_REQUIREDと2件のjournal-loss budget resetsが記録されている。
+  reviewのblocking=[]や失敗payload.findings=[]は、監査対象の2指摘が削除された意味ではない。
+  candidateは対象コードを承認するものではなく、監査文書提出を審査するものである。
+  修正: 全237行のRESULTS.jsonを含む必須3文書をrelatedへ渡す。監査と対象判定の分離を明記。
+    回帰試験では全partitionとoverallの入力、および終了後snapshotでCHANGES_REQUIRED/2 IDsを確認。
+  残作業: 元コードの2不具合はこのタスクの対象外で未修正。監査提出の独立評価と本番受入も未完了。
+
+R161 / 9c8a6f09
+  状態: blocked_infrastructure、review candidate/scope/generation mismatch。
+  candidate保存: 2026-10-15T22:48:49Z、candidate.generation=1、run_generation=1。
+  validator da972a7d9843422895badba3a24f17ed はPASS。
+  Claude試行1/2は補助文書未確認のAPPROVE、試行3はrate_limit_eventによるincluded quota拒否。
+  その確認されたquotaを根拠にCodexへfallbackし、review.generation=4となった。
+  review 1c41c67dab594c2da2e42e7a69357d1e/part-1.jsonl:749 では
+    candidate_id、run_generation=1、base_sha、tree_sha、diff_digestは保存候補と一致。
+    正: 9a8fd3e8416be3532a340fdcd26190c395db30c8
+    誤: 9a8fd3e8416be3532f340fdcd26190c395db30c8
+    head_shaの1文字 a→f が異なる。監査対象コードHEADでも旧候補HEADでもない。
+  同ファイルのuserMessage内入力は正しいhead_shaを持つ。候補はscope凍結後Ledger.submitで保存され、
+  _reviewはvalidation/findingsだけをコピー上で添付し、partition/readでも同じscopeを使用する。
+  provider.validate_resultが応答受領時に比較し、さらにcontrollerとLedger.acceptでも再検査する。
+  分類: モデルが生成した同一性フィールドの転記違い。古い世代/候補の応答混入を示す証跡はない。
+  修正: candidate ID/run_generation/scope各値/requirements digestを単一値enumで出力schemaへ固定。
+    比較ゲートは維持し、エラーがscope.head_shaを具体的に指すようにした。
+  残作業: 新しい独立応答で正確な同一性と証跡を検査する必要がある。旧応答の書換え受理はしない。
+
+実装の範囲
+  review_context.py: contract.required_pathsの本文を既存bounded readでrelatedへ供給。
+    既存40パス/240行/ページ/全体byte予算を維持。tracked確認を行い、snapshot外は読まない。
+    長い文書はeof=Falseとread protocolで扱い、全文と偽らない。
+  providers.py: 固定出力値・既知goal IDsのschema制約。不足証跡/同一性の詳細診断。
+  goals.py: ID種別・監査判定と対象コード判定の分離を指示。参照検査の条件は維持。
+  git.py/review_summary.py: ownership違反の具体的な診断と案内。拒否は維持。
+  approval条件の緩和、成果物の書換え、無条件APPROVE、retry増加、DB schema変更はなし。
+
+検証と再現
+  tests/fixtures/autopilot/review_stops.json は保存最終応答から失敗原因を残した縮約fixture。
+  ホストパス・顧客本文・session/pid等を除き、SHA/候補IDを合成値へ置換している。
+  source_review_id/source_fileで元の読取専用証跡と対応する。fixtureは実ワークフローの承認証拠ではない。
+  tests/test_autopilot_review_stops.py の17件:
+    修正前c4ec1e3のappをgit archiveで/tmpへ展開し、新テスト/fixtureのみを重ねて実行。
+    結果: 10 FAILED, 7 PASSED。詳細は同梱review-stops-before-results.txt。
+    修正後: 17 PASSED。入力本文の受渡し、schema制約、拒否診断の回帰を確認。
+    不足証跡・架空source ID・候補違い・世代違い・scope違い・ownership違反を引き続き拒否。
+    古いturnのitem/completedとturn/completedが現在の応答を上書きしないことも確認。
+  既存test_T26_old_attempt_cannot_approve_current_attemptは古いreviewでの受理拒否と、
+    cancelled recordへの遅延完了の上書き拒否を検証する。他のstale-head/requirement回帰も実行。
+  CLI smokeはローカルMockResponses endpointと隔離scratchだけを使い、実モデル/本番認証/課金は使用しない。
+  実際の5 snapshotについても修正後partitionsをread-onlyで再構成し、全必須本文とeof=Trueを確認。
+  上記を含む最終結合実行: 188 PASSED、1 SKIPPED、2 warnings（52.65秒）。
+    SKIPはopt-in Rust/Node/Python offline sandbox build。警告は既存Starlette非推奨と重複ZIP名の否定試験。
+    同梱review-stops-test-results.txtに実行条件と結果を記録。
+
+適用手順（ここでは実行していない）
+  1. この結果branchの修正commitをレビューし、管理されたリポジトリの別の専用branchへ
+     git cherry-pick <最終回答に記載した修正SHA> で適用する。mainへ直接commit/mergeしない。
+     未コミットの成果物や.autopilot-inputsを移動・削除・整形しない。
+  2. 下記コマンドで隔離テストを再実行する（pytest等を入れたPython環境を使用）。
+     CODEX_GUI_AUTOPILOT_CLI_SMOKE=1 python -m pytest -q \
+       tests/test_autopilot_review_stops.py tests/test_autopilot.py tests/test_autopilot_goals.py \
+       tests/test_autopilot_review_summary.py tests/test_autopilot_safety_regressions.py \
+       tests/test_autopilot_execution_mentor.py tests/test_autopilot_workflow_controls.py \
+       tests/test_autopilot_documents.py tests/test_autopilot_api.py tests/test_autopilot_toolchains.py \
+       tests/test_autopilot_cli_smoke.py
+  3. 修正版アプリを利用するための本番コード反映・GUIのreload/restartは、別途明示された運用作業で行う。
+     このタスクではproductionのプロセス/設定/DBを変更していない。開発確認には一時DBと8766等を使う。
+  4. R150の候補基点整合、追加ログ要否、独立レビューの再実行とワークフロー再開は別途判断する。
+     この修正は保存済み失敗応答を修復・承認せず、停止nodeや依存を自動解放しない。
+
+制限
+元PRのコード修正・本番受入・新しい実モデルによるAPPROVEは本タスクでは実施していない。
+入力が揃ってもレビューの実質判断を保証しない。必要な追加証跡は捏造せず未確認を維持する。
+ワークフロー全体は保存時state=runningだった。対象6 nodeを本タスクから再開していない。
+他タスクのworktree/branch/.autopilot-inputs/未コミット成果物には一切書き込んでいない。
+
+並行した本番状態の変化（本タスクの操作ではない）
+最終SELECTで6 nodeのstate=implementingを検出。task_messagesとap_operationsには、
+2026-10-19T03:00:46Z〜03:01:48Zに対象6件それぞれへの追加instructionと
+kind=owner_turn/state=reservedが新規登録されていた。先行3 taskはrunning、後続3 taskはqueuedだった。
+例: R149 owner_turn 2b86474a3e344d10b4a65a4adcb1c648（03:00:46Z）、
+R150 a677dd7f90484dc1abe939783485e09c（03:00:57Z）。
+これらは既存監査の補完・正式再レビューを指示する別の追加ターンであり、元の停止試行とは別世代。
+本タスクではこれらの指示の送信・実行・停止・取消や、対象workflowの再開操作はしていない。
+送信元の操作者までは特定していない。新しい成果物・候補の検証を本調査完了と混同していない。
