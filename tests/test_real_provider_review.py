@@ -1,5 +1,6 @@
 """Opt-in independent native subagents review a private PR snapshot."""
 import json
+from itertools import permutations
 import os
 from pathlib import Path
 import re
@@ -46,10 +47,28 @@ def codex_v2_report(home, identity, parent, worktree):
         or spawn.get('parent_thread_id') != parent or spawn.get('depth') != 1
         or meta.get('cwd') != str(worktree)):
         return None
-    finals = [row['payload']['message'] for row in rows
-              if row.get('type') == 'event_msg' and row.get('payload', {}).get('type') == 'agent_message'
-              and row['payload'].get('phase') == 'final_answer']
+    finals = []
+    for row in rows:
+        payload = row.get('payload') or {}
+        if payload.get('phase') != 'final_answer':
+            continue
+        if row.get('type') == 'event_msg' and payload.get('type') == 'agent_message':
+            finals.append(payload['message'])
+        elif (row.get('type') == 'response_item' and payload.get('type') == 'message'
+              and payload.get('role') == 'assistant'):
+            content = payload.get('content') or []
+            if content and all(block.get('type') == 'output_text' and isinstance(block.get('text'), str) for block in content):
+                finals.append(''.join(block['text'] for block in content))
     return review_report(finals[-1]) if finals else None
+
+
+def qualify_partitions(partitions, reports):
+    """Every assigned scope needs its own completed native reviewer report."""
+    for identities in permutations(reports, len(partitions)):
+        if all(set(paths) <= set(reports[identity]['reviewed_paths'])
+               for paths, identity in zip(partitions.values(), identities)):
+            return dict(zip(partitions, identities))
+    raise AssertionError('Distinct completed reviewers must cover each assigned partition')
 
 
 @pytest.mark.skipif(os.environ.get('CODEX_GUI_REAL_FINAL_REVIEW') != '1', reason='NOT_RUN: separate opt-in final code review')
@@ -95,6 +114,7 @@ def test_independent_native_subagents_review_final_snapshot(real_gui):
     reports = []
     top_agents = set()
     codex_reports = {}
+    claude_reports = {}
     codex_completed = set()
     for entry in gui.events(task['id']):
         event = entry.get('event') or {}
@@ -122,24 +142,29 @@ def test_independent_native_subagents_review_final_snapshot(real_gui):
                 continue
             if block.get('type') == 'tool_use' and block.get('name') in ('Agent', 'Task'):
                 top_agents.add(block['id'])
-            if block.get('type') != 'tool_result' or block.get('tool_use_id') not in top_agents:
+            if (block.get('type') != 'tool_result' or block.get('tool_use_id') not in top_agents
+                or block.get('is_error')):
                 continue
             content = block.get('content')
             texts = [content] if isinstance(content, str) else [item.get('text', '') for item in content or [] if isinstance(item, dict)]
-            for text in texts:
-                value = review_report(text)
-                if value is not None:
-                    reports.append(value)
+            values = [value for text in texts if (value := review_report(text)) is not None]
+            if len(values) == 1:
+                claude_reports[block['tool_use_id']] = values[0]
     for identity in top_agents & codex_completed:
         value = codex_v2_report(os.environ['CODEX_HOME'], identity, row['session_id'], row['worktree'])
         if value is not None:
             codex_reports[identity] = value
-    reports.extend(codex_reports.values())
+    reports_by_agent = codex_reports if provider == 'codex' else claude_reports
+    reports.extend(reports_by_agent.values())
     evidence = dict(head=head, base=base, provider=provider, task=task['id'], session=row['session_id'], partitions=partitions,
-                    native_subagents=row['provider_subagents'], reports=reports, outcome=row['task_outcome'])
+                    native_subagents=row['provider_subagents'], reports=reports, reports_by_agent=reports_by_agent,
+                    outcome=row['task_outcome'])
     (gui.folder / 'independent-review-evidence.json').write_text(json.dumps(evidence, indent=2))
     assert_success(row)
     assert len(top_agents) >= 2 and len(reports) >= 2
+    assignments = qualify_partitions(partitions, reports_by_agent)
+    evidence['review_assignments'] = assignments
+    (gui.folder / 'independent-review-evidence.json').write_text(json.dumps(evidence, indent=2))
     covered = {path for report in reports for path in report['reviewed_paths']}
     assert set(changed) <= covered, sorted(set(changed) - covered)
     assert not any(report['unverified'] for report in reports), [r['unverified'] for r in reports]

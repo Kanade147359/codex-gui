@@ -12,6 +12,29 @@ def client(settings):
         yield c
 
 
+@pytest.mark.parametrize('target', ['node', 'role'])
+@pytest.mark.parametrize('options,message', [
+    ({'unknown': True}, 'unknown Claude execution option'),
+    ({'permission_mode': 'bypassPermissions'}, 'unsupported permission mode'),
+    ({'timeout_seconds': 0}, 'timeout_seconds must be'),
+    ({'trusted_repository': 'yes'}, 'trusted_repository must be boolean'),
+    ([], 'unknown Claude execution option'),
+])
+def test_invalid_claude_options_are_validation_errors_without_side_effects(client, git_repo, target, options, message):
+    raw = plan(git_repo)
+    if target == 'node':
+        raw['nodes'][0].update(provider='claude', provider_options=options)
+    else:
+        raw['policy']['roles'] = dict(implementer=dict(provider='claude', provider_options=options))
+    for endpoint in ('dry-run', 'workflows'):
+        response = client.post('/api/autopilot/' + endpoint, json=dict(manifest=raw, opt_in=True))
+        assert response.status_code == 400, response.text
+        assert message in response.json()['detail']['message']
+    ap = client.app.state.manager.autopilot
+    assert not ap.ledger.rows('workflows')
+    assert not client.app.state.manager.db.list_tasks()
+
+
 def test_workflow_ui_dry_run_opt_in_and_atomic_registration(client, git_repo):
     raw = plan(git_repo)
     assert "Workflow manifest" in client.get("/autopilot").text

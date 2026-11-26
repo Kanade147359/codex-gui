@@ -4,6 +4,14 @@ from .execution import validate_settings
 ROLES = ("planner", "implementer", "reviewer", "mentor")
 
 
+def validate_execution_options(options):
+    from app.providers import ClaudeCodeProvider, ProviderError
+    try:
+        return ClaudeCodeProvider.validate_options(options)
+    except ProviderError as error:
+        raise ValueError(str(error)) from error
+
+
 def validate_roles(value):
     if not isinstance(value, dict) or set(value) - set(ROLES):
         raise ValueError("unknown agent role")
@@ -22,8 +30,7 @@ def validate_roles(value):
         if role != "implementer" and config.get("provider_options"):
             raise ValueError("execution permission options apply only to implementers")
         if config.get("provider", "codex") == "claude" and "provider_options" in config:
-            from app.providers import ClaudeCodeProvider
-            normalized["provider_options"] = ClaudeCodeProvider.validate_options(config["provider_options"])
+            normalized["provider_options"] = validate_execution_options(config["provider_options"])
         result[role] = normalized
     return result
 

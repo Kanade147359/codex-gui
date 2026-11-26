@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.autopilot import goals, planning, replanning
 from app.autopilot.controller import Autopilot
-from app.autopilot.policy import canonical, digest, manifest
+from app.autopilot.policy import canonical, manifest
 from app.autopilot.providers import validate_result, review_schema, ProviderFailure
 from app.autopilot.review_context import prompt, review_all
 from app.autopilot.runner import run_bounded
@@ -126,6 +126,61 @@ def test_api_auto_replan_executes_reviewed_replacement_before_successor(settings
             client.portal.call(app.state.manager.tick)
         assert len(ap.ledger.view(wid)["nodes"]) == 4
         (tmp_path / "goal-replanning-e2e.json").write_text(canonical(view))
+
+
+def test_claude_planner_persists_independent_session_and_releases_replacement(settings, git_repo, tmp_path, monkeypatch):
+    """Exercise the actual Claude adapter with a subprocess JSONL fixture, never an account."""
+    from app.autopilot.providers import ClaudeProvider
+    home = tmp_path / 'account'
+    (home / '.claude').mkdir(parents=True)
+    (home / '.claude/.credentials.json').write_text('{"synthetic":true}')
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr('app.autopilot.providers.sandbox', lambda root, *args, **kwargs: ['fixture', str(root)])
+    identities = []
+    session = 'claude-independent-' + uuid.uuid4().hex
+
+    async def native_fixture(argv, *, stdin, on_start, **kwargs):
+        fixed = json.loads(stdin)
+        rc, output, timeout = await run_bounded(
+            [sys.executable, str(Path(__file__).with_name('fake_autopilot_replanner.py'))],
+            stdin=canonical(dict(fixed=fixed, root=argv[1], session=session)), timeout=15, on_start=on_start)
+        proposal = json.loads(output)
+        proposal = {key: proposal[key] for key in replanning.REPLAN_SCHEMA['required']}
+        return rc, canonical(dict(type='result', subtype='success', is_error=False,
+                                  session_id=session, structured_output=proposal)), timeout
+
+    monkeypatch.setattr('app.autopilot.providers.run_bounded', native_fixture)
+
+    class NativeFixturePlanner(FixtureProvider):
+        async def probe_capabilities_and_auth(self, policy):
+            return dict(binary=sys.executable, version='2.1.185', model='synthetic-planner')
+
+        async def start_replan(self, candidate, policy, root, attempt, on_identity):
+            def record(value):
+                identities.append(dict(value))
+                on_identity(value)
+            return await ClaudeProvider.start_replan(self, candidate, policy, root, attempt, record)
+
+    raw = workflow(git_repo)
+    raw['policy']['roles'] = dict(planner=dict(provider='claude', model='synthetic-planner'))
+    app = create_app(settings, FakeRunner())
+    with TestClient(app) as client:
+        ap, _ = install_goal(app.state.manager)
+        ap.providers['claude'] = NativeFixturePlanner('claude', dict(premise=True))
+        wid = api_register(client, raw)
+        view = api_wait(client, wid, lambda v: v['state'] == 'completed')
+        assert identities[0]['session'] is None
+        assert identities[-1]['session'] == session
+        assert identities[0]['pid'] == identities[-1]['pid']
+        assert identities[-1]['version'] == '2.1.185'
+        assert view['replans'][0]['payload']['identity'] == identities[-1]
+        assert view['replans'][0]['payload']['session'] == session
+        assert node(view, 'A')['state'] == 'superseded'
+        assert node(view, 'R_adapter')['state'] == node(view, 'C')['state'] == 'accepted'
+        assert node(view, 'C')['spec']['depends_on'] == ['R_adapter']
+        task = app.state.manager.db.get_task(node(view, 'A')['task_id'])
+        assert session != task['codex_thread_id'] and task['task_outcome'] != 'success'
+        assert not ap.providers['claude'].processes
 
 
 @pytest.mark.parametrize("mode,paths", [("propose_only", ["A.txt"]), ("auto_within_envelope", ["A.txt", "unauthorized.txt"])])

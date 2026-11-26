@@ -403,11 +403,12 @@ class ClaudeProvider(ReviewProvider):
             if trusted_review_policy.get("reasoning_effort") not in (None, "default"):
                 argv += ["--effort", trusted_review_policy["reasoning_effort"]]
 
+            identity = {}
+
             def started(proc):
                 self.processes[attempt["id"]] = proc
-                on_identity(
-                    dict(pid=proc.pid, session=None, version=capabilities["version"], model=capabilities["model"])
-                )
+                identity.update(pid=proc.pid, session=None, version=capabilities["version"], model=capabilities["model"])
+                on_identity(dict(identity))
 
             try:
                 rc, output, timeout = await run_bounded(
@@ -430,10 +431,12 @@ class ClaudeProvider(ReviewProvider):
             result.update(
                 provider="claude",
                 model=result.pop("_model", None) or capabilities["model"],
-                version=capabilities["version"],
                 session=result.pop("_session", None),
                 independence="separate provider and session",
             )
+            result["provider_version" if replan else "version"] = capabilities["version"]
+            identity.update(session=result["session"], model=result["model"])
+            on_identity(dict(identity))
             return result
 
     def consume_replan(self, output, version):

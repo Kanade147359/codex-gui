@@ -54,8 +54,8 @@ It exercises:
 
 ## Resolved installed-Codex environment failures
 
-These three tests fail on the unchanged baseline commit
-`c70cb894428484423590c045ed08da7e0ec804c6` as well as on this branch:
+These three tests originally failed both on the unchanged baseline commit
+`c70cb894428484423590c045ed08da7e0ec804c6` and on this branch:
 
 1. `tests/test_ctx_e2e.py::test_real_codex_cache_write_tool_calls_and_large_outputs_are_recorded`
 2. `tests/test_ctx_e2e.py::test_real_codex_tool_output_limit_reaches_the_model`
@@ -75,8 +75,8 @@ directory, even with global `--no-daemon`; changing `TMPDIR` did not resolve it.
 The measured payload was consequently 156 characters / approximately 39 tokens
 for every cap, so it could not produce the expected large-output event.
 
-`private_codex_runtime` in `tests/conftest.py` now launches only the two real-Codex
-test modules in a bubblewrap mount/PID namespace. It overlays private mode-0700
+`private_codex_runtime` in `tests/conftest.py` launches installed-Codex test
+processes in a bubblewrap mount/PID namespace. It overlays private mode-0700
 temporary directories on the daemon and synthetic-mount paths, preserves device
 access, and disables shared-daemon routing. The host paths' ownership/modes and
 production processes are unchanged. The CLI's actual read-only/workspace sandbox
@@ -171,6 +171,22 @@ per-case reruns and exact evidence are recorded in PR #19.
   final reports from its temporary CLI session records, validating parent thread,
   child UUID, depth and worktree. A separate regression rejects commentary and
   mismatched lineage; this does not alter the application's Completion parser.
+- Independent Codex native agents reviewed all 57 assigned paths at 6f4fd02
+  (18 backend, 39 frontend/tests/docs) and found three actionable issues; that
+  snapshot is not qualified. Claude Planner failed to persist its final Session
+  ID, and its CLI version also overwrote the proposal's integer schema version.
+  The adapter now publishes the validated final identity with its PID retained,
+  and stores the CLI version as provider_version for replans. A subprocess replay
+  goes through the actual adapter, ledger, graph replacement and dependency
+  release; real-Claude verification of this repair is NOT_RUN due to quota.
+- Invalid node/role execution options raised ProviderError outside the manifest
+  API's validation handler. The manifest now converts this to ValueError; both
+  dry-run and registration return 400 without tasks/workflows being created.
+  Empty Codex options stay empty; falsy non-object options are rejected.
+- The review acceptance gate previously allowed one full-scope report plus one
+  empty report. Reports are now tied to distinct completed native children and
+  matched one-to-one to the assigned scopes. A regression reproduces and rejects
+  the previous false-PASS case. Final fixed-snapshot review results are in PR #19.
 - GitHub CI without an installed Codex exposed a backup fixture that handled
   regular files with FakeRunner but delegated image-capability discovery to a
   real binary. ReadingRunner now inherits the existing ImageRunner fixture.

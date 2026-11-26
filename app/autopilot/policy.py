@@ -171,7 +171,7 @@ def manifest(value):
         policy.setdefault(key, default)
         if not isinstance(policy[key], str) or policy[key].startswith("-"):
             raise ValueError(f"invalid {key}")
-    from .roles import validate_roles
+    from .roles import validate_execution_options, validate_roles
     policy["roles"] = validate_roles(policy.get("roles", {}))
     policy.setdefault("allow_provider_fallback", False)
     if type(policy["allow_provider_fallback"]) is not bool:
@@ -246,9 +246,10 @@ def manifest(value):
             raise ValueError("unknown implementation provider")
         if "allow_subagents" in n and type(n["allow_subagents"]) is not bool:
             raise ValueError("allow_subagents must be boolean")
-        if n.get("provider_options"):
-            from app.providers import ClaudeCodeProvider
-            n["provider_options"] = ClaudeCodeProvider.validate_options(n["provider_options"])
+        if "provider_options" in n:
+            options = n["provider_options"]
+            validated = validate_execution_options(options)
+            n["provider_options"] = validated if options else {}
         n.update(validate_settings(n, allow_empty_model=True))
         nid = n.get("id", "")
         if not isinstance(nid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", nid) or nid in by_id:
