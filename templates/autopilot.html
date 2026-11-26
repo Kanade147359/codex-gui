@@ -5,6 +5,8 @@
 <section class="panel ap-panel">
   <h1>Autopilot</h1>
   <p>大タスクを子タスクへ分け、実装・検証・独立レビューの進捗をまとめて管理します。</p>
+  <label>Workflow mode<select id="ap-workflow-mode"><option value="">Manifest choice / Implementation default</option><option value="implementation">Implementation</option><option value="research">Research Mode (report nodes)</option></select></label>
+  <p class="muted">Research Modeは成果物を指定したreportノードで調査を進めます。ノードごとにProviderを選択でき、依存関係・独立レビュー・Completion Gateを共用します。</p>
   <fieldset id="ap-execution-settings"><legend>実行モデル・メンター</legend>
     <div class="ap-form-grid">
       <label for="ap-model">基本モデル<select id="ap-model"><option value="">Codex CLIの設定を使用</option><option value="__custom__">モデルIDを入力…</option></select></label>
@@ -12,6 +14,11 @@
       <label for="ap-effort">推論の強さ<select id="ap-effort"><option value="high" selected>High（既定）</option><option value="xhigh">Extra high</option><option value="medium">Medium</option><option value="low">Low</option></select></label>
       <label for="ap-mentor-rounds">メンターの最大相談回数<input id="ap-mentor-rounds" type="number" min="0" max="5" value="2"></label>
     </div>
+    <details><summary>役割ごとのProvider・モデル</summary>
+      <p class="muted">Implementerは作業用セッション、Planner / Reviewer / Mentorは独立したツール無しのセッションです。各タスクのProvider指定もmanifest / Markdownで上書きできます。</p>
+      <div id="ap-provider-roles" class="ap-form-grid"></div>
+      <label class="ap-check"><input id="ap-provider-fallback" type="checkbox"> 確定したQuota不足時に別Providerの独立レビューを許可する</label>
+    </details>
     <label class="ap-check"><input id="ap-mentor-enabled" type="checkbox" checked> Claude Codeなどの独立メンターに相談してから人の確認へ進む</label>
     <p class="muted">担当Markdownの指定を優先します。manifestの明示設定は維持し、未指定の項目にこの基本設定を使います。Dry-runで子タスクごとの実効モデルと指定元を確認できます。</p>
     <p id="ap-catalog-message" class="muted" role="status"></p>

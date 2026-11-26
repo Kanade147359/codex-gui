@@ -39,7 +39,12 @@ def files_gui_url(settings, git_repo, tmp_path, monkeypatch, request):
         settings.backend='app-server'
         app = create_app(settings)
     else:
+        settings.claude_bin = '/not-installed/claude'
         app = create_app(settings, ReadingRunner(), FakeAppServer('fake'))
+        async def offline_codex_metadata():
+            return dict(id='codex', available=True, version='fake', authenticated=True,
+                        billing='subscription', capabilities={}, models=[])
+        app.state.manager.providers.get('codex').describe = offline_codex_metadata
     app.state.catalog._cached = dict(models=[], default_model='', default_effort='low', recommended_model='', error='')
     app.state.catalog._fetched_at = time.monotonic()
     app.state.manager.db.touch_repo(str(git_repo), 'now')
@@ -74,7 +79,7 @@ def test_upload_download_preview_zip_artifact_transfer_and_resume(files_gui_url,
     url, app = files_gui_url
     data = b'{"verified":true,"display":"<script>unsafe()</script>"}'
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch(); page = browser.new_page(viewport=viewport, accept_downloads=True)
+        browser = p.chromium.launch(executable_path=os.environ.get('CODEX_GUI_CHROMIUM') or None); page = browser.new_page(viewport=viewport, accept_downloads=True)
         errors=[]; page.on('pageerror', lambda e:errors.append(str(e)))
         page.goto(url); page.locator('#new-task-btn').click()
         picker = page.locator('#new-task-attachments input[type=file]')
@@ -173,7 +178,7 @@ def test_real_browser_upload_model_read_transfer_and_download(files_gui_url,tmp_
     import uuid
     data=('{"verification":"'+uuid.uuid4().hex+'"}').encode()
     with playwright.sync_playwright() as p:
-        browser=p.chromium.launch(); page=browser.new_page(viewport=viewport,accept_downloads=True)
+        browser=p.chromium.launch(executable_path=os.environ.get('CODEX_GUI_CHROMIUM') or None); page=browser.new_page(viewport=viewport,accept_downloads=True)
         errors=[]; page.on('pageerror',lambda e:errors.append(str(e)))
         page.goto(url); page.locator('#new-task-btn').click()
         page.locator('#new-task-attachments input[type=file]').set_input_files({'name':'input.json','mimeType':'application/json','buffer':data})

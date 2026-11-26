@@ -8,14 +8,16 @@ from pathlib import Path
 import time
 import uuid
 
+from app.providers import ProviderError, session_id
+from .roles import reader_policy
 from app import completion
 from app.models import now_iso, make_task_id, ACTIVE_STATUSES, WAITING_STATUSES
-from app.procinfo import process_identity, same_process
+from app.procinfo import process_identity, same_process, owned_process_alive
 from . import git, inputs as fixed_inputs, decisions, planning, goals, replanning, mentoring, recovery as semantic_recovery
 from .ledger import Ledger, unpack
 from .policy import canonical, digest, manifest, input_digest
 from .execution import resolve_execution, task_fields
-from .providers import ClaudeProvider, CodexProvider, ProviderFailure, validate_result, validate_codex_route
+from .providers import ClaudeProvider, CodexProvider, ProviderFailure, require_billing_confirmation, validate_result, validate_codex_route
 from .runner import Validator, InfrastructureUnavailable, redact
 
 log = logging.getLogger(__name__)
@@ -42,7 +44,7 @@ class Autopilot:
     def __init__(self, manager, *, providers=None, validator=None):
         self.manager = manager
         self.ledger = Ledger(manager.db)
-        self.providers = providers or dict(claude=ClaudeProvider(), codex=CodexProvider(manager.settings.codex_bin))
+        self.providers = providers or dict(claude=ClaudeProvider(manager.settings.claude_bin), codex=CodexProvider(manager.settings.codex_bin))
         self.validator = validator or Validator()
         self.root = manager.settings.home / "autopilot"
         self.jobs = {}
@@ -218,8 +220,12 @@ class Autopilot:
         workflow = self.ledger.get("workflows", node["workflow_id"])
         from .environment import preflight
 
+        if task["provider"] == "claude":
+            require_billing_confirmation(workflow["plan"]["policy"])
         await preflight(task["worktree"], node["spec"]["validation"])
-        capability = await self.providers["codex"].probe_capabilities_and_auth(workflow["plan"]["policy"])
+        if task["provider"] == "claude":
+            return  # Normal task provider already verified auth/billing, trust and sandbox settings.
+        capability = await self.providers[task["provider"]].probe_capabilities_and_auth(workflow["plan"]["policy"])
         if capability.get("fixture") is True:
             return
         client = await self.manager.client()
@@ -274,8 +280,8 @@ class Autopilot:
                 c.execute(
                     "UPDATE tasks SET status='queued',"
                     + ",".join(f"{key}=?" for key in queued)
-                    + " WHERE id=? AND status=? AND completion_pending=0 AND codex_thread_id IS ?",
-                    (*queued.values(), task["id"], task["status"], task["codex_thread_id"]),
+                    + " WHERE id=? AND status=? AND completion_pending=0 AND COALESCE(provider_session_id, CASE WHEN provider='codex' THEN codex_thread_id END) IS ?",
+                    (*queued.values(), task["id"], task["status"], session_id(task)),
                 ).rowcount
                 != 1
             ):
@@ -505,7 +511,7 @@ class Autopilot:
                             n["id"],
                             state,
                             "waiting_implementation_provider",
-                            reason="Included Codex quota unavailable; no provider slot held",
+                            reason=f"Included {task['provider']} quota unavailable; no provider slot held",
                         )
                     elif task and task["status"] in ("failed", "stopped", "blocked", "interrupted"):
                         self.ledger.transition(
@@ -563,12 +569,20 @@ class Autopilot:
             self.ledger.transition(n["id"], "launching", "pending")
             return
         try:
-            await self.providers["codex"].probe_capabilities_and_auth(w["plan"]["policy"])
-        except ProviderFailure as e:
+            execution = resolve_execution(n["spec"], w["plan"])
+            if execution["provider"] == "claude":
+                require_billing_confirmation(w["plan"]["policy"])
+                await self.manager.providers.get("claude").preflight(dict(
+                    provider_options=canonical(execution["provider_options"]), model=execution["model"],
+                    reasoning_effort=execution["reasoning_effort"]))
+            else:
+                await self.providers[execution["provider"]].probe_capabilities_and_auth(w["plan"]["policy"])
+        except (ProviderFailure, ProviderError) as e:
+            kind = e.failure.kind if isinstance(e, ProviderError) else e.kind
             self.ledger.transition(
                 n["id"],
                 "launching",
-                "blocked_auth" if e.kind == "auth" else "blocked_configuration",
+                "blocked_auth" if kind == "auth" else "blocked_configuration",
                 reason=redact(str(e)),
             )
             return
@@ -610,7 +624,7 @@ class Autopilot:
             auto_retry=True,
             max_retries=w["plan"]["policy"]["infra_retries"],
             service_tier="default",
-            **task_fields(n["spec"], w["plan"]),
+            **task_fields(n["spec"], w["plan"], creation=True),
             _defer_dispatch=True,
             _task_id=task_id,
             _branch=f"autopilot/{w['id']}/integration/{n['name']}" if n["spec"]["kind"] == "integration" else None,
@@ -683,7 +697,7 @@ class Autopilot:
         reserved_fixes = self.ledger.rows("operations", "node_id=? AND kind='fix' AND state='reserved'", (n["id"],))
         if reserved_fixes:
             op = reserved_fixes[-1]
-            if op["payload"]["thread"] and op["payload"]["thread"] != task["codex_thread_id"]:
+            if op["payload"]["thread"] and op["payload"]["thread"] != session_id(task):
                 self.ledger.transition(
                     n["id"],
                     n["state"],
@@ -730,7 +744,7 @@ class Autopilot:
                     "operations", "node_id=? AND kind IN ('integration_implementation','fix','owner_turn')", (n["id"],)
                 )
             )
-            if not task["codex_thread_id"] or digest(task["last_prompt"]) not in allowed_prompts:
+            if not session_id(task) or digest(task["last_prompt"]) not in allowed_prompts:
                 raise ValueError(
                     "integration implementation turn has not completed; merge/conflict resolution alone is insufficient"
                 )
@@ -777,7 +791,7 @@ class Autopilot:
                 parsed_result=result,
                 origin=(
                     "controller_mechanical_integration"
-                    if n["spec"]["kind"] == "integration" and not task["codex_thread_id"]
+                    if n["spec"]["kind"] == "integration" and not session_id(task)
                     else "strict_final_assistant_json"
                 ),
             ),
@@ -953,10 +967,14 @@ class Autopilot:
         if previous and previous[-1]["payload"].get("retry_at", 0) > time.time():
             return None
         # Only a quota event or the persisted confirmed quota cache switches providers.
-        fallback = any(
-            r["provider"] == "claude" and r["payload"].get("error_kind") == "included_quota" for r in previous
-        )
-        for provider in ["codex"] if fallback else ["claude", "codex"]:
+        role = "mentor" if mentoring.pending(self, n) else "reviewer"
+        selected = w["plan"]["policy"].get("roles", {}).get(role, {}).get("provider", n["spec"].get("review_provider", "claude"))
+        fallback = any(r["provider"] == selected and r["payload"].get("error_kind") == "included_quota" for r in previous)
+        choices = [selected]
+        if w["plan"]["policy"].get("allow_provider_fallback"):
+            other = "codex" if selected == "claude" else "claude"
+            choices = [other] if fallback else [selected, other]
+        for provider in choices:
             key = self._availability_key(provider, w)
             rows = self.ledger.rows("provider_availability", "key=?", (key,))
             if not rows or rows[0]["state"] != "included_quota":
@@ -974,7 +992,7 @@ class Autopilot:
             n["id"],
             n["state"],
             "waiting_provider",
-            reason="Both providers report included quota unavailable; no paid fallback",
+            reason="Configured provider quota unavailable; fallback is not authorized" if not w["plan"]["policy"].get("allow_provider_fallback") else "Both providers report included quota unavailable; no paid fallback",
         )
         return None
 
@@ -983,6 +1001,9 @@ class Autopilot:
         candidate = self.ledger.get("candidates", n["candidate_id"])
         attempts = self.ledger.rows("reviews", "candidate_id=?", (candidate["id"],))
         mentor_source = mentoring.pending(self, n)
+        role = "mentor" if mentor_source else "reviewer"
+        selected = w["plan"]["policy"].get("roles", {}).get(role, {}).get("provider", n["spec"].get("review_provider", "claude"))
+        fallback_reason = (f"confirmed {'Claude' if selected == 'claude' else 'Codex'} included quota" if provider != selected else "")
         record = self.ledger.record(
             "reviews",
             candidate_id=candidate["id"],
@@ -992,7 +1013,7 @@ class Autopilot:
             payload=dict(
                 owner=self.owner,
                 run_generation=w["generation"],
-                fallback_reason="confirmed Claude included quota" if provider == "codex" else "",
+                fallback_reason=fallback_reason,
                 purpose="mentor" if mentor_source else "review",
                 **({"source_review_id": mentor_source["id"]} if mentor_source else {}),
             ),
@@ -1039,14 +1060,15 @@ class Autopilot:
             try:
                 from .review_context import review_all
 
-                result = await review_all(
-                    self.providers[provider],
-                    review_candidate,
-                    w["plan"]["policy"],
-                    root,
-                    record,
-                    lambda identity: self._process_record("reviews", record, identity),
-                )
+                async with self.manager.providers.slot(provider):
+                    result = await review_all(
+                        self.providers[provider],
+                        review_candidate,
+                        reader_policy(w["plan"]["policy"], "mentor" if mentor_source else "reviewer", provider),
+                        root,
+                        record,
+                        lambda identity: self._process_record("reviews", record, identity),
+                    )
             finally:
                 if slots:
                     slots.release()
@@ -1065,7 +1087,7 @@ class Autopilot:
                 ) from None
             implementation = self.manager.db.get_task(n["task_id"])
             sessions = [result.get("session")] + [entry.get("session") for entry in result.get("partition_evidence", [])]
-            if not result.get("session") or implementation["codex_thread_id"] in sessions:
+            if not result.get("session") or (implementation["provider"] == provider and session_id(implementation) in sessions):
                 raise ProviderFailure("invalid_output", "reviewer must be independent of the implementation thread")
             if mentor_source:
                 previous_sessions = {r["payload"].get("session") for r in attempts}
@@ -1313,7 +1335,7 @@ class Autopilot:
         from app.task_manager import _Turn
 
         if (n["spec"]["kind"] != "integration" or n["spec"].get("integration_mode", "merge-only") != "merge-only"
-            or n["fix_rounds"] or not n["candidate_id"] or task["status"] != "completed" or task.get("codex_thread_id")):
+            or n["fix_rounds"] or not n["candidate_id"] or task["status"] != "completed" or session_id(task)):
             return False
         turn = _Turn.from_json(task.get("pending_turn"))
         result = completion.parse_result(task.get("semantic_result"))
@@ -1357,7 +1379,9 @@ class Autopilot:
             + n["reason"]
             + "\nRe-read the unchanged fixed requirements and handoffs in .autopilot-inputs/requirements.json.\n"
         )
-        if not task["codex_thread_id"]:
+        if resolve_execution(n["spec"], self.ledger.get("workflows", n["workflow_id"])["plan"])["provider"] != task["provider"]:
+            raise ValueError("provider cannot change during a repair; create a new task/session")
+        if not session_id(task):
             reference = Path(task["worktree"]) / ".autopilot-fix" / f"{n['name']}-{n['fix_rounds'] + 1}.md"
             reference.parent.mkdir(parents=True, exist_ok=True)
             reference.write_text(
@@ -1372,7 +1396,7 @@ class Autopilot:
                 "\nNo recoverable implementation thread exists. Inspect existing Git state before correcting only these findings. Read immutable acceptance instructions: "
                 + str(reference)
             )
-        turn = _Turn(prompt, resume_thread=task["codex_thread_id"], service_tier="default", trigger="autopilot_fix")
+        turn = _Turn(prompt, resume_thread=session_id(task), service_tier="default", trigger="autopilot_fix")
         fields = self.manager._queue_fields(turn, **task_fields(n["spec"], workflow["plan"]))
         op_id = uuid.uuid4().hex
         with self.ledger.transaction() as c:
@@ -1402,8 +1426,8 @@ class Autopilot:
             cur = c.execute(
                 "UPDATE tasks SET status='queued',"
                 + ",".join(f"{k}=?" for k in fields)
-                + " WHERE id=? AND status='completed' AND completion_pending=0 AND codex_thread_id IS ?",
-                (*fields.values(), task["id"], task["codex_thread_id"]),
+                + " WHERE id=? AND status='completed' AND completion_pending=0 AND COALESCE(provider_session_id, CASE WHEN provider='codex' THEN codex_thread_id END) IS ?",
+                (*fields.values(), task["id"], session_id(task)),
             )
             if cur.rowcount != 1:
                 raise ValueError("original implementation turn is no longer idle")
@@ -1415,7 +1439,7 @@ class Autopilot:
                     n["fix_rounds"] + 1,
                     canonical(
                         dict(
-                            thread=task["codex_thread_id"], prompt_digest=digest(prompt), candidate_id=n["candidate_id"],
+                            thread=session_id(task), prompt_digest=digest(prompt), candidate_id=n["candidate_id"],
                             execution_settings=resolve_execution(n["spec"], workflow["plan"]),
                             semantic_recovery=bool(source), source_task_digest=observed,
                             source_result=completion.parse_result(task["semantic_result"]),
@@ -1438,6 +1462,13 @@ class Autopilot:
 
     async def _probe_implementation(self, n):
         w = self.ledger.get("workflows", n["workflow_id"])
+        task = self.manager.db.get_task(n["task_id"])
+        if task["provider"] == "claude":
+            if not self.manager.providers.paused("claude") and self._resume_quota_implementation(n, w):
+                return
+            self.ledger.transition(n["id"], "probing_implementation", "waiting_implementation_provider",
+                                   reason="Claude quota Unknown; explicitly resume the task/queue after quota resets")
+            return
         key = self._availability_key("codex", w)
         now = time.time()
         with self.ledger.transaction() as c:
@@ -1462,23 +1493,7 @@ class Autopilot:
             limits = await self.manager.read_limits("autopilot_quota_recheck", force_history=True)
             # A typed positive signal is required. Time passing alone never means available.
             if limits and limits.get("ordinary_usage_allowed") is True:
-                task = self.manager.db.get_task(n["task_id"])
-                turn = self.manager._turn_of(task, "autopilot_quota_resume")
-                with self.ledger.transaction() as c:
-                    if c.execute("SELECT state FROM ap_workflows WHERE id=?", (w["id"],)).fetchone()[0] != "running":
-                        return
-                    changed = c.execute(
-                        "UPDATE tasks SET status='queued',pid=NULL,proc_identity=NULL,claimed_by=NULL,claimed_at=NULL,pending_turn=?,finished_at=NULL WHERE id=? AND status='waiting-for-quota'",
-                        (turn.to_json(), task["id"]),
-                    ).rowcount
-                    if changed:
-                        c.execute(
-                            "UPDATE ap_nodes SET state='implementing',reason='' WHERE id=? AND state='probing_implementation'",
-                            (n["id"],),
-                        )
-                        c.execute("DELETE FROM ap_provider_availability WHERE key=?", (key,))
-                if changed:
-                    self.manager.db._notify(task["id"], "waiting-for-quota", "queued")
+                if self._resume_quota_implementation(n, w, key):
                     return
         except ProviderFailure as e:
             self.ledger.transition(
@@ -1489,6 +1504,28 @@ class Autopilot:
             )
             return
         self.ledger.transition(n["id"], "probing_implementation", "waiting_implementation_provider")
+
+    def _resume_quota_implementation(self, n, workflow, availability_key=None):
+        """Explicit Claude unpause or positive Codex limits resume one owned turn."""
+        with self.ledger.transaction() as c:
+            if (c.execute("SELECT state FROM ap_workflows WHERE id=?", (workflow["id"],)).fetchone()[0] != "running"
+                or c.execute("SELECT state FROM ap_nodes WHERE id=?", (n["id"],)).fetchone()[0] != "probing_implementation"):
+                return False
+            task = dict(c.execute("SELECT * FROM tasks WHERE id=?", (n["task_id"],)).fetchone())
+            if task["status"] != "waiting-for-quota":
+                return False
+            if task["provider"] == "claude":
+                pause = c.execute("SELECT value FROM app_settings WHERE key='provider_paused.claude'").fetchone()
+                if not pause or pause[0] != "0":
+                    return False  # Unknown quota requires the explicit persisted owner action.
+            turn = self.manager._turn_of(task, "autopilot_quota_resume")
+            c.execute("UPDATE tasks SET status='queued',pid=NULL,proc_identity=NULL,claimed_by=NULL,claimed_at=NULL,"
+                      "pending_turn=?,finished_at=NULL WHERE id=? AND status='waiting-for-quota'", (turn.to_json(), task["id"]))
+            c.execute("UPDATE ap_nodes SET state='implementing',reason='' WHERE id=? AND state='probing_implementation'", (n["id"],))
+            if availability_key:
+                c.execute("DELETE FROM ap_provider_availability WHERE key=?", (availability_key,))
+        self.manager.db._notify(task["id"], "waiting-for-quota", "queued")
+        return True
 
     async def _finish_conflict(self, n):
         w = self.ledger.get("workflows", n["workflow_id"])
@@ -1530,7 +1567,7 @@ class Autopilot:
             + n["spec"]["prompt"]
         )
         turn = _Turn(
-            prompt, resume_thread=task["codex_thread_id"], service_tier="default", trigger="autopilot_integration"
+            prompt, resume_thread=session_id(task), service_tier="default", trigger="autopilot_integration"
         )
         workflow = self.ledger.get("workflows", n["workflow_id"])
         fields = self.manager._queue_fields(turn, **task_fields(n["spec"], workflow["plan"]))
@@ -1544,7 +1581,7 @@ class Autopilot:
                     uuid.uuid4().hex,
                     n["id"],
                     n["generation"],
-                    canonical(dict(thread=task["codex_thread_id"], prompt_digest=digest(prompt),
+                    canonical(dict(thread=session_id(task), prompt_digest=digest(prompt),
                                    execution_settings=resolve_execution(n["spec"], workflow["plan"]))),
                     now_iso(),
                 ),
@@ -1734,7 +1771,7 @@ class Autopilot:
         operation = self.ledger.rows("operations", "node_id=? AND kind='integration'", (node["id"],))[-1]
         payload = operation["payload"]
         result = completion.parse_result(task["semantic_result"])
-        if task["status"] == "stopped" or (task["codex_thread_id"] and (not result or result["status"] != "SUCCESS")):
+        if task["status"] == "stopped" or (session_id(task) and (not result or result["status"] != "SUCCESS")):
             self.ledger.transition(
                 node["id"],
                 "reconciling_git",
@@ -1776,7 +1813,7 @@ class Autopilot:
             )
             return
         identity = task.get("proc_identity")
-        if task.get("pid") and same_process(task["pid"], identity):
+        if task.get("pid") and owned_process_alive(task["pid"], identity, task["provider"]):
             self.ledger.transition(
                 node["id"],
                 "reconciling_git",
@@ -1791,7 +1828,7 @@ class Autopilot:
             dict(payload, head_sha=head, reconciliation="refs_and_all_pinned_inputs_confirmed"),
         )
         if node["spec"].get("integration_mode") == "merge-then-implement":
-            if task["status"] == "queued" and not task["codex_thread_id"] and not task["started_at"]:
+            if task["status"] == "queued" and not session_id(task) and not task["started_at"]:
                 self.ledger.transition(
                     node["id"],
                     "reconciling_git",

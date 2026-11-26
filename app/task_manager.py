@@ -19,31 +19,32 @@ import signal
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
 from . import completion
 from . import git_manager as git
-from .appserver import CLOSED, AppServerClient, AppServerError
+from .appserver import AppServerClient, AppServerError
+from .providers import ProviderRegistry, ProviderError, InvalidEnvelope, decode_event, session_id, redact
+from .codex_execution import CodexExecution
 from .codex_login import CodexLogin
-from .codex_runner import WEB_SEARCH_MODES, CodexRunner, approval_params, nested, task_config, terminate_process
+from .codex_runner import WEB_SEARCH_MODES, CodexRunner, terminate_process
 from .attachments import AttachmentError, AttachmentStore
 from .artifact_gc import ArtifactGC, launch_guard
 from .config import Settings
 from .database import Database, DependencyError, ScheduledError
 from .instructions import load_instructions
 from .logstore import TaskLog, read_log
-from .notifications import log_entry
-from .procinfo import process_identity, same_process
+from .procinfo import process_identity, owned_process_alive
 from .recovery import NO_THREAD_NOTE, RECOVERY_PROMPT, Failure
 from .scheduler import Scheduler
 from . import ctx_config, ctx_guard, efficiency, recovery
-from .ctx_manager import ContextFeatures, check_subdir_in_ref, task_cwd
+from .ctx_manager import ContextFeatures, check_subdir_in_ref
 from .usage import (
-    REQUIRED_KEYS, cache_hit_rate, context_status, dumps, extract_usage, is_quota_error, parse_rate_limits,
-    parse_token_usage, quota_exhausted, turn_delta,
+    REQUIRED_KEYS, cache_hit_rate, context_status, dumps, extract_usage, parse_rate_limits,
+    turn_delta,
 )
 from .models import (
     ACTIVE_STATUSES, BUSY_STATUSES, InvalidTransition, DEPENDENCY_FAILED_STATUSES, DEPENDENCY_POLICIES, EFFORT_RE, ESCALATION, SANDBOXES,
@@ -119,15 +120,9 @@ class TaskError(Exception):
         self.code = code
 
 
-def error_kind(error: Optional[dict]) -> str:
-    """Name of a TurnError's codexErrorInfo ("usageLimitExceeded", "httpConnectionFailed", ...), or ""."""
-    info = error.get("codexErrorInfo") if isinstance(error, dict) else None
-    if isinstance(info, str):
-        return info
-    return next(iter(info)) if isinstance(info, dict) and info else ""
 
 
-class TaskManager:
+class TaskManager(CodexExecution):
     def __init__(self, settings: Settings, db: Database, runner: Optional[CodexRunner] = None,
                  app_server: Optional[AppServerClient] = None):
         self.settings = settings
@@ -139,6 +134,8 @@ class TaskManager:
         self.artifacts = ArtifactStore(self)
         self.runner = runner or CodexRunner(settings.codex_bin, settings.subscription_only)
         self.runner.instructions = load_instructions(settings.instructions_path)
+        self.providers = ProviderRegistry(db, settings, self.runner)
+        self.providers.get("claude").instructions = self.runner.instructions
         self._app_server = app_server
         self._jobs: dict[str, asyncio.Task] = {}
         self._procs: dict[str, asyncio.subprocess.Process] = {}
@@ -148,6 +145,7 @@ class TaskManager:
         self._stop_deadline: dict[str, float] = {}
         self._repo_locks: dict[str, asyncio.Lock] = {}
         self._shutting_down = False
+        self._provider_reconfiguring = False
         # Identifies this GUI process in claims. Recovery assumes one GUI process per database (see recover()).
         self.instance_id = uuid.uuid4().hex
         self._attempts: dict[str, int] = {}        # task id -> id of the attempt row being run
@@ -171,6 +169,9 @@ class TaskManager:
     @property
     def uses_app_server(self) -> bool:
         return self.settings.backend == "app-server"
+
+    def task_uses_app_server(self, task):
+        return task.get("provider", "codex") == "codex" and self.uses_app_server
 
     # ---------- lookup ----------
 
@@ -277,7 +278,8 @@ class TaskManager:
 
     async def create_task(self, *, repository: str, base_ref: str = "main", name: str = "", prompt: str,
                           model: str = "", reasoning_effort: str = "default",
-                          auto_approval: bool = True, service_tier: str = "default", model_verbosity: str = "low",
+                          provider: str = "codex", provider_options: Optional[dict] = None,
+                          auto_approval: Optional[bool] = None, service_tier: str = "default", model_verbosity: str = "low",
                           web_search: Union[bool, str] = "cached", sandbox: str = "workspace-write", network_access: bool = True,
                           adaptive_reasoning: bool = True, context_guard: bool = True,
                           writable_dirs: str = "", feature_flags: str = "",
@@ -285,9 +287,31 @@ class TaskManager:
                           auto_retry: Optional[bool] = None, max_retries: Optional[int] = None,
                           tool_output: str = "default", tool_output_limit: Optional[int] = None,
                           skills: str = "default", skills_budget: Optional[int] = None,
-                          allow_subagents: bool = False, tool_profile: str = "full", cwd_subdir: str = "",
+                          allow_subagents: Optional[bool] = None, tool_profile: str = "full", cwd_subdir: str = "",
                           completion_contract: Optional[dict] = None, attachment_ids=(), artifact_refs=(),
                           _defer_dispatch: bool = False, _task_id: Optional[str] = None, _branch: Optional[str] = None) -> dict:
+        try:
+            engine = self.providers.get(provider)
+            defaults = self.providers.config(provider)
+            model = model or defaults["default_model"]
+            if auto_approval is None:
+                auto_approval = defaults["permission_mode"] == "auto_review"
+            reasoning_effort = defaults["default_effort"] if reasoning_effort == "default" else reasoning_effort
+            if allow_subagents is None:
+                allow_subagents = defaults["default_subagents"]
+            if provider == "claude":
+                provider_options = engine.validate_options({"permission_mode": defaults["permission_mode"], **(provider_options or {})})
+                if not provider_options["trusted_repository"]:
+                    raise ProviderError("repository_untrusted", "Claude non-interactive execution requires explicit repository trust")
+                if service_tier != "default":
+                    raise ProviderError("unsupported", "Claude does not support Codex service tiers")
+                adaptive_reasoning = context_guard = False
+                if tool_profile != "full" or tool_output != "default" or skills != "default" or feature_flags or writable_dirs:
+                    raise ProviderError("unsupported", "Codex tool profiles/limits/feature flags are not Claude capabilities")
+            elif provider_options:
+                raise ProviderError("unsupported", "Codex options use the existing task fields")
+        except ProviderError as e:
+            raise TaskError(str(e), 400, e.failure.kind) from e
         try:
             rules = completion.contract(completion_contract)
         except ValueError as e:
@@ -307,17 +331,17 @@ class TaskManager:
             if ref in refs:
                 raise TaskError("Artifact参照が重複しています。")
             refs.append(ref)
-        await self._check_images(attachment_ids)
+        await self._check_images(attachment_ids, provider=provider)
         if len(refs) + sum(self.attachments.get(aid)["kind"] == "file" for aid in attachment_ids) > 16:
             raise TaskError("入力ファイルとArtifact参照は合計16件までです。")
         name = name.strip() or (prompt.splitlines()[0][:60] if prompt else "Attachment task")
         model = model.strip()
-        if model.startswith("-"):
+        if model.startswith("-") or len(model) > 256 or any(ord(c) < 32 for c in model):
             raise TaskError("invalid model name")
-        if reasoning_effort != "default" and not EFFORT_RE.match(reasoning_effort):
+        if reasoning_effort != "default" and not EFFORT_RE.fullmatch(reasoning_effort):
             raise TaskError(f"invalid reasoning effort: {reasoning_effort}")
         service_tier = service_tier.strip() or "default"
-        if not SERVICE_TIER_RE.match(service_tier):
+        if not SERVICE_TIER_RE.fullmatch(service_tier):
             raise TaskError(f"invalid service tier: {service_tier}")
         if model_verbosity not in VERBOSITIES:
             raise TaskError(f"invalid output verbosity: {model_verbosity}")
@@ -362,11 +386,19 @@ class TaskManager:
         # A task that waits for others gets its worktree just before it runs (see _ensure_worktree): no idle worktrees
         # for tasks that may never start. An immediate task gets it now, as before.
         if not deps:
+            if provider == "claude":
+                try:
+                    await engine.preflight(dict(provider_options=json.dumps(provider_options), model=model, reasoning_effort=reasoning_effort))
+                except ProviderError as e:
+                    raise TaskError(str(e), 400, e.failure.kind) from e
             # Several tasks may be created in the same repo at once; git's own locks (config, refs)
             # can make concurrent `worktree add` calls fail, so creation is serialized per repository.
             async with self._repo_locks.setdefault(repo, asyncio.Lock()):
                 try:
-                    await git.create_worktree(repo, wt, branch, base_sha)
+                    if provider == "claude":
+                        await git.create_worktree(repo, wt, branch, base_sha, disable_hooks=True)
+                    else:
+                        await git.create_worktree(repo, wt, branch, base_sha)
                 except git.GitError as e:
                     raise TaskError(f"git worktree add failed: {e}") from e
 
@@ -374,7 +406,7 @@ class TaskManager:
             self.db.create_task(
                 artifact_refs=refs,
                 depends_on=deps, message=_Turn(prompt, trigger="initial", attachment_ids=list(attachment_ids)).message(),
-                id=task_id, name=name, repository=repo, worktree=str(wt), branch=branch,
+                id=task_id, name=name, provider=provider, provider_options=json.dumps(provider_options or {}), repository=repo, worktree=str(wt), branch=branch,
                 base_ref=base_ref, base_sha=base_sha, prompt=prompt, model=model,
                 reasoning_effort=reasoning_effort, auto_approval=int(auto_approval),
                 service_tier=service_tier, model_verbosity=model_verbosity, web_search_enabled=int(web_search_mode != "disabled"), web_search_mode=web_search_mode,
@@ -481,12 +513,12 @@ class TaskManager:
             raise TaskError("task is blocked by a prerequisite; use Run Anyway or fix the dependency", 409, "blocked")
         self._require_worktree(task)
 
-    async def _check_images(self, ids, resume=False, task_id=None) -> None:
+    async def _check_images(self, ids, resume=False, provider="codex", task_id=None) -> None:
         if not ids:
             return
         try:
             await asyncio.to_thread(self.attachments.resolve, ids, task_id)
-            if self.attachments.paths(ids):
+            if provider == "codex" and self.attachments.paths(ids):
                 await self.runner.check_image_support(self.settings.backend, resume)
         except AttachmentError as e:
             raise TaskError(str(e), 400, "invalid_attachment") from e
@@ -508,20 +540,22 @@ class TaskManager:
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("instruction is required")
-        await self._check_images(attachment_ids, resume=True, task_id=task_id)
+        await self._check_images(attachment_ids, resume=True, provider=self.get(task_id)["provider"], task_id=task_id)
         tier = self._turn_tier(service_tier)
         task = self.get(task_id)
+        if task["provider"] != "codex" and tier not in (None, "default"):
+            raise TaskError("provider does not support Fast", 400, "unsupported")
         if reasoning_effort is not None and reasoning_effort != task["reasoning_effort"]:
-            if reasoning_effort != "default" and not EFFORT_RE.match(reasoning_effort):
+            if reasoning_effort != "default" and not EFFORT_RE.fullmatch(reasoning_effort):
                 raise TaskError(f"invalid reasoning effort: {reasoning_effort}")
         else:
             reasoning_effort = None
         if task["status"] in ACTIVE_STATUSES:
             return await self._steer(task, prompt, attachment_ids)
         self._require_idle_with_worktree(task)
-        thread = task["codex_thread_id"]
+        thread = session_id(task)
         if not thread:
-            raise TaskError("this task has no recorded Codex session id; use Start New Session", 409, "no_session")
+            raise TaskError("this task has no recorded provider session id; use Start New Session", 409, "no_session")
         if ctx_guard.blocks_resend(task.get("stop_reason") or ""):
             # Sending again would resend the same huge context that just overflowed: the user must shrink it first.
             raise TaskError(ctx_guard.STOP_MESSAGES["context_window_exceeded"], 409, "context_overflow")
@@ -530,6 +564,7 @@ class TaskManager:
             TaskLog.note(self.log_path(task_id),
                          f"reasoning effort changed {task['reasoning_effort']} -> {reasoning_effort} (requested by the user)")
             fields["reasoning_effort"] = reasoning_effort
+        self.providers.pause(task["provider"], False)
         return self._begin_turn(task, _Turn(prompt, resume_thread=thread, service_tier=tier, attachment_ids=list(attachment_ids)), **fields)
 
     @staticmethod
@@ -537,13 +572,13 @@ class TaskManager:
         if value is None or not str(value).strip():
             return None
         tier = {"standard": "default", "fast": "priority"}.get(str(value).strip().lower(), str(value).strip().lower())
-        if not SERVICE_TIER_RE.match(tier):
+        if not SERVICE_TIER_RE.fullmatch(tier):
             raise TaskError(f"invalid service tier: {value}")
         return tier
 
     async def _steer(self, task: dict, prompt: str, attachment_ids=()) -> dict:
         """Add an instruction to the turn that is running now (turn/steer). The exec backend has no such thing."""
-        if not self.uses_app_server:
+        if not self.task_uses_app_server(task):
             raise TaskError(f"task is {task['status']}; send the next instruction when it has finished", 409, "active")
         info = self._active_turns.get(task["id"])
         if not info or not info.get("turn") or task["status"] != "running":
@@ -580,24 +615,66 @@ class TaskManager:
                 skipped.append({"id": task["id"], "reason": str(e)})
         return {"resumed": resumed, "skipped": skipped}
 
-    async def start_new_session(self, task_id: str, prompt: str, attachment_ids=()) -> dict:
+    async def start_new_session(self, task_id: str, prompt: str, attachment_ids=(), *, provider=None, model=None, reasoning_effort=None, provider_options=None) -> dict:
         """A fresh Codex session in the same worktree. Deliberately separate from send_instruction: it
         gives up the old session's conversation and the cached input that goes with it."""
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("prompt is required")
-        await self._check_images(attachment_ids, task_id=task_id)
         task = self.get(task_id)
         self._require_idle_with_worktree(task)
-        return self._begin_turn(task, _Turn(prompt, trigger="new_session", attachment_ids=list(attachment_ids)), stop_reason="", long_context_ack="")
+        target = provider or task["provider"]
+        try:
+            engine = self.providers.get(target)
+            fields = {}
+            if target != task["provider"]:
+                if self.db.list_scheduled(task_id, statuses=(*SCHEDULED_WAITING, "running")):
+                    raise TaskError("finish or cancel scheduled instructions before changing provider", 409, "scheduled_session")
+                if self.autopilot.ledger.node_for_task(task_id):
+                    raise TaskError("revise the workflow and create a separate task to change its provider", 409)
+                defaults = self.providers.config(target)
+                new_model = defaults["default_model"] if model is None else model.strip()
+                from .providers import safe_value
+                safe_value(new_model, "model")
+                effort = reasoning_effort or defaults["default_effort"]
+                if effort != "default" and not EFFORT_RE.fullmatch(effort):
+                    raise TaskError("invalid reasoning effort")
+                opts = engine.validate_options(provider_options or {}) if target == "claude" else {}
+                fields = dict(provider=target, provider_options=json.dumps(opts), model=new_model, reasoning_effort=effort,
+                              provider_session_id=None, codex_thread_id=None, provider_usage="{}", provider_subagents="[]",
+                              adaptive_reasoning=int(target == "codex"), context_guard=int(target == "codex"),
+                              service_tier="default", allow_subagents=int(defaults["default_subagents"]),
+                              context_tokens=None, context_window=None, five_hour_used_before=None, five_hour_used_after=None,
+                              weekly_used_before=None, weekly_used_after=None)
+            elif model is not None or provider_options is not None:
+                raise TaskError("same-provider settings stay fixed; create a separate task to change them")
+        except ProviderError as e:
+            raise TaskError(str(e), 400, e.failure.kind) from e
+        await self._check_images(attachment_ids, provider=target, task_id=task_id)
+        if target != task["provider"]:
+            handoff = {
+                "previous_provider": task["provider"], "previous_session_id": session_id(task),
+                "original_task": task["prompt"], "latest_instruction": task["last_prompt"],
+                "worktree": task["worktree"], "branch": task["branch"], "base_sha": task["base_sha"],
+                "git_summary": await git.summary(task["worktree"], task["base_sha"]),
+                "previous_result": completion.parse_result(task["semantic_result"]),
+                "evidence_result": task["evidence_result"], "validation_checks": json.loads(task["completion_checks"] or "[]"),
+                "attempts": [{k: attempt[k] for k in ("provider", "result", "failure_kind", "git_head", "exit_code")}
+                             for attempt in self.db.list_attempts(task_id)[-5:]],
+            }
+            prompt += "\n\nProvider handoff: this is a NEW independent session, not a resumed conversation. "
+            prompt += "Inspect the existing worktree before changing it; do not repeat completed work.\n" + redact(json.dumps(handoff, ensure_ascii=False))
+        self.providers.pause(target, False)
+        return self._begin_turn(task, _Turn(prompt, trigger="new_session", attachment_ids=list(attachment_ids)),
+                                stop_reason="", long_context_ack="", **fields)
 
     async def compact(self, task_id: str) -> dict:
         """Compact the task's Codex thread (thread/compact/start). Task, worktree, branch and thread id stay as they are."""
         task = self.get(task_id)
         self._require_idle_with_worktree(task)
-        if not self.uses_app_server:
+        if not self.task_uses_app_server(task):
             raise TaskError("compaction needs the app-server backend", 409, "unsupported")
-        if not task["codex_thread_id"]:
+        if not session_id(task):
             raise TaskError("this task has no Codex thread to compact", 409, "no_session")
         return self._begin_turn(task, _Turn("", resume_thread=task["codex_thread_id"], kind="compact", trigger="compact"),
                                 stop_reason="", long_context_ack="")
@@ -649,7 +726,7 @@ class TaskManager:
             asyncio.get_running_loop()
         except RuntimeError:
             return False  # not inside the event loop (a plain DB call): the scheduler's next tick starts it
-        if self._shutting_down:
+        if self._shutting_down or self._provider_reconfiguring:
             return False
         task = self.db.get_task(task_id)
         if task is None or task["status"] != "queued" or task["claimed_by"]:
@@ -657,6 +734,11 @@ class TaskManager:
         if not self.autopilot.can_dispatch(task_id):
             return False
         if self._slots and self.settings.max_concurrent > 0 and len(self._jobs) >= self.settings.max_concurrent:
+            return False
+        if self.providers.paused(task["provider"]):
+            return False
+        limit = self.providers.config(task["provider"])["max_concurrent"]
+        if limit and sum(self.get(tid)["provider"] == task["provider"] for tid in self._jobs) >= limit:
             return False
         turn = self._pending_turn(task)
         check_deps = turn.trigger == "initial" and not turn.ignore_dependencies
@@ -690,22 +772,24 @@ class TaskManager:
             if self._slots:
                 await self._slots.acquire()
             try:
-                if self._pause_for_dependencies(task_id, turn, log):
-                    return
-                self.db.set_status(task_id, "starting")
-                if await self._prepare(task_id, log, turn):
+                async with self.providers.slot(self.get(task_id)["provider"]):
                     if self._pause_for_dependencies(task_id, turn, log):
                         return
-                    if self.uses_app_server:
-                        await self._run_app_server_turn(task_id, log, turn)
-                    else:
-                        await self._run_process(task_id, log, turn)
+                    self.db.set_status(task_id, "starting")
+                    if await self._prepare(task_id, log, turn):
+                        if self._pause_for_dependencies(task_id, turn, log):
+                            return
+                        await self.providers.get(self.get(task_id)["provider"]).run(self, task_id, log, turn)
             finally:
                 if self._slots:
                     self._slots.release()
         except asyncio.CancelledError:
             self._end_attempt(task_id, "stopped", turn)  # stop() of a queued task; it already wrote the final status
             raise
+        except ProviderError as e:
+            current = self.db.get_task(task_id)
+            if current and current["status"] in ACTIVE_STATUSES:
+                self._settle(task_id, log, turn, "failed", failure=e.failure)
         except AttachmentError as e:
             current = self.db.get_task(task_id)
             if current and current["status"] in ACTIVE_STATUSES:
@@ -753,11 +837,20 @@ class TaskManager:
             requests = self.db.artifact_requests(task_id)
             if turn.trigger == "initial" or any(not r["attachment_id"] for r in requests):
                 await asyncio.to_thread(self.artifacts.prepare_requests, task_id, turn)
-            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread), task_id=task_id)
+            await self._check_images(turn.attachment_ids, resume=bool(turn.resume_thread),
+                                     provider=self.get(task_id)["provider"], task_id=task_id)
         except (TaskError, FileError, AttachmentError) as e:
             self._settle(task_id, log, turn, "failed", failure=Failure("invalid_attachment", recovery.NON_RETRYABLE, str(e)))
             return False
         task = self.get(task_id)
+        if turn.resume_thread:
+            if turn.resume_thread != session_id(task):
+                raise ProviderError("session_mismatch", "recorded pending session differs from task session")
+            try:
+                self.db.bind_session(task_id, turn.resume_thread)
+            except ValueError as e:
+                raise ProviderError("session_ownership", str(e)) from e
+        await self.providers.get(task["provider"]).preflight(task)
         failure = await self._ensure_worktree(task, log)
         if failure:
             log.add_system(f"cannot start: {failure.message}")
@@ -800,7 +893,10 @@ class TaskManager:
                     sha = await git.resolve_commit(repo, task["base_ref"])  # the base as it is now, not as it was at creation
                     if sha is None:
                         return Failure("git_invalid", recovery.NON_RETRYABLE, f"base ref not found: {task['base_ref']}")
-                    await git.create_worktree(repo, wt, task["branch"], sha)
+                    if task["provider"] == "claude":
+                        await git.create_worktree(repo, wt, task["branch"], sha, disable_hooks=True)
+                    else:
+                        await git.create_worktree(repo, wt, task["branch"], sha)
                 except git.GitError as e:
                     return recovery.classify_git_error(str(e))
             self.db.update_task(task["id"], worktree_pending=0, base_sha=sha, git_summary="clean")
@@ -832,7 +928,8 @@ class TaskManager:
         self._attempts[task_id] = self.db.start_attempt(
             task_id=task_id, trigger_kind=turn.trigger, started_at=now_iso(), was_resume=int(bool(turn.resume_thread)),
             service_tier=turn.service_tier or task["service_tier"], reasoning_effort=task["reasoning_effort"],
-            codex_thread_id=turn.resume_thread)
+            provider=task["provider"], provider_session_id=turn.resume_thread,
+            codex_thread_id=turn.resume_thread if task["provider"] == "codex" else None)
 
     def _end_attempt(self, task_id: str, result: str, turn: Optional[_Turn] = None, *, exit_code: Optional[int] = None,
                      failure: Optional[Failure] = None) -> None:
@@ -847,7 +944,9 @@ class TaskManager:
             fields.update(failure_kind=failure.kind, failure_message=failure.message)
         thread = turn and (turn.thread_id or turn.resume_thread)
         if thread:
-            fields["codex_thread_id"] = thread
+            fields["provider_session_id"] = thread
+            if self.get(task_id)["provider"] == "codex":
+                fields["codex_thread_id"] = thread
         self.db.update_attempt(aid, **fields)
 
     # ----- ending a run: the one place that decides between done, failed, quota and "try again" -----
@@ -874,6 +973,8 @@ class TaskManager:
             fields.update(evidence_result="UNKNOWN", evidence_reason="Execution did not complete normally.",
                           approval_source="", approved_at=None)
         if failure:
+            if task["provider"] == "claude" and failure.kind in ("billing_violation", "auth", "authentication_error", "billing_unknown"):
+                self.providers.pause("claude")
             fields.update(last_failure_kind=failure.kind, last_failure_message=failure.message[:500], last_exit_code=exit_code)
             log.add_system(failure.message if failure.category == recovery.QUOTA else
                            f"unexpected stop [{failure.kind}, {failure.category}]: {failure.message}")
@@ -881,6 +982,8 @@ class TaskManager:
             decision = recovery.decide(failure, enabled=bool(task["auto_retry_enabled"]),
                                        retry_count=task["retry_count"], max_retries=task["max_retries"])
             if decision.action == "quota":
+                if task["provider"] == "claude":
+                    self.providers.pause(task["provider"])
                 status, result = "waiting-for-quota", "quota"
                 fields["status_detail"] = failure.message[:500]
             elif decision.action == "retry" and not self._shutting_down:
@@ -935,7 +1038,7 @@ class TaskManager:
     def _in_flight_turn(self, task: dict) -> _Turn:
         """The turn a task was running (or was to run) when it stopped, as stored on the task. A row from before
         pending_turn existed falls back to the task's own thread, else its last instruction."""
-        return _Turn.from_json(task["pending_turn"]) or _Turn(task["last_prompt"] or task["prompt"], thread_id=task["codex_thread_id"])
+        return _Turn.from_json(task["pending_turn"]) or _Turn(task["last_prompt"] or task["prompt"], thread_id=session_id(task))
 
     def _turn_of(self, task: dict, trigger: Optional[str] = None) -> _Turn:
         """The recovery turn for a task that is not running in this process (manual retry, a due timer). Without a
@@ -946,273 +1049,11 @@ class TaskManager:
     def _persist_thread(self, task_id: str, turn: _Turn, thread_id: str) -> None:
         """A turn that started a NEW thread: remember its id on the task and in the pending turn (a retry resumes it)."""
         turn.thread_id = thread_id
-        self.db.update_task(task_id, codex_thread_id=thread_id, pending_turn=turn.to_json())
-
-    # ----- app-server backend -----
-
-    def _note_overlap(self, task_id: str) -> None:
-        """Remember that tasks ran together: their quota change cannot be told apart afterwards."""
-        others = [t for t in self._active_turns if t != task_id]
-        if others:
-            self._overlap.update(others)
-            self._overlap.add(task_id)
-
-    def _thread_params(self, task: dict) -> dict:
-        """thread/start and thread/resume carry the same settings, so a resumed thread never drifts."""
-        params = {"cwd": task_cwd(task), "serviceTier": task["service_tier"], "config": nested(task_config(task)),
-                  **approval_params(task)}
-        if task["model"]:
-            params["model"] = task["model"]
-        return params
-
-    async def _run_app_server_turn(self, task_id: str, log: TaskLog, turn: _Turn) -> None:
-        task = self.get(task_id)
-        started_at = now_iso()
-        compact = turn.kind == "compact"
         try:
-            client = await self.client()
-            await self._require_subscription(client)
-        except AppServerError as e:
-            log.add_system(f"cannot use Codex: {e}")
-            self._settle(task_id, log, turn, "failed", failure=recovery.classify_app_server_error(e))
-            return
-        except TaskError as e:
-            log.add_system(f"cannot use Codex: {e}")
-            self._settle(task_id, log, turn, "failed", failure=Failure("auth", recovery.NON_RETRYABLE, str(e)[:500]))
-            return
-
-        before = await self.read_limits("turn_start", task_id, force_history=True)
-        if quota_exhausted(before):
-            # Codex says the included usage is exhausted: do not start a turn that cannot run, and do not retry.
-            log.add_system("Codex reports that ordinary usage is not available (rate limit reached); not starting the turn.")
-            self._settle(task_id, log, turn, "failed", failure=Failure(
-                "quota", recovery.QUOTA, f"rate limit reached ({before.get('reached_type') or 'ordinary usage unavailable'})"))
-            return
-        self.db.update_task(task_id, five_hour_used_before=before and before["five_hour_used"],
-                            weekly_used_before=before and before["weekly_used"],
-                            five_hour_used_after=None, weekly_used_after=None, quota_overlap=0)
-
-        try:
-            while True:
-                try:
-                    res = await client.request(
-                        "thread/resume" if turn.resume_thread else "thread/start",
-                        {**self._thread_params(task),
-                         **({"threadId": turn.resume_thread, "excludeTurns": True} if turn.resume_thread else
-                            {"serviceName": "codex-gui",
-                             **({"developerInstructions": self.runner.instructions} if self.runner.instructions else {})})},
-                        timeout=60)
-                    break
-                except AppServerError as e:
-                    if turn.fresh_ok and turn.resume_thread and recovery.classify_app_server_error(e).kind == "session_missing":
-                        # The turn that created this thread never started and Codex never saved the thread: nothing was
-                        # ever done in it, so the same instruction may start a new thread (same worktree, same branch).
-                        log.add_system(f"Codex has no saved thread {turn.resume_thread} (the process died before the first turn started). "
-                                       "Starting a new Codex thread in the same worktree with the same instruction.")
-                        log.add_system(NO_THREAD_NOTE)
-                        turn.resume_thread = turn.thread_id = None
-                        turn.fresh_ok = False
-                        continue
-                    raise
-            thread = res["thread"]
-            thread_id = thread["id"]
-        except AppServerError as e:
-            log.add_system(f"codex could not open the thread: {e}")
-            failure = recovery.classify_app_server_error(e)
-            self._settle(task_id, log, turn, "failed", failure=Failure(failure.kind, failure.category, f"thread: {failure.message}"[:500]))
-            return
-        except (KeyError, TypeError) as e:
-            log.add_system(f"codex could not open the thread: {e}")
-            self._settle(task_id, log, turn, "failed", failure=Failure("unknown", recovery.UNKNOWN, f"thread: {e}"[:500]))
-            return
-        turn.thread_id = thread_id
-        model = res.get("model") or task["model"] or None
-        if turn.resume_thread:
-            log.add_system(f"turn: resuming Codex thread {thread_id}")
-            if thread_id != turn.resume_thread:
-                log.add_system(f"WARNING: asked to resume Codex thread {turn.resume_thread} but codex reported "
-                               f"{thread_id}; the thread was NOT continued, so cached input is not reused")
-        else:
-            self._persist_thread(task_id, turn, thread_id)
-            log.add_system(f"turn: started Codex thread {thread_id}")
-            log.add_system(f"codex session id: {thread_id}")
-        if compact:
-            log.add_system("compacting the thread (thread/compact/start)")
-        else:
-            log.add_system("instruction:\n" + turn.prompt[:INSTRUCTION_LOG_CHARS] +
-                           (f"\n… (+{len(turn.prompt) - INSTRUCTION_LOG_CHARS} chars)" if len(turn.prompt) > INSTRUCTION_LOG_CHARS else ""))
-        log.add_system(f"model {model or 'default'}, effort {task['reasoning_effort']}, tier {task['service_tier']}, "
-                       f"sandbox {task['sandbox']}, auto approval {'on' if task['auto_approval'] else 'off'}")
-
-        queue = client.subscribe(thread_id)
-        observer = await self.ctx.observer(task, model)
-        turn_tier = turn.service_tier or task["service_tier"]
-        info = self._active_turns[task_id] = {"thread": thread_id, "turn": None}
-        self._note_overlap(task_id)
-        try:
-            if compact:
-                await client.request("thread/compact/start", {"threadId": thread_id}, timeout=60)
-            else:
-                rules = json.loads(task["completion_contract"] or "{}")
-                prompt = turn.prompt + ("\nCompletion contract: " + json.dumps(rules) if rules else "")
-                params = {"threadId": thread_id, "input": self._image_input(prompt, turn.attachment_ids),
-                          "outputSchema": completion.SCHEMA}
-                if task["reasoning_effort"] not in ("", "default"):
-                    params["effort"] = task["reasoning_effort"]
-                # The speed is chosen for THIS turn only (Send Standard / Send Fast): serviceTierForTurn does not change the
-                # thread's own default, whereas serviceTier would (measured with codex-cli 0.159.2).
-                params["serviceTierForTurn"] = turn_tier
-                started = await client.request("turn/start", params, timeout=60)
-                info["turn"] = started["turn"]["id"]
-        except (AppServerError, KeyError, TypeError) as e:
-            client.unsubscribe(thread_id)
-            log.add_system(f"codex could not start the turn: {e}")
-            if isinstance(e, AppServerError):
-                failure = recovery.classify_app_server_error(e)
-                failure = Failure(failure.kind, failure.category, f"turn/start: {failure.message}"[:500])
-            else:
-                failure = Failure("unknown", recovery.UNKNOWN, f"turn/start: {e}"[:500])
-            self._settle(task_id, log, turn, "failed", failure=failure)
-            return
-        self.db.set_status(task_id, "running", pid=client.pid, proc_identity=process_identity(client.pid), started_at=started_at)
-        if task_id in self._stop_requested:
-            await self._interrupt(task_id)
-
-        final, error, usage, lost = None, None, None, None
-        try:
-            while True:
-                try:
-                    method, params = await asyncio.wait_for(queue.get(), 1.0)
-                except asyncio.TimeoutError:
-                    if time.monotonic() > self._stop_deadline.get(task_id, float("inf")):
-                        log.add_system("codex did not finish after the interrupt; giving up on the turn")
-                        break
-                    continue
-                if method == CLOSED["method"]:
-                    raise AppServerError(params.get("reason", "app-server closed"), kind="closed")
-                tid = params.get("turnId") or (params.get("turn") or {}).get("id")
-                if info["turn"] and tid and tid != info["turn"]:
-                    continue  # an event of some other turn of this thread
-                if method == "turn/started" and not info["turn"] and tid:
-                    info["turn"] = tid
-                    if task_id in self._stop_requested:
-                        await self._interrupt(task_id)
-                if method in ("turn/started", "turn/completed") or method.startswith("item/"):
-                    self._mark_started(task_id, turn)
-                guard = observer.feed(method, params)
-                if guard and task_id not in self._guard_stops:
-                    # The retry guard owns this stop (an error Codex would keep retrying, or the same tool failing again
-                    # and again): interrupt the turn instead of letting it loop, and never retry it.
-                    self._guard_stops[task_id] = {"reason": guard["interrupt"], "message": guard["message"]}
-                    log.add_system("retry guard: " + guard["message"])
-                    await self._interrupt(task_id)
-                if method == "thread/tokenUsage/updated":
-                    usage = parse_token_usage(params.get("tokenUsage")) or usage
-                    if usage and not compact:
-                        self.db.update_task(task_id, context_tokens=usage["context_tokens"],
-                                            context_window=usage["context_window"])
-                elif method == "error" and not params.get("willRetry") and isinstance(params.get("error"), dict):
-                    error = params["error"]
-                entry = log_entry(method, params)
-                if entry:
-                    log.add_event(entry[0], entry[1], params)
-                if method == "item/completed" and params.get("turnId") == info.get("turn"):
-                    item = params.get("item") or {}
-                    if item.get("type") == "agentMessage" and item.get("phase") in (None, "final_answer"):
-                        turn.final_text = item.get("text") if isinstance(item.get("text"), str) else ""
-                if method == "turn/completed":
-                    final = params.get("turn") or {}
-                    for item in final.get("items") or []:
-                        if item.get("type") == "agentMessage" and item.get("phase") in (None, "final_answer"):
-                            turn.final_text = item.get("text") if isinstance(item.get("text"), str) else ""
-                    if final.get("status") == "completed" and not compact:
-                        self._record_completion_pending(task_id, turn.final_text)
-                    break
-        except AppServerError as e:
-            log.add_system(f"codex app-server failed during the turn: {e}")
-            lost = e
-        finally:
-            client.unsubscribe(thread_id)
-
-        await self._finish_app_server_turn(task_id, log, turn, final, error, lost, usage, started_at, model,
-                                           observer=observer, turn_tier=turn_tier)
-
-    async def _interrupt(self, task_id: str) -> None:
-        info = self._active_turns.get(task_id)
-        if not info or not info.get("turn"):
-            return  # the turn id is not known yet; the loop interrupts as soon as it is
-        self._stop_deadline.setdefault(task_id, time.monotonic() + self.settings.stop_grace_seconds)
-        try:
-            await (await self.client()).request("turn/interrupt", {"threadId": info["thread"], "turnId": info["turn"]}, timeout=15)
-        except AppServerError:
-            pass  # the deadline in the event loop ends the turn anyway
-
-    async def _finish_app_server_turn(self, task_id, log, turn, final, error, lost, usage, started_at, model,
-                                      observer=None, turn_tier=None) -> None:
-        task = self.get(task_id)
-        guard_stop = self._guard_stops.get(task_id)
-        compact = turn.kind == "compact"
-        turn_error = (final or {}).get("error") or error
-        kind = error_kind(turn_error)
-        if usage:
-            self._store_turn(task_id, log, turn.thread_id or "", usage["total"], kind=turn.kind,
-                             status=(final or {}).get("status", "interrupted"), turn_id=self._active_turns.get(task_id, {}).get("turn"),
-                             started_at=started_at, model=model, effort=task["reasoning_effort"],
-                             context=None if compact else usage, turn_tier=turn_tier or turn.service_tier, observer=observer)
-            if not compact and usage.get("context_tokens") is not None:
-                self.ctx.record_zone_change(self.get(task_id), usage["context_tokens"], model or task["model"], usage.get("context_window"))
-        if compact:  # the size after compaction is only known from the next turn's first request
-            self.db.update_task(task_id, context_tokens=None)
-
-        # A lost server has no attributable end-of-turn quota snapshot. Querying it here can restart the
-        # server or wait on a dying transport before recording the process failure.
-        after = None if lost is not None else await self.read_limits("turn_end", task_id, force_history=True)
-        fields = {"finished_at": now_iso(), "exit_code": None}
-        if after:
-            fields.update(five_hour_used_after=after["five_hour_used"], weekly_used_after=after["weekly_used"])
-        if task_id in self._overlap:
-            fields["quota_overlap"] = 1
-
-        status_text = (final or {}).get("status")
-        failure = None
-        stop_reason = ""
-        if task_id in self._stop_requested:
-            status = "interrupted" if self._shutting_down else "stopped"
-        elif guard_stop and status_text != "completed":
-            # The guard stopped this turn: a failure that is NOT retried, with the reason on the task for the UI.
-            status, stop_reason = "failed", guard_stop["reason"]
-            failure = Failure(stop_reason, recovery.NON_RETRYABLE, guard_stop["message"])
-            fields["failure_source"] = "guard"
-        elif status_text == "completed":
-            status = "completed"
-        elif status_text == "interrupted":
-            status = "stopped"
-        else:
-            if lost is not None and not final:  # the app-server went away or stopped answering: a process failure
-                failure = recovery.classify_app_server_error(lost)
-            else:
-                failure = recovery.classify_turn_error(kind, str((turn_error or {}).get("message") or "the turn failed"))
-            # Quota is decided from what Codex said (error kind or limits snapshot), never from a failed run alone.
-            if is_quota_error(kind) or quota_exhausted(after):
-                failure = Failure("quota", recovery.QUOTA,
-                                  f"Codex usage limit reached ({kind or (after or {}).get('reached_type') or 'unavailable'})")
-            else:
-                fields["failure_source"] = "codex" if final else "gui"
-            stop_reason = (observer.stop_reason if observer else "") or ctx_guard.stop_reason_for_error(kind)
-            status = "failed"  # _settle turns it into waiting-for-quota, retry_wait or failed
-        log.add_system(f"turn finished: {status_text or 'no turn/completed'} -> {status}")
-        await self.refresh_git_summary(task_id)
-        fields["stop_reason"] = stop_reason  # "" on success: a later turn clears an old context-overflow block
-        if stop_reason:
-            self.db.add_context_event(task_id, "retry_guard", "critical", ctx_guard.STOP_MESSAGES.get(stop_reason, stop_reason), now_iso(),
-                                      None, {"reason": stop_reason})
-        if status == "completed" and not compact:
-            fields.update(await self._completion_fields(task_id, turn.final_text))
-        if task_id in self._stop_requested:
-            status = "interrupted" if self._shutting_down else "stopped"
-            fields.update(task_outcome="incomplete", outcome_reason="Stopped before completion was accepted.", outcome_source="gate")
-        # Last, and with nothing awaited afterwards: once the status is terminal a new turn may be started.
-        self._settle(task_id, log, turn, status, failure=failure, **fields)
+            self.db.bind_session(task_id, thread_id)
+        except ValueError as e:
+            raise ProviderError("session_ownership", str(e)) from e
+        self.db.update_task(task_id, pending_turn=turn.to_json())
 
     # ----- exec backend -----
 
@@ -1222,36 +1063,48 @@ class TaskManager:
         task = self.get(task_id)
         task = {**task, "image_paths": self.attachments.paths(turn.attachment_ids),
                 "service_tier": turn.service_tier or task["service_tier"]}
+        engine = self.providers.get(task["provider"])
+        if task["provider"] == "codex":
+            engine.runner = self.runner  # Preserve the supported injected-runner seam.
         try:
-            proc = await self.runner.spawn(task, turn.resume_thread)
+            proc = await engine.spawn(task, turn.resume_thread)
         except OSError as e:
-            log.add_system(f"failed to start codex: {e}")
+            log.add_system(f"failed to start {task['provider']}: {e}")
             permanent = isinstance(e, (FileNotFoundError, PermissionError, NotADirectoryError))
-            failure = Failure("codex_unavailable" if permanent else "transient_io",
-                              recovery.NON_RETRYABLE if permanent else recovery.RETRYABLE, f"failed to start codex: {e}"[:500])
+            failure = Failure(f"{engine.id}_unavailable" if permanent else "transient_io",
+                              recovery.NON_RETRYABLE if permanent else recovery.RETRYABLE, f"failed to start {task['provider']}: {e}"[:500])
             self._settle(task_id, log, turn, "failed", failure=failure)
             return
         self._procs[task_id] = proc
         if turn.resume_thread:
-            log.add_system(f"turn: resuming Codex session {turn.resume_thread}")
+            log.add_system(f"turn: resuming {engine.label} session {turn.resume_thread}")
         else:
-            log.add_system("turn: starting a new Codex session")
+            log.add_system(f"turn: starting a new {engine.label} session")
         log.add_system("instruction:\n" + turn.prompt[:INSTRUCTION_LOG_CHARS] +
                        (f"\n… (+{len(turn.prompt) - INSTRUCTION_LOG_CHARS} chars)" if len(turn.prompt) > INSTRUCTION_LOG_CHARS else ""))
-        log.add_system(f"started pid {proc.pid}: {' '.join(self.runner.build_command(task, turn.resume_thread))}")
+        log.add_system(f"started {task['provider']} pid {proc.pid}")
         self.db.set_status(task_id, "running", pid=proc.pid, proc_identity=process_identity(proc.pid), started_at=now_iso())
         if task_id in self._stop_requested:  # stop arrived while starting
             asyncio.create_task(terminate_process(proc, self.settings.stop_grace_seconds))
 
         stderr_tail: deque = deque(maxlen=20)
-        last_error: list = []  # the newest turn.failed / error message of the process
+        last_error: list = []  # provider-origin execution errors only
+        provider_failure = None
+        results = []
+        stream_errors = []
+        self.db.update_task(task_id, provider_subagents="[]", provider_usage="{}")
 
         async def pump(stream, write):
-            while True:
-                line = await stream.readline()
-                if not line:
-                    return
-                write(line.decode(errors="replace"))
+            nonlocal provider_failure
+            try:
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        return
+                    write(line.decode(errors="replace"))
+            except Exception:
+                provider_failure = provider_failure or Failure("stream_failure", recovery.NON_RETRYABLE, "provider stream could not be parsed safely")
+                await engine.stop(proc, self.settings.stop_grace_seconds)
 
         async def feed_prompt():
             try:
@@ -1259,22 +1112,99 @@ class TaskManager:
                 rules = json.loads(task["completion_contract"] or "{}")
                 if rules:
                     prompt += "\nCompletion contract: " + json.dumps(rules)
-                proc.stdin.write(prompt.encode())
+                proc.stdin.write(engine.input(task, prompt, turn.resume_thread))
                 await proc.stdin.drain()
                 proc.stdin.close()
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            except Exception:
+                await engine.stop(proc, self.settings.stop_grace_seconds)
+                raise
 
         def on_stdout(line: str) -> None:
-            event = log.add_stdout(line)["event"]
-            self._on_event(task_id, log, turn, event)
-            if isinstance(event, dict) and event.get("type") in ("turn.failed", "error"):
-                err = event.get("error")
-                message = err.get("message") if isinstance(err, dict) else event.get("message") or err
-                if message:
-                    last_error[:] = [str(message)]
+            nonlocal provider_failure
+            if task["provider"] == "codex":
+                event = log.add_stdout(line)["event"]
+            else:
+                try:
+                    event = decode_event(line)
+                except InvalidEnvelope:
+                    provider_failure = Failure("invalid_output", recovery.NON_RETRYABLE, "ambiguous provider JSON envelope")
+                    asyncio.create_task(engine.stop(proc, self.settings.stop_grace_seconds))
+                    event = None
+                except (ValueError, RecursionError):
+                    event = None
+                if not isinstance(event, dict):
+                    log.add_event("raw", redact(line)[:2000], None)
+                    return
+                # init contains paths/account/config metadata that need not be persisted.
+                logged = {k: event[k] for k in ("type", "subtype", "session_id", "model") if k in event} if (
+                    event.get("type") == "system" and event.get("subtype") == "init") else event
+                logged = json.loads(redact(json.dumps(logged)))
+                try:
+                    summary = engine.summarize(event)
+                except (ValueError, TypeError, AttributeError, KeyError):
+                    summary = "Malformed provider event"
+                    provider_failure = Failure("invalid_output", recovery.NON_RETRYABLE, "invalid provider event shape")
+                    asyncio.create_task(engine.stop(proc, self.settings.stop_grace_seconds))
+                log.add_event(str(event.get("type", "event")), redact(summary), logged)
+            if not isinstance(event, dict):
+                return
+            if provider_failure is not None:
+                return
+            try:
+                for item in engine.events(event):
+                    data = item.data
+                    if item.kind == "session":
+                        identity = data.get("id")
+                        if not isinstance(identity, str) or not identity or len(identity) > 256:
+                            raise ProviderError("invalid_output", "provider emitted an invalid session id")
+                        if turn.resume_thread and identity != turn.resume_thread:
+                            log.add_system("WARNING: asked to resume the recorded session but provider returned another identity; stopping")
+                            raise ProviderError("session_mismatch", "provider did not resume the requested session; execution stopped")
+                        if turn.thread_id and identity != turn.thread_id:
+                            raise ProviderError("session_mismatch", "provider changed session identity during execution")
+                        self._persist_thread(task_id, turn, identity)
+                        log.add_system(f"{task['provider']} session id: {identity}")
+                    elif item.kind == "started":
+                        self._mark_started(task_id, turn)
+                    elif item.kind == "final":
+                        turn.final_text = data["text"] if isinstance(data.get("text"), str) else ""
+                    elif item.kind == "usage":
+                        self._on_turn_completed(task_id, log, turn, data["event"])
+                    elif item.kind == "model":
+                        self.db.update_task(task_id, provider_usage=json.dumps({"model": data.get("model")}))
+                    elif item.kind == "result":
+                        results.append(data)
+                        if len(results) > 1:
+                            raise ProviderError("invalid_output", "multiple terminal provider results")
+                        if not turn.thread_id or data.get("session_id") != turn.thread_id:
+                            raise ProviderError("session_mismatch", "terminal result session differs from recorded session")
+                        self._record_provider_usage(task_id, turn, data)
+                    elif item.kind == "subagent":
+                        self._record_subagent(task_id, data)
+                    elif item.kind == "tool_finished":
+                        states = json.loads(self.get(task_id)["provider_subagents"] or "[]")
+                        if any(s["id"] == data.get("id") for s in states):
+                            self._record_subagent(task_id, data)
+                    elif item.kind == "error":
+                        last_error[:] = [data["message"]]
+                    elif item.kind == "failure":
+                        provider_failure = Failure(data["kind"], data["category"], data["message"])
+                if provider_failure:
+                    asyncio.create_task(engine.stop(proc, self.settings.stop_grace_seconds))
+            except ProviderError as e:
+                # A quota/auth signal has precedence over a generic terminal error.
+                if provider_failure is None:
+                    provider_failure = e.failure
+                asyncio.create_task(engine.stop(proc, self.settings.stop_grace_seconds))
+            except (ValueError, TypeError, KeyError, AttributeError) as e:
+                stream_errors.append(type(e).__name__)
+                provider_failure = Failure("invalid_output", recovery.NON_RETRYABLE, "invalid provider event shape")
+                asyncio.create_task(engine.stop(proc, self.settings.stop_grace_seconds))
 
         def on_stderr(line: str) -> None:
+            line = redact(line)
             if line.strip():
                 stderr_tail.append(line.strip())
             log.add_stderr(line)
@@ -1284,28 +1214,46 @@ class TaskManager:
                    asyncio.create_task(feed_prompt())]
         refresher = asyncio.create_task(self._refresh_loop(task_id))
         try:
-            code = await proc.wait()
+            timeout = json.loads(task.get("provider_options") or "{}").get("timeout_seconds") if task["provider"] != "codex" else None
+            try:
+                async def wait_exit():
+                    while proc.returncode is None:
+                        await asyncio.sleep(0.02)
+                    return proc.returncode
+                code = await asyncio.wait_for(wait_exit(), timeout) if timeout else await wait_exit()
+            except asyncio.TimeoutError:
+                provider_failure = Failure("timeout", recovery.RETRYABLE, "Provider execution timed out")
+                await engine.stop(proc, self.settings.stop_grace_seconds)
+                code = await proc.wait()
             # A grandchild may keep the pipes open after codex exits; don't wait for it forever.
             await asyncio.wait(readers, timeout=READER_DRAIN_SECONDS)
         finally:
             refresher.cancel()
             for r in readers:
                 r.cancel()
+            drained = await asyncio.gather(*readers, return_exceptions=True)
+            if any(isinstance(r, Exception) for r in drained):
+                provider_failure = provider_failure or Failure("stream_failure", recovery.RETRYABLE, "Provider stream or input failed")
+            await engine.stop(proc, self.settings.stop_grace_seconds)
 
         failure = None
         if task_id in self._stop_requested:
             status = "interrupted" if self._shutting_down else "stopped"
+        elif provider_failure:
+            status, failure = "failed", provider_failure
+        elif code == 0 and engine.requires_result and (len(results) != 1 or not turn.thread_id):
+            status = "failed"
+            failure = Failure("invalid_output", recovery.NON_RETRYABLE, "Provider exited without a final result/session")
         elif code == 0:
             status = "completed"
             self._record_completion_pending(task_id, turn.final_text, exit_code=0)
         else:
             status = "failed"
-            failure = recovery.classify_exit(code, last_error[0] if last_error else "\n".join(stderr_tail))
+            failure = engine.classify_exit(code, last_error[0] if last_error else "\n".join(stderr_tail))
         log.add_system(f"process exited with code {code} -> {status}")
         if turn.thread_id is None:
-            log.add_system("no thread.started event with a thread_id was seen in this process's output" +
-                           ("" if turn.resume_thread else "; the Codex session id is unknown, so this task "
-                            "cannot be resumed (only Start New Session is possible)"))
+            log.add_system(engine.missing_session_message +
+                           ("" if turn.resume_thread else "; this task cannot be resumed (only Start New Session is possible)"))
         # Last, and with nothing awaited afterwards: once the status is terminal a new turn may be started.
         await self.refresh_git_summary(task_id)
         fields = await self._completion_fields(task_id, turn.final_text) if status == "completed" else {}
@@ -1313,6 +1261,38 @@ class TaskManager:
             status = "interrupted" if self._shutting_down else "stopped"
             fields.update(task_outcome="incomplete", outcome_reason="Stopped before completion was accepted.", outcome_source="gate")
         self._settle(task_id, log, turn, status, failure=failure, exit_code=code, **fields)
+
+    def _record_subagent(self, task_id, data):
+        if not isinstance(data.get("id"), str) or not data["id"]:
+            return
+        states = json.loads(self.get(task_id)["provider_subagents"] or "[]")
+        states = [s for s in states if s.get("id") != data["id"]]
+        states.append({k: str(data.get(k, ""))[:1000] for k in ("id", "status", "description")})
+        self.db.update_task(task_id, provider_subagents=json.dumps(states[-200:]))
+
+    def _record_provider_usage(self, task_id, turn, result):
+        task = self.get(task_id)
+        info = json.loads(task["provider_usage"] or "{}")
+        usage = result.get("usage")
+        info.update(usage=result.get("raw_usage"), duration_ms=result.get("duration_ms"),
+                    reported_cost_usd=result.get("reported_cost_usd"), quota=None)
+        self.db.update_task(task_id, provider_usage=json.dumps(info), last_turn_at=now_iso())
+        if usage is None:
+            return  # Unknown is not zero.
+        turns = self.db.list_turns(task_id)
+        threads = list(dict.fromkeys((t["provider"], t["thread_id"]) for t in turns))
+        thread = turn.thread_id or turn.resume_thread
+        key = (task["provider"], thread)
+        session = threads.index(key) + 1 if key in threads else len(threads) + 1
+        total_input = usage["input_tokens"]
+        self.db.add_turn(task_id=task_id, turn=(turns[-1]["turn"] + 1) if turns else 1,
+                         session=session, thread_id=thread, provider=task["provider"], created_at=now_iso(), input_tokens=total_input,
+                         cached_input_tokens=usage["cached_input_tokens"], output_tokens=usage["output_tokens"],
+                         cache_write_input_tokens=usage["cache_write_input_tokens"], total_json=json.dumps(usage),
+                         model=info.get("model") or task["model"], reasoning_effort=task["reasoning_effort"],
+                         kind="turn", status="completed", started_at=task["started_at"], finished_at=now_iso())
+        self.db.update_task(task_id, latest_input_tokens=total_input, latest_cached_input_tokens=usage["cached_input_tokens"],
+                            latest_output_tokens=usage["output_tokens"])
 
     # ---------- completion gate ----------
 
@@ -1431,37 +1411,6 @@ class TaskManager:
 
     # ---------- codex exec events: session id and token usage ----------
 
-    def _on_event(self, task_id: str, log: TaskLog, turn: _Turn, event: Optional[dict]) -> None:
-        """React to the parsed JSON events that matter here. Never raises: the log must keep flowing."""
-        try:
-            etype = event.get("type") if event else None
-            if etype in ("turn.started", "turn.completed") or (etype or "").startswith("item."):
-                self._mark_started(task_id, turn)
-            if etype == "thread.started":
-                self._on_thread_started(task_id, log, turn, event)
-            elif etype == "turn.completed":
-                self._on_turn_completed(task_id, log, turn, event)
-            elif etype == "item.completed":
-                item = event.get("item") or {}
-                if item.get("type") == "agent_message" and item.get("phase") in (None, "final_answer"):
-                    turn.final_text = item.get("text") if isinstance(item.get("text"), str) else ""
-        except Exception as e:
-            log.add_system(f"could not process a codex event: {e!r}")
-
-    def _on_thread_started(self, task_id: str, log: TaskLog, turn: _Turn, event: dict) -> None:
-        thread_id = event.get("thread_id")
-        if not isinstance(thread_id, str) or not thread_id:
-            log.add_system(f"thread.started event has no usable thread_id: {json.dumps(event)[:300]}")
-            return
-        turn.thread_id = thread_id
-        if turn.resume_thread:
-            if thread_id != turn.resume_thread:
-                log.add_system(f"WARNING: asked to resume Codex session {turn.resume_thread} but codex reported "
-                               f"{thread_id}; the session was NOT continued, so cached input is not reused")
-            return
-        self._persist_thread(task_id, turn, thread_id)
-        log.add_system(f"codex session id: {thread_id}")
-
     def _on_turn_completed(self, task_id: str, log: TaskLog, turn: _Turn, event: dict) -> None:
         total = extract_usage(event)
         if total is None or not all(k in total for k in REQUIRED_KEYS):
@@ -1480,12 +1429,13 @@ class TaskManager:
             log.add_system(f"usage without the expected fields; not recorded: {json.dumps(total)[:300]}")
             return
         turns = self.db.list_turns(task_id)
-        previous = next((json.loads(t["total_json"]) for t in reversed(turns) if t["thread_id"] == thread_id), None)
+        previous = next((json.loads(t["total_json"]) for t in reversed(turns) if t["provider"] == "codex" and t["thread_id"] == thread_id), None)
         delta, not_cumulative = turn_delta(total, previous)
         if not_cumulative:
             log.add_system("usage went down since the previous turn of this thread; treating it as per-turn usage")
-        threads = list(dict.fromkeys(t["thread_id"] for t in turns))
-        session = threads.index(thread_id) + 1 if thread_id in threads else len(threads) + 1
+        threads = list(dict.fromkeys((t["provider"], t["thread_id"]) for t in turns))
+        key = ("codex", thread_id)
+        session = threads.index(key) + 1 if key in threads else len(threads) + 1
         now = now_iso()
         task = self.get(task_id)
         row = self.db.add_turn(
@@ -1542,7 +1492,7 @@ class TaskManager:
         if task_id not in self._jobs:
             return self._stop_orphan(task)
         self._stop_requested.add(task_id)
-        if self.uses_app_server:
+        if self.task_uses_app_server(task):
             await self._interrupt(task_id)  # no-op until the turn id is known; the turn loop repeats it then
             return task
         proc = self._procs.get(task_id)
@@ -1553,12 +1503,12 @@ class TaskManager:
     def _stop_orphan(self, task: dict) -> dict:
         """Stop a running task that has no job in this process (it was adopted after a GUI restart, or its job is gone)."""
         task_id = task["id"]
-        if same_process(task["pid"], task["proc_identity"]):
+        if owned_process_alive(task["pid"], task["proc_identity"], task["provider"]):
             try:
                 os.killpg(task["pid"], signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
-            asyncio.create_task(self._kill_later(task["pid"], task["proc_identity"]))
+            asyncio.create_task(self._kill_later(task["pid"], task["proc_identity"], task["provider"]))
         self._adopted.discard(task_id)
         TaskLog.note(self.log_path(task_id), "stopped by the user (the process was not started by this GUI session)")
         self._end_attempt(task_id, "stopped")
@@ -1567,9 +1517,9 @@ class TaskManager:
         except InvalidTransition as e:
             raise TaskError(f"task changed while it was being stopped: {e}", 409) from e
 
-    async def _kill_later(self, pid: int, identity: Optional[str]) -> None:
+    async def _kill_later(self, pid: int, identity: Optional[str], provider: str = "codex") -> None:
         await asyncio.sleep(self.settings.stop_grace_seconds)
-        if same_process(pid, identity):  # still the same process after the grace period (never a reused pid)
+        if owned_process_alive(pid, identity, provider):  # never a reused pid
             try:
                 os.killpg(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
@@ -1727,6 +1677,8 @@ class TaskManager:
             raise TaskError(f"the automatic retry limit was reached ({task['retry_count']}/{task['max_retries']}); "
                             "retrying again needs confirmation", 409, "over_limit")
         turn = self._turn_of(task, trigger)
+        if trigger == "manual_retry":
+            self.providers.pause(task["provider"], False)
         try:
             self.db.set_status(task["id"], "queued", pid=None, proc_identity=None, exit_code=None, finished_at=None,
                                status_detail="", pending_turn=turn.to_json(), claimed_by=None, claimed_at=None,
@@ -1810,9 +1762,11 @@ class TaskManager:
         prompt = prompt.strip()
         if not prompt and not attachment_ids:
             raise TaskError("instruction is required", 400, "empty")
-        await self._check_images(attachment_ids, resume=True, task_id=task_id)
+        await self._check_images(attachment_ids, resume=True, provider=self.get(task_id)["provider"], task_id=task_id)
         task = self.get(task_id)
         tier = self._turn_tier(service_tier) or "default"
+        if task["provider"] != "codex" and tier != "default":
+            raise TaskError("provider does not support Fast", 400, "unsupported")
         deps = self._check_dependency_ids(depends_on)
         if task_id in deps:
             raise TaskError("an instruction cannot depend on its own target task: it waits for the thread to be idle anyway", 400, "self")
@@ -1871,7 +1825,7 @@ class TaskManager:
             return "the target task no longer exists"
         if task["worktree_removed"]:
             return "the target task's worktree was deleted"
-        if task["status"] == "completed" and not task["codex_thread_id"]:
+        if task["status"] == "completed" and not session_id(task):
             return "the target task has no recorded Codex thread to continue"
         return ""
 
@@ -1914,7 +1868,7 @@ class TaskManager:
         if lock and lock.locked():
             return False
         task = self.db.get_task(row["task_id"])
-        thread = task and task["codex_thread_id"]
+        thread = task and session_id(task)
         if not task or not thread or task["status"] != "completed":
             return False
         turn = _Turn(row["prompt"], resume_thread=thread, trigger="scheduled_instruction", service_tier=row["service_tier"],
@@ -1926,7 +1880,7 @@ class TaskManager:
         except TaskError as e:
             self.db.block_scheduled(row["id"],str(e))
             return False
-        TaskLog.note(self.log_path(task["id"]), f"scheduled instruction #{row['id']} sent to Codex thread {thread} "
+        TaskLog.note(self.log_path(task["id"]), f"scheduled instruction #{row['id']} sent to {task['provider']} session {thread} "
                      f"({'Fast' if row['service_tier'] == 'priority' else 'Standard' if row['service_tier'] == 'default' else row['service_tier']})")
         return True
 
@@ -1971,7 +1925,7 @@ class TaskManager:
             if task_id in self._jobs:
                 continue
             if task_id in self._adopted:
-                if not same_process(task["pid"], task["proc_identity"]):
+                if not owned_process_alive(task["pid"], task["proc_identity"], task["provider"]):
                     self._adopted.discard(task_id)
                     self._process_lost(task, "the process that was running this task is gone")
             else:
@@ -2034,14 +1988,15 @@ class TaskManager:
                 return True
             return False
         # starting / running without a job in this process
-        if same_process(task["pid"], task["proc_identity"]):
+        if owned_process_alive(task["pid"], task["proc_identity"], task["provider"]):
             self._adopted.add(task_id)
             note = (f"GUI restarted while this task was running; process {task['pid']} is still alive and is left running. "
                     "Its output can no longer be captured; the task is retried if that process ends unexpectedly.")
             TaskLog.note(self.log_path(task_id), note)
             self.db.update_task(task_id, status_detail="running without output capture (GUI restarted)")
             return True
-        self._process_lost(task, "GUI restarted while this task was running and its Codex process is gone" if startup
+        label = getattr(self.providers.get(task["provider"]), "label", task["provider"])
+        self._process_lost(task, f"GUI restarted while this task was running and its {label} process is gone" if startup
                            else "the process that was running this task is gone")
         return True
 
@@ -2144,7 +2099,7 @@ class TaskManager:
         """A turns row for the API: only this turn's own figures plus the derived ones."""
         out = {k: row[k] for k in ("turn", "session", "thread_id", "created_at", "input_tokens", "cached_input_tokens",
                                    "output_tokens", "cache_write_input_tokens", "reasoning_output_tokens",
-                                   "kind", "status", "model", "reasoning_effort", "started_at", "finished_at")}
+                                   "kind", "status", "model", "reasoning_effort", "started_at", "finished_at", "provider")}
         out["uncached_input_tokens"] = row["input_tokens"] - row["cached_input_tokens"]
         out["cache_hit_rate"] = cache_hit_rate(row["input_tokens"], row["cached_input_tokens"])
         # Context Efficiency: what was requested for the turn and what it did (None for turns recorded before these existed)
@@ -2161,11 +2116,18 @@ class TaskManager:
         task["execution_status"] = task["status"]
         task.update(self._dependency_view(task, by_id, edges))
         task["retry_in_seconds"] = self._seconds_until(task["next_retry_at"]) if task["status"] == "retry_wait" else None
+        if latest and latest["provider"] != task["provider"]:
+            latest = None
         task["cache_hit_rate"] = self.present_turn(latest)["cache_hit_rate"] if latest and latest["kind"] == "turn" else None
         task["effective_model"] = (latest or {}).get("model") or task["model"] or ""
         task["context"] = context_status(task["context_tokens"], task["context_window"],
                                          self.settings.context_warn_percent, bool(task["context_guard"]))
-        task["backend"] = self.settings.backend
+        task["backend"] = self.settings.backend if task["provider"] == "codex" else "claude-exec"
+        task["session_id"] = session_id(task)
+        task["capabilities"] = asdict(self.providers.get(task["provider"]).capabilities)
+        task["provider_usage"] = json.loads(task["provider_usage"] or "{}")
+        task["provider_subagents"] = json.loads(task["provider_subagents"] or "[]")
+        task["provider_options"] = json.loads(task["provider_options"] or "{}")
         sched = (scheduled or {}).get(task["id"], {})
         task["scheduled_pending"], task["scheduled_ready"] = sched.get("pending", 0), sched.get("ready", 0)
         zone = ctx_guard.context_zone(task["context_tokens"], task["effective_model"] or task["model"], task["context_window"])
@@ -2215,6 +2177,8 @@ class TaskManager:
 
     @staticmethod
     def _observed_quota(task: dict) -> Optional[dict]:
+        if task.get("provider", "codex") != "codex":
+            return None
         pairs = {k: [task[f"{k}_used_before"], task[f"{k}_used_after"]] for k in ("five_hour", "weekly")}
         pairs = {k: v for k, v in pairs.items() if v[0] is not None and v[1] is not None}
         if not pairs:
@@ -2250,7 +2214,7 @@ class TaskManager:
         turns = [self.present_turn(r) for r in self.db.list_turns(task_id)]
         latest = next((t for t in reversed(turns) if t["kind"] == "turn"), None)
         task = self.db.get_task(task_id)
-        rows = [(t, task["model"], task["service_tier"], task["auto_approval"]) for t in self.db.list_turns(task_id)]
+        rows = [(t, task["model"], task["service_tier"], task["auto_approval"]) for t in self.db.list_turns(task_id) if t["provider"] == "codex"]
         return {"turns": turns, "latest": latest, "efficiency": efficiency.aggregate(rows)}
 
     # ---------- context efficiency API ----------
@@ -2322,7 +2286,7 @@ class TaskManager:
     def efficiency_for(self, period: str = "lifetime") -> dict:
         """Efficiency of all tasks over a period (today / 7d / lifetime), by the turns' own timestamps."""
         turns = self.db.list_all_turns(efficiency.period_start(period))
-        return {**efficiency.aggregate((t, t["task_model"], t["task_tier"], t["task_auto"]) for t in turns),
+        return {**efficiency.aggregate((t, t["task_model"], t["task_tier"], t["task_auto"]) for t in turns if t["provider"] == "codex"),
                 "period": period}
 
     def counts(self, tasks: list[dict]) -> dict:

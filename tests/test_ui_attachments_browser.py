@@ -22,7 +22,11 @@ pytestmark = pytest.mark.skipif(os.environ.get("CODEX_GUI_BROWSER") != "1", reas
 @pytest.fixture
 def gui_url(settings, git_repo):
     # The dashboard reads account/limits even with the exec backend. Keep that client fake too.
+    settings.claude_bin = "/not-installed/claude"
     app = create_app(settings, ImageRunner(), FakeAppServer("fake", settings.subscription_only))
+    async def offline_codex_metadata():
+        return dict(id="codex", available=True, version="fake", authenticated=True, billing="subscription", capabilities={}, models=[])
+    app.state.manager.providers.get("codex").describe = offline_codex_metadata
     app.state.catalog._cached = dict(models=[], default_model="", default_effort="low", recommended_model="", error="")
     app.state.catalog._fetched_at = time.monotonic()
     app.state.manager.db.touch_repo(str(git_repo), "now")
@@ -65,7 +69,7 @@ def test_composers_paste_drop_select_remove_enlarge_history_and_failure(gui_url,
     playwright = pytest.importorskip("playwright.sync_api")
     url, app = gui_url
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(executable_path=os.environ.get("CODEX_GUI_CHROMIUM") or None)
         page = browser.new_page()
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))

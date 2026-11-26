@@ -58,9 +58,9 @@ async def resolve_commit(repo, ref: str) -> Optional[str]:
     return out.strip() if code == 0 and out.strip() else None
 
 
-async def create_worktree(repo, path, branch: str, base_sha: str) -> None:
+async def create_worktree(repo, path, branch: str, base_sha: str, *, disable_hooks: bool = False) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    await run_git(repo, "worktree", "add", "-b", branch, str(path), base_sha)
+    await run_git(repo, *(["-c", "core.hooksPath=/dev/null"] if disable_hooks else []), "worktree", "add", "-b", branch, str(path), base_sha)
 
 
 async def remove_worktree(repo, path, force: bool = False) -> None:

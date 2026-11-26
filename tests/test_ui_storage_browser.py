@@ -12,7 +12,7 @@ def test_storage_dry_run_settings_and_history(gui_url):
     playwright = pytest.importorskip('playwright.sync_api')
     url, _ = gui_url
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(executable_path=os.environ.get('CODEX_GUI_CHROMIUM') or None)
         page = browser.new_page(viewport={'width': 390, 'height': 844})
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))

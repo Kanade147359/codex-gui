@@ -567,3 +567,37 @@ tests/
 ## ライセンス
 
 [MIT](LICENSE)
+
+## Claude Code / マルチプロバイダー
+
+New TaskのProviderで **Codex / Claude Code** を選択できます。Claude未導入でも
+既存のCodexタスクは動作します。DashboardのSettingsでCLIパス（初期値は
+`CLAUDE_BIN` / `claude`）、既定モデル・Effort・Subagents・Permission Mode・
+Provider別同時実行上限を設定できます。ClaudeのモデルはCLIのaliasまたは完全IDを
+手入力でき、EffortとPermission Modeの候補はインストール済みCLIから取得します。
+
+LinuxでClaudeのsandboxを使用するには`bubblewrap`と`socat`が必要です。不足時は
+sandboxを無効化せず実行前に停止します。終端のCompletion JSONは厳密に検証し、
+説明文付きの応答や不正JSONで依存タスクを解放しません。
+
+Claudeは公式CLIのログイン状態を使用します。実行にはSubscriptionの明示選択、
+アカウントの追加従量課金／購入クレジットが無効であることの確認、対象Repositoryの
+信頼確認が必要です。課金方式不明・認証切れは実行前に停止し、API課金へ自動切替
+しません。残りQuotaは取得できなければUnknownです。既定Permission Modeは
+`dontAsk`で、全権限確認を無効化する設定は提供しません。
+
+両Providerで履歴・画像添付・継続指示・Queue・依存DAG・Scheduled Instruction・
+Completion Gate・Worktree・再起動後の同一セッション継続を共用します。Claudeの
+ストリーム、ツール実行、Subagent状況、使用量、ProviderエラーはTask Detailから
+確認できます。Codex固有のFast・稼働中steer・compactはClaudeでは提供しません。
+Provider変更はStart New Sessionで明示的に行い、以前の会話を再開したとは扱いません。
+
+AutopilotのノードとPlanner / Implementer / Reviewer / MentorごとにProviderと
+モデルを指定できます。Research Modeでは成果物を指定したreportノードを使用し、
+同じ依存管理と検証を適用します。異種Providerの独立レビューと同一実装セッションの
+修正ループに対応し、並列ノードのWorktreeは分離します。Provider間のレビューFallbackは
+明示許可と確認済みQuota不足がある場合に限定します。
+
+既存DBはCodexとして移行し、移行前にSQLite backupを保存します。本番DBを稼働中に
+復元するAPIはありません。認証・課金確認、設定ファイルの扱い、API、移行・復旧手順、
+実測結果と制約は[Provider設計](docs/providers.md)と[検証記録](docs/provider-verification.md)を参照してください。

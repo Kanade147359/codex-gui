@@ -109,9 +109,13 @@ def execution_manifest(body):
     """UI defaults fill missing policy values; authored manifest/Markdown remain authoritative."""
     raw = body.get("manifest")
     defaults = body.get("execution_defaults")
-    if defaults is None:
+    mode = body.get("workflow_mode")
+    if mode not in (None, "implementation", "research"):
+        raise ValueError("invalid workflow mode")
+    if defaults is None and mode is None:
         return raw
-    allowed = {"implementation_model", "reasoning_effort", "mentor_enabled", "mentor_max_rounds"}
+    defaults = {} if defaults is None else defaults
+    allowed = {"implementation_model", "reasoning_effort", "mentor_enabled", "mentor_max_rounds", "roles", "allow_provider_fallback"}
     if not isinstance(defaults, dict) or set(defaults) - allowed:
         raise ValueError("invalid execution defaults")
     if isinstance(raw, str):
@@ -125,7 +129,7 @@ def execution_manifest(body):
             raise ValueError("invalid safe YAML manifest") from exc
     if not isinstance(raw, dict) or not isinstance(raw.get("policy", {}), dict):
         raise ValueError("manifest and policy must be mappings")
-    return dict(raw, policy={**defaults, **raw.get("policy", {})})
+    return dict(raw, **({"mode": mode} if mode else {}), policy={**defaults, **raw.get("policy", {})})
 
 
 @router.get("/autopilot", response_class=HTMLResponse)

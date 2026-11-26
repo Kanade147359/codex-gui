@@ -86,7 +86,7 @@ def prepare(inputs):
                 metadata = yaml.safe_load(match[1]) or {}
             except yaml.YAMLError as error:
                 raise ValueError("invalid COMMON metadata") from error
-            if not isinstance(metadata, dict) or set(metadata) - {"goals", "model", "reasoning_effort"}:
+            if not isinstance(metadata, dict) or set(metadata) - {"goals", "model", "reasoning_effort", "provider"}:
                 raise ValueError("COMMON metadata supports explicit goals and execution settings only")
             explicit = metadata.get("goals", [])
             if not isinstance(explicit, list) or any(not isinstance(g, dict) or "source" in g for g in explicit):
@@ -126,6 +126,10 @@ def prepare(inputs):
             "goal_ids",
             "acceptance_ids",
             "model",
+            "provider",
+            "review_provider",
+            "provider_options",
+            "allow_subagents",
             "reasoning_effort",
         }
         if set(meta) - allowed:
@@ -159,6 +163,7 @@ def convert(body):
     nodes = body["nodes"]
     return dict(
         version=1,
+        **({"mode": body["mode"]} if "mode" in body else {}),
         name=body.get("name", "Markdown workflow"),
         repository=body["repository"],
         base_ref=body.get("base_ref", "main"),

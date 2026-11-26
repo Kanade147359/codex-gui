@@ -251,11 +251,15 @@ def claude_error(events, version):
     return ProviderFailure(kind, "Claude review incomplete: " + str(e.get("subtype", "unknown")))
 
 
-def preflight_environment(policy):
-    if not policy["extra_usage_disabled_confirmed"]:
+def require_billing_confirmation(policy):
+    if policy.get("extra_usage_disabled_confirmed") is not True:
         raise ProviderFailure(
             "billing_confirmation", "Owner must confirm extra usage/credits disabled; no automatic verification API"
         )
+
+
+def preflight_environment(policy):
+    require_billing_confirmation(policy)
     forbidden = (
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
@@ -348,8 +352,15 @@ class ClaudeProvider(ReviewProvider):
         )
 
     async def start_review(self, candidate, trusted_review_policy, root, attempt, on_identity):
+        return await self._start_isolated(candidate, trusted_review_policy, root, attempt, on_identity)
+
+    async def start_replan(self, candidate, trusted_review_policy, root, attempt, on_identity):
+        return await self._start_isolated(candidate, trusted_review_policy, root, attempt, on_identity, replan=True)
+
+    async def _start_isolated(self, candidate, trusted_review_policy, root, attempt, on_identity, replan=False):
+        from .replanning import REPLAN_SCHEMA, REPLANNER_POLICY
         capabilities = await self.probe_capabilities_and_auth(trusted_review_policy)
-        prompt = await review_prompt(candidate, root)
+        prompt = canonical(candidate["replan_input"]) if replan else await review_prompt(candidate, root)
         with tempfile.TemporaryDirectory(prefix="ap-claude-") as scratch:
             auth_dir = Path(scratch) / ".claude"
             auth_dir.mkdir(mode=0o700)
@@ -373,7 +384,7 @@ class ClaudeProvider(ReviewProvider):
                 "--output-format",
                 "stream-json",
                 "--json-schema",
-                canonical(review_schema(candidate)),
+                canonical(REPLAN_SCHEMA if replan else review_schema(candidate)),
                 "--tools",
                 "",
                 "--permission-mode",
@@ -388,16 +399,20 @@ class ClaudeProvider(ReviewProvider):
                 "--disable-slash-commands",
                 "--no-session-persistence",
                 "--system-prompt",
-                reviewer_policy(candidate),
+                REPLANNER_POLICY if replan else reviewer_policy(candidate),
             ]
             if trusted_review_policy["claude_model"]:
                 argv += ["--model", trusted_review_policy["claude_model"]]
 
+            if trusted_review_policy.get("reasoning_effort") not in (None, "default"):
+                argv += ["--effort", trusted_review_policy["reasoning_effort"]]
+
+            identity = {}
+
             def started(proc):
                 self.processes[attempt["id"]] = proc
-                on_identity(
-                    dict(pid=proc.pid, session=None, version=capabilities["version"], model=capabilities["model"])
-                )
+                identity.update(pid=proc.pid, session=None, version=capabilities["version"], model=capabilities["model"])
+                on_identity(dict(identity))
 
             try:
                 rc, output, timeout = await run_bounded(
@@ -414,17 +429,35 @@ class ClaudeProvider(ReviewProvider):
                 raise ProviderFailure("timeout", "Claude review timed out")
             if "bwrap:" in output and rc:
                 raise InfrastructureUnavailable("Claude isolation unavailable")
-            result = self.consume_events(output, capabilities["version"], candidate)
+            result = self.consume_replan(output, capabilities["version"]) if replan else self.consume_events(output, capabilities["version"], candidate)
             if rc != 0:
                 raise ProviderFailure("process_exit", "Claude final result did not have a normal process exit")
             result.update(
                 provider="claude",
                 model=result.pop("_model", None) or capabilities["model"],
-                version=capabilities["version"],
                 session=result.pop("_session", None),
                 independence="separate provider and session",
             )
+            result["provider_version" if replan else "version"] = capabilities["version"]
+            identity.update(session=result["session"], model=result["model"])
+            on_identity(dict(identity))
             return result
+
+    def consume_replan(self, output, version):
+        try:
+            events = [structured_json(line) for line in output.splitlines() if line.strip()]
+            if any(not isinstance(event, dict) for event in events):
+                raise ValueError()
+        except (ValueError, RecursionError):
+            raise ProviderFailure("invalid_output", "malformed Claude replan stream") from None
+        error = claude_error(events, version)
+        if error:
+            raise error
+        finals = [e for e in events if e.get("type") == "result"]
+        if len(finals) != 1 or not isinstance(finals[0].get("structured_output"), dict) or not finals[0].get("session_id"):
+            raise ProviderFailure("invalid_output", "missing independent Claude replan result/session")
+        # Full proposal and provenance validation remains in replanning.run.
+        return dict(finals[0]["structured_output"], _session=finals[0]["session_id"])
 
     def consume_events(self, output, version, candidate):
         try:

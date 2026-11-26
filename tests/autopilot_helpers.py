@@ -95,7 +95,7 @@ def plan(repo, names=("C",)):
         repository=str(repo),
         base_ref="main",
         nodes=nodes,
-        policy=dict(extra_usage_disabled_confirmed=True, provider_backoff=1),
+        policy=dict(extra_usage_disabled_confirmed=True, provider_backoff=1, allow_provider_fallback=True),
         permissions=dict(commit_owned_changes=True),
         inputs={},
     )

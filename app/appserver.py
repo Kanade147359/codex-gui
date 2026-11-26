@@ -50,6 +50,9 @@ def subscription_env(subscription_only: bool, extra: Optional[dict] = None) -> d
     """Environment for a codex child. With subscription_only, API-key variables are removed so that Codex can only
     use the stored ChatGPT login; the GUI never falls back to API billing."""
     env = child_env(extra)
+    for name in list(env):
+        if name.startswith(("ANTHROPIC_", "CLAUDE_")):
+            env.pop(name, None)
     if subscription_only:
         for name in API_KEY_VARS:
             env.pop(name, None)
@@ -72,6 +75,7 @@ class AppServerClient:
         self.user_agent = ""
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._reader: Optional[asyncio.Task] = None
+        self._stderr_reader: Optional[asyncio.Task] = None
         self._pending: dict[int, asyncio.Future] = {}
         self._next_id = 0
         self._threads: dict[str, asyncio.Queue] = {}
@@ -99,6 +103,8 @@ class AppServerClient:
         async with self._start_lock:
             if self.alive:
                 return
+            if self._proc is not None:
+                await self.close()  # An exited leader may still have descendants/pipes.
             self._fail_all("app-server restarted")
             self.stderr_tail = []
             try:
@@ -109,7 +115,7 @@ class AppServerClient:
             except OSError as e:
                 raise AppServerError(f"cannot start codex app-server: {e}", kind="spawn") from e
             self._reader = asyncio.create_task(self._read_loop(self._proc))
-            asyncio.create_task(self._drain_stderr(self._proc))
+            self._stderr_reader = asyncio.create_task(self._drain_stderr(self._proc))
             try:
                 result = await self.request("initialize", {"clientInfo": {"name": "codex-gui", "title": "Codex GUI", "version": "1"}},
                                             timeout=30, _starting=True)
@@ -120,20 +126,29 @@ class AppServerClient:
             self._send({"method": "initialized"})
 
     async def close(self) -> None:
+        # Deferred because CodexRunner imports subscription_env from this module.
+        from .codex_runner import terminate_process
+
         proc, self._proc = self._proc, None
-        if proc and proc.returncode is None:
-            try:
-                proc.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), 5)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-        if self._reader:
-            self._reader.cancel()
-            self._reader = None
+        readers = [task for task in (self._reader, self._stderr_reader) if task is not None]
+        self._reader = self._stderr_reader = None
+        if proc:
+            if proc.stdin:
+                proc.stdin.close()
+            await terminate_process(proc, 5)
+            if proc.stdin:
+                try:
+                    await proc.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+        if readers:
+            _, pending = await asyncio.wait(readers, timeout=1)
+        else:
+            pending = []
+        for task in pending:
+            task.cancel()
+        if readers:
+            await asyncio.gather(*readers, return_exceptions=True)
         self._fail_all("app-server closed")
 
     # ---------- requests ----------

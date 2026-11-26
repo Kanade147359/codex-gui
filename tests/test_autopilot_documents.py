@@ -76,7 +76,7 @@ def test_uploaded_markdown_revision_repair_integration_and_successor_across_rest
                 data,
                 repository=str(git_repo),
                 permissions=dict(commit_owned_changes=True),
-                policy=dict(extra_usage_disabled_confirmed=True, provider_backoff=1),
+                policy=dict(extra_usage_disabled_confirmed=True, provider_backoff=1, allow_provider_fallback=True),
             ),
         )
         assert converted.status_code == 200, converted.text
@@ -266,7 +266,7 @@ def test_plan_expansion_waits_for_owner_and_stale_revision_cannot_apply(settings
         a["envelope"]["paths"] = ["not-A.txt"]
         raw = client.post(
             "/api/autopilot/import/convert",
-            json=dict(data, repository=str(git_repo), permissions=dict(commit_owned_changes=True)),
+            json=dict(data, repository=str(git_repo), permissions=dict(commit_owned_changes=True), policy=dict(allow_provider_fallback=True)),
         ).json()["manifest"]
         wid = api_register(client, raw)
         view = api_wait(client, wid, lambda v: bool(v["plan_revisions"]))

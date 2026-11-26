@@ -18,7 +18,7 @@ def test_fixture_workflow_ui_candidates_fallback_findings_and_task_details(gui_u
     url, app = gui_url
     install(app.state.manager)
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(executable_path=os.environ.get("CODEX_GUI_CHROMIUM") or None)
         page = browser.new_page(viewport=dict(width=390, height=844))
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
@@ -56,7 +56,7 @@ def test_markdown_upload_ui_to_planning_parallel_fix_and_integration(gui_url, gi
     url, app = gui_url
     install(app.state.manager)
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(executable_path=os.environ.get("CODEX_GUI_CHROMIUM") or None)
         page = browser.new_page(viewport=dict(width=390, height=844))
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
@@ -69,6 +69,8 @@ def test_markdown_upload_ui_to_planning_parallel_fix_and_integration(gui_url, gi
         assert page.request.get(url + "/api/tasks").json()["tasks"] == []
         page.locator("#ap-repository").fill(str(git_repo))
         page.locator("#ap-import-commit").check()
+        page.get_by_text("役割ごとのProvider・モデル", exact=True).click()
+        page.locator("#ap-provider-fallback").check()
         page.locator("#ap-convert").click()
         page.wait_for_function("!document.querySelector('#ap-start').disabled")
         page.locator("#ap-opt-in").check()
@@ -98,7 +100,7 @@ def test_goal_replanning_ui_owner_decision_graph_and_review(gui_url, git_repo, t
     install_goal(app.state.manager)
     raw = workflow(git_repo, "propose_only")
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(executable_path=os.environ.get("CODEX_GUI_CHROMIUM") or None)
         page = browser.new_page(viewport=dict(width=390, height=844))
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))

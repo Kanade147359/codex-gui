@@ -115,7 +115,7 @@ def test_browser_repository_candidates_browse_high_and_markdown_override(gui_url
     playwright = pytest.importorskip('playwright.sync_api')
     url, app = gui_url
     with playwright.sync_playwright() as engine:
-        browser = engine.chromium.launch()
+        browser = engine.chromium.launch(executable_path=os.environ.get('CODEX_GUI_CHROMIUM') or None)
         page = browser.new_page(viewport=dict(width=390, height=844))
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -152,7 +152,7 @@ def test_browser_workflow_detail_reload_aggregate_note_and_child_addition(gui_ur
     playwright = pytest.importorskip('playwright.sync_api')
     url, app = gui_url
     with playwright.sync_playwright() as engine:
-        browser = engine.chromium.launch()
+        browser = engine.chromium.launch(executable_path=os.environ.get('CODEX_GUI_CHROMIUM') or None)
         page = browser.new_page(viewport=dict(width=width, height=900))
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
@@ -207,7 +207,7 @@ def test_browser_completed_child_accepts_same_thread_instruction_and_links_to_wo
     url, app = gui_url
     app.state.manager.autopilot.providers = dict(claude=FixtureProvider('claude'), codex=FixtureProvider('codex'))
     with playwright.sync_playwright() as engine:
-        browser = engine.chromium.launch()
+        browser = engine.chromium.launch(executable_path=os.environ.get('CODEX_GUI_CHROMIUM') or None)
         page = browser.new_page(viewport=dict(width=390, height=844))
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))

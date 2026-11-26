@@ -15,7 +15,8 @@ from app.appserver import AppServerClient
 from app.codex_runner import nested
 from app.fake_responses import MockResponses, tool_output_of
 
-pytestmark = pytest.mark.skipif(shutil.which("codex") is None, reason="codex is not installed")
+pytestmark = [pytest.mark.skipif(shutil.which("codex") is None, reason="codex is not installed"),
+              pytest.mark.usefixtures("private_codex_runtime")]
 
 FAKE_MCP = str(Path(__file__).parent / "fake_mcp_server.py")
 MCP_TOML = f'''
@@ -57,6 +58,20 @@ def run(coro):
 
 # ---------------------------------------------------------------- tool output
 
+def test_private_runtime_keeps_the_read_only_sandbox(repo, home, private_codex_runtime):
+    marker = repo / "sandbox-must-deny-write"
+    script = ('const r = await tools.exec_command({cmd: "touch sandbox-must-deny-write", login: false}); '
+              'text(JSON.stringify(r));')
+    res = run(tp.run_probe("codex", repo, None, [("exec", script), ("text", "ok")], codex_home=home))
+    assert res.ok, res.error
+    output = tool_output_of(res.requests[1])
+    assert not marker.exists()
+    assert "Read-only file system" in output or "Permission denied" in output, output
+    assert "error building bubblewrap command" not in output
+    if private_codex_runtime is not None:
+        assert private_codex_runtime.stat().st_mode & 0o777 == 0o700
+
+
 def test_tool_output_token_limit_only_lowers_the_cap(repo, home):
     """Measured facts behind the presets: 16000 / 32000 change nothing, 8000 trims a little, smaller values trim more."""
     sizes = {lim: run(tp.measure_tool_output("codex", repo, lim, codex_home=home))["tokens_est"]
@@ -88,7 +103,12 @@ SPAWN = [("call", "spawn_agent", {"task_name": "child", "message": "do it", "for
 def spawn_result(repo, home, overrides):
     res = run(tp.run_probe("codex", repo, overrides, list(SPAWN), codex_home=home))
     assert res.ok, res.error
-    return tool_output_of(res.requests[1])
+    output = tool_output_of(res.requests[1])
+    if not output:
+        diagnostic = repo.parent / "spawn-probe-diagnostic.json"
+        diagnostic.write_text(json.dumps(dict(overrides=overrides, exit_code=res.returncode, error=res.error,
+            request_count=len(res.requests), outputs=[tool_output_of(r)[:2000] for r in res.requests]), indent=2))
+    return output
 
 
 def test_default_allows_spawn_and_multi_agent_false_alone_does_not_stop_it(repo, home):

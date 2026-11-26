@@ -104,6 +104,7 @@ def manifest(value):
                 raise ValueError("invalid safe YAML manifest") from None
     if not isinstance(value, dict) or set(value) - {
         "version",
+        "mode",
         "name",
         "repository",
         "base_ref",
@@ -117,6 +118,9 @@ def manifest(value):
         raise ValueError("invalid workflow manifest")
     if value.get("version") != 1:
         raise ValueError("workflow version must be 1")
+    mode = value.get("mode", "implementation")
+    if mode not in ("implementation", "research"):
+        raise ValueError("unknown workflow mode")
     policy = dict(value.get("policy", {}))
     allowed = {
         "max_fix_rounds",
@@ -140,6 +144,8 @@ def manifest(value):
         "mentor_enabled",
         "mentor_max_rounds",
         "semantic_recovery",
+        "roles",
+        "allow_provider_fallback",
     }
     if set(policy) - allowed:
         raise ValueError("unknown policy fields")
@@ -165,6 +171,11 @@ def manifest(value):
         policy.setdefault(key, default)
         if not isinstance(policy[key], str) or policy[key].startswith("-"):
             raise ValueError(f"invalid {key}")
+    from .roles import validate_execution_options, validate_roles
+    policy["roles"] = validate_roles(policy.get("roles", {}))
+    policy.setdefault("allow_provider_fallback", False)
+    if type(policy["allow_provider_fallback"]) is not bool:
+        raise ValueError("allow_provider_fallback must be boolean")
     from .execution import validate_settings, resolve_execution
 
     execution = validate_settings(dict(model=policy.get("implementation_model", ""),
@@ -222,9 +233,23 @@ def manifest(value):
             "replan",
             "model",
             "reasoning_effort",
+            "provider",
+            "review_provider",
+            "provider_options",
+            "allow_subagents",
         }:
             raise ValueError("invalid node fields")
         n = dict(raw)
+        if n.get("review_provider", "claude") not in ("codex", "claude"):
+            raise ValueError("unknown review provider")
+        if n.get("provider", policy["roles"].get("implementer", {}).get("provider", "codex")) not in ("codex", "claude"):
+            raise ValueError("unknown implementation provider")
+        if "allow_subagents" in n and type(n["allow_subagents"]) is not bool:
+            raise ValueError("allow_subagents must be boolean")
+        if "provider_options" in n:
+            options = n["provider_options"]
+            validated = validate_execution_options(options)
+            n["provider_options"] = validated if options else {}
         n.update(validate_settings(n, allow_empty_model=True))
         nid = n.get("id", "")
         if not isinstance(nid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", nid) or nid in by_id:
@@ -240,7 +265,9 @@ def manifest(value):
                                     or lineage["depth"] != 1 or not isinstance(lineage["parent"], str)
                                     or not isinstance(lineage["revision"], str)):
             raise ValueError("invalid dynamic node lineage")
-        n.setdefault("kind", "code")
+        n.setdefault("kind", "report" if mode == "research" else "code")
+        if mode == "research" and n["kind"] != "report":
+            raise ValueError("Research Mode requires report nodes with explicit artifacts")
         if n["kind"] not in ("code", "report", "integration"):
             raise ValueError("unknown artifact kind")
         n.setdefault("prompt", "Integrate the pinned accepted inputs and verify the acceptance contract.")
@@ -347,6 +374,7 @@ def manifest(value):
         raise ValueError("invalid idempotency key")
     return dict(
         version=1,
+        **({"mode": mode} if "mode" in value else {}),
         name=value.get("name", "Autopilot"),
         repository=repository,
         base_ref=base_ref,

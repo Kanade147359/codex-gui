@@ -16,12 +16,13 @@ from fastapi.testclient import TestClient
 from app.attachments import AttachmentError
 from app.database import Database, SCHEMA
 from app.main import create_app
-from app.task_manager import TaskManager, _Turn
-from conftest import FakeAppServer, FakeRunner, wait_for
+from conftest import FakeAppServer, wait_for
 from test_api import wait_done
+from test_attachments import ImageRunner
 
 
-class ReadingRunner(FakeRunner):
+class ReadingRunner(ImageRunner):
+    """Offline fixture supports both stored images and regular file inputs."""
     def build_command(self, task, resume_thread=None):
         return [sys.executable, str(Path(__file__).with_name('fake_files_codex.py'))] + (['resume', resume_thread] if resume_thread else [])
 

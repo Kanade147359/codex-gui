@@ -29,6 +29,10 @@
 </section>
 
 <section class="usage-box" data-mobile-panel="settings">
+  <h2>Execution providers</h2><div id="provider-settings"></div><p id="provider-settings-message" role="status"></p>
+</section>
+
+<section class="usage-box" data-mobile-panel="settings">
   <h2>Completion validation</h2>
   <p id="completion-validation-capability" class="muted">bwrap: Checking…</p>
   <p id="completion-validation-note" class="muted small"></p>
@@ -96,6 +100,15 @@
   <form id="new-task-form" method="dialog">
     <div id="form-body">
       <h2>New Task</h2>
+      <label>Provider<select name="provider" id="provider-select"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+      <fieldset id="claude-options" hidden><legend>Claude Code</legend>
+        <label>Permission mode<select name="claude_permission" id="claude-permission"></select></label>
+        <label>Manual effort (optional)<input name="claude_effort_custom" placeholder="CLI effort value"></label>
+        <label class="check"><input type="checkbox" name="claude_subagents"> Allow subagents</label>
+        <label class="check"><input type="checkbox" name="claude_trusted"> I trust this repository for non-interactive execution</label>
+        <label>Timeout (seconds)<input name="claude_timeout" type="number" min="1" max="86400" value="3600"></label>
+        <p class="muted small" id="claude-provider-note">Model IDs can be entered manually. CLI subscription login and confirmed extra usage disabled are required.</p>
+      </fieldset>
       <div class="field">
         <span class="label">Repository</span>
         <div class="repo-row">

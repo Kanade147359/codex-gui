@@ -185,11 +185,11 @@ def test_resume_that_lands_on_another_thread_is_flagged(git_repo, make_manager):
         t = await create(m, git_repo)
         thread = (await finished(m, t["id"]))["codex_thread_id"]
         await m.send_instruction(t["id"], "newthread")
-        done = await wait_for(lambda: m.get(t["id"])["status"] == "completed" and
-                              len(m.db.list_turns(t["id"])) == 2 and m.get(t["id"]))
+        done = await wait_for(lambda: m.get(t["id"])["status"] == "failed" and m.get(t["id"]))
+        assert done["last_failure_kind"] == "session_mismatch"
         assert done["codex_thread_id"] == thread  # the recorded session is not silently replaced
         assert any(msg.startswith("WARNING: asked to resume") for msg in messages(m, t["id"]))
-        assert m.usage(t["id"])["turns"][1]["session"] == 2  # its usage is not mixed into session 1
+        assert len(m.db.list_turns(t["id"])) == 1  # wrong-session usage cannot be accepted
 
     go(scenario())
 

@@ -18,7 +18,7 @@ window.MobileUI = (() => {
     return `<article class="task-card" data-task-card="${esc(t.id)}">
       <a class="task-card-link" href="${taskLink(t.id, hash)}"><strong>${esc(t.name)}</strong>
         <div>${statusCell(t)} <span class="muted">${esc(t.execution_status || t.status)}</span></div>
-        <dl><dt>Model</dt><dd>${esc(t.effective_model || t.model || "default")}</dd>
+        <dl><dt>Provider</dt><dd>${t.provider === "claude" ? "Claude Code" : "Codex"}</dd><dt>Model</dt><dd>${esc(t.effective_model || t.model || "default")}</dd>
           <dt>Service tier</dt><dd>${esc(["default", "standard", ""].includes(t.service_tier || "") ? "Standard" : "Fast")}</dd>
           <dt>Dependencies</dt><dd>${esc(dependencyText(t))}</dd>
           <dt>Updated</dt><dd>${esc(dt(lastUpdate(t)))}</dd></dl>${progress(t)}

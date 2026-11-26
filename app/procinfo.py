@@ -63,3 +63,11 @@ def same_process(pid: Optional[int], identity: Optional[str], needle: str = "cod
     if identity and now != identity:
         return False  # the pid was reused (or the machine rebooted)
     return needle in cmdline(pid)
+
+
+def owned_process_alive(pid: Optional[int], identity: Optional[str], legacy_needle: str = "codex") -> bool:
+    """Recorded boot/start identity survives renamed CLIs and custom launchers.
+
+    Only legacy rows without that identity need the weaker command-name check.
+    """
+    return same_process(pid, identity, needle="" if identity else legacy_needle)

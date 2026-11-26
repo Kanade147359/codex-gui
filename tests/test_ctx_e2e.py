@@ -21,7 +21,8 @@ from app.tool_probe import provider_overrides
 from conftest import wait_for
 from mock_responses import codex_home
 
-pytestmark = pytest.mark.skipif(shutil.which("codex") is None, reason="codex is not installed")
+pytestmark = [pytest.mark.skipif(shutil.which("codex") is None, reason="codex is not installed"),
+              pytest.mark.usefixtures("private_codex_runtime")]
 IDLE = ("queued", "starting", "running")
 FAKE_MCP = str(Path(__file__).parent / "fake_mcp_server.py")
 BIG = 'const r = await tools.exec_command({cmd: "seq 1 400000"}); text(r.output);'
@@ -29,7 +30,7 @@ SPAWN = ("call", "spawn_agent", {"task_name": "child", "message": "x", "fork_tur
 
 
 @pytest.fixture
-def stack(tmp_path, settings, db, monkeypatch):
+def stack(tmp_path, settings, db, monkeypatch, private_codex_runtime):
     """A TaskManager on the real codex app-server whose model is the fake endpoint. Returns (manager, mock, make_task)."""
     mock = MockResponses().start()
     home = codex_home(tmp_path / "codexhome", f'''

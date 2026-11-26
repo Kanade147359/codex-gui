@@ -8,8 +8,45 @@
   const showError = error => { el('ap-message').textContent = error.message; el('ap-message').className = 'error'; };
   const message = value => { el('ap-message').textContent = value; el('ap-message').className = ''; };
   const invalidate = () => { preview = null; el('ap-start').disabled = true; el('ap-opt-in').checked = false; };
+  const rolesHost = el('ap-provider-roles');
+  if (rolesHost) for (const role of ['planner', 'implementer', 'reviewer', 'mentor']) {
+    const label = document.createElement('label');
+    label.append(document.createTextNode(role + ' '));
+    const select = document.createElement('select'); select.id = 'ap-role-' + role;
+    for (const provider of ['codex', 'claude']) { const option = document.createElement('option'); option.value = provider; option.textContent = provider === 'claude' ? 'Claude Code' : 'Codex'; select.append(option); }
+    select.value = ['reviewer', 'mentor'].includes(role) ? 'claude' : 'codex'; label.append(select);
+    const input = document.createElement('input'); input.id = 'ap-role-model-' + role; input.placeholder = 'Model ID (empty = workflow/CLI default)'; label.append(input);
+    const effort = document.createElement('input'); effort.id = 'ap-role-effort-' + role; effort.placeholder = 'Effort (empty = workflow/CLI default)'; label.append(effort);
+    if (role === 'implementer') {
+      const trust = document.createElement('label'); const box = document.createElement('input'); box.type = 'checkbox'; box.id = 'ap-role-trust'; trust.append(box, ' Claude実行リポジトリを信頼する'); label.append(trust);
+      const agents = document.createElement('label'); const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.id = 'ap-role-subagents'; agents.append(enabled, ' Implementer Subagents'); label.append(agents);
+      const mode = document.createElement('select'); mode.id = 'ap-role-permission';
+      for (const value of ['dontAsk']) { const o = document.createElement('option'); o.value = o.textContent = value; mode.append(o); }
+      label.append(mode);
+    }
+    label.addEventListener('change', invalidate); rolesHost.append(label);
+  }
+  el('ap-provider-fallback')?.addEventListener('change', invalidate);
+  el('ap-workflow-mode')?.addEventListener('change', invalidate);
+  document.addEventListener('DOMContentLoaded', async () => {
+    await window.ProviderUI?.load();
+    const modes = window.ProviderUI?.info('claude')?.permission_modes;
+    const select = el('ap-role-permission');
+    if (select && modes?.length) {
+      select.replaceChildren(...modes.map(value => { const option = document.createElement('option'); option.value = option.textContent = value; return option; }));
+      select.value = window.ProviderUI.info('claude').settings.permission_mode;
+    }
+  });
   function executionDefaults() {
-    return {implementation_model: el('ap-model').value === '__custom__' ? el('ap-model-custom').value.trim() : el('ap-model').value,
+    const roles = Object.fromEntries(['planner','implementer','reviewer','mentor'].map(role => {
+      const provider = el('ap-role-' + role)?.value || (['reviewer','mentor'].includes(role) ? 'claude' : 'codex');
+      const model = el('ap-role-model-' + role)?.value.trim();
+      const effort = el('ap-role-effort-' + role)?.value.trim();
+      return [role, {provider, ...(model ? {model} : {}), ...(effort ? {reasoning_effort:effort} : {}),
+        ...(role === 'implementer' ? {allow_subagents:el('ap-role-subagents')?.checked || false,
+          ...(provider === 'claude' ? {provider_options:{trusted_repository:el('ap-role-trust')?.checked || false, permission_mode:el('ap-role-permission')?.value || 'dontAsk'}} : {})} : {})}];
+    }));
+    return {roles, allow_provider_fallback:el('ap-provider-fallback')?.checked || false, implementation_model: el('ap-model').value === '__custom__' ? el('ap-model-custom').value.trim() : el('ap-model').value,
       reasoning_effort: el('ap-effort').value, mentor_enabled: el('ap-mentor-enabled').checked,
       mentor_max_rounds: Number(el('ap-mentor-rounds').value)};
   }
@@ -18,7 +55,7 @@
     const nodes = result.plan.nodes;
     const settings = result.execution_settings || Object.fromEntries(nodes.map(node => [node.id,
       {model: node.model || result.plan.policy.implementation_model, reasoning_effort: node.reasoning_effort || result.plan.policy.reasoning_effort || 'high'}]));
-    el('ap-preview-summary').replaceChildren(text('h3', `${result.plan.name} · ${nodes.length} 子タスク`),
+    el('ap-preview-summary').replaceChildren(text('h3', `${result.plan.name} · ${result.plan.mode === "research" ? "Research Mode · " : ""}${nodes.length} 子タスク`),
       text('p', `メンター: ${result.plan.policy.mentor_enabled === false ? '無効' : '有効'} · 最大 ${result.plan.policy.mentor_max_rounds ?? 2} 回`), ui.settingsTable(settings));
     for (const warning of result.warnings || []) el('ap-preview-summary').append(text('p', warning));
     el('ap-start').disabled = false; el('ap-opt-in').checked = false;
@@ -68,6 +105,7 @@
       const nodes = nodeEditors.map(({node, fields}) => ({...node, ...Object.fromEntries(Object.entries(fields).map(([key, input]) =>
         [key, ['id', 'integration_mode'].includes(key) ? input.value : JSON.parse(input.value)]))}));
       const result = await api('/api/autopilot/import/convert', {...imported, inputs, nodes,
+        ...(el('ap-workflow-mode').value ? {mode:el('ap-workflow-mode').value} : {}),
         name: el('ap-name').value.trim() || 'Markdown workflow', repository: el('ap-repository').value, base_ref: el('ap-base').value,
         permissions: {commit_owned_changes: el('ap-import-commit').checked, publish_main: false},
         policy: {...executionDefaults(), extra_usage_disabled_confirmed: el('ap-import-billing').checked, replanning: el('ap-import-replanning').value}});
@@ -76,14 +114,14 @@
   };
   el('ap-manifest').addEventListener('input', () => {generatedManifest = false; invalidate();});
   el('ap-preview').onclick = async () => {
-    try { showPreview(await api('/api/autopilot/dry-run', {manifest: el('ap-manifest').value, execution_defaults: executionDefaults()})); }
+    try { showPreview(await api('/api/autopilot/dry-run', {manifest: el('ap-manifest').value, execution_defaults: executionDefaults(), workflow_mode:el('ap-workflow-mode').value || undefined})); }
     catch (error) { invalidate(); showError(error); }
   };
   el('ap-start').onclick = async () => {
     if (!preview) return;
     const button = el('ap-start'); button.disabled = true;
     try {
-      const workflow = await api('/api/autopilot/workflows', {manifest: el('ap-manifest').value, execution_defaults: executionDefaults(),
+      const workflow = await api('/api/autopilot/workflows', {manifest: el('ap-manifest').value, execution_defaults: executionDefaults(), workflow_mode:el('ap-workflow-mode').value || undefined,
         expected_digest: preview.input_digest, opt_in: el('ap-opt-in').checked, start: true});
       selectWorkflow(workflow.id); message('開始しました。大タスク詳細ページから進捗と追加指示を管理できます。'); await refresh();
     } catch (error) { button.disabled = false; showError(error); }

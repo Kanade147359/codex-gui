@@ -87,7 +87,7 @@
   </div>
   <p class="small muted" id="recovery-hint"></p>
   <table class="usage" id="attempts" hidden>
-    <thead><tr><th>#</th><th>STARTED</th><th>BY</th><th>RESULT</th><th>THREAD</th><th>DETAIL</th></tr></thead>
+    <thead><tr><th>#</th><th>STARTED</th><th>BY</th><th>RESULT</th><th>SESSION</th><th>DETAIL</th></tr></thead>
     <tbody id="attempts-body"></tbody>
   </table>
 </details>
@@ -106,6 +106,11 @@
   </details>
 </section>
 
+<section class="usage-box" id="provider-task-detail" hidden>
+  <h2>Claude Code execution</h2><p id="provider-task-error" class="error"></p>
+  <h3>Usage (reported by CLI; quota Unknown)</h3><pre id="provider-task-usage"></pre>
+  <h3>Subagents</h3><pre id="provider-task-subagents"></pre>
+</section>
 <details class="fold" data-fold="token-usage">
   <summary><h2>Token usage <span class="muted small" id="usage-summary"></span></h2></summary>
   <div id="latest-usage" class="muted">no completed turn yet</div>
@@ -142,20 +147,26 @@
 <section id="task-controls">
   <h2><span class="mobile-only">Controls / </span>Additional instruction <span class="muted" id="session-id"></span></h2>
   <div id="instruction-composer">
-  <textarea id="instruction" rows="3" aria-label="Additional instruction" placeholder="Next instruction for this task's Codex thread"></textarea>
+  <textarea id="instruction" rows="3" aria-label="Additional instruction" placeholder="Next instruction for this task's session"></textarea>
   <div id="instruction-attachments" class="image-composer"></div>
   <div class="inline-actions">
     <button id="send-btn" class="primary" title="Send at Standard speed">Send Standard</button>
     <button id="send-fast-btn" title="Send this one instruction at Fast speed (2x price, included usage is consumed faster)">Send Fast</button>
     <button id="retry-medium-btn" hidden>Retry with Medium</button>
     <button id="retry-high-btn" hidden>Retry with High</button>
-    <button id="resume-btn" class="primary" hidden title="Continue this interrupted task in its existing Codex thread">Resume</button>
+    <button id="resume-btn" class="primary" hidden title="Continue this interrupted task in its existing provider session">Resume</button>
     <button id="new-session-btn" title="Start a fresh Codex thread in this worktree (the old thread's cache is not reused)">Start New Session</button>
     <button id="compact-btn" class="compact-btn" title="Compact this thread's context (thread/compact/start)" hidden>Compact Thread</button>
     <span id="instruction-hint" class="muted"></span>
     <a class="button mobile-only" href="#task-controls">More…</a>
   </div>
   </div>
+  <details><summary>New session provider</summary>
+    <label>Provider for Start New Session<select id="new-session-provider"><option value="">Current provider</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+    <label>New provider model (empty = provider default)<input id="new-session-model"></label>
+    <label class="check"><input type="checkbox" id="new-session-trust"> I trust this repository for Claude non-interactive execution</label>
+    <p class="small muted">Changing provider starts a new session. Previous messages and usage remain in history; the previous conversation is not passed to the new provider.</p>
+  </details>
   <details id="mobile-task-tools" class="mobile-only fold"><summary>Task controls / Git / Delete…</summary><div class="inline-actions"></div></details>
   <details id="mobile-execution-tools" class="mobile-only fold"><summary>Execution options…</summary><div class="inline-actions"></div></details>
   <p class="muted small" id="retry-hint" hidden></p>
@@ -176,15 +187,14 @@
       <label class="check inline"><input type="radio" name="sched-speed" id="sched-speed-fast" value="fast"> Fast</label>
     </div>
     <div class="inline-actions">
-      <button id="schedule-btn" title="Reserve this instruction for this task's existing Codex thread (same thread, worktree and branch)">Schedule Instruction</button>
+      <button id="schedule-btn" title="Reserve this instruction for this task's existing provider session (same thread, worktree and branch)">Schedule Instruction</button>
       <span class="muted small" id="schedule-hint"></span>
     </div>
   </fieldset>
   <details class="small"><summary>How sending works</summary>
-    <p class="muted small">Send continues the same Codex thread (its history stays inside Codex, so the prompt cache is reused); while a turn is running
-    it is added to that turn. Model, reasoning, speed, sandbox, approval and web search are fixed for the task: changing them mid-thread lowers cache reuse.
+    <p class="muted small">Send continues the same provider session (its history stays inside the selected CLI); Codex app-server supports adding instructions while a turn runs; Claude Code accepts the next instruction after the current turn finishes. Model, reasoning, speed, sandbox, approval and web search are fixed for the task: changing them mid-thread lowers cache reuse.
     “Retry with …” changes the reasoning effort only when you click it.</p>
-    <p class="muted small">Schedule Instruction sends the text to this same Codex thread later: once every selected task has completed and this thread is idle
+    <p class="muted small">Schedule Instruction sends the text to this same provider session later: once every selected task has completed and this thread is idle
     (one instruction at a time per thread, oldest first). Its speed is the one you pick here, whatever the last turn used. Reasoning effort and approval come from the task.
     If Codex stops unexpectedly during that turn, the task's automatic recovery continues the thread; the instruction is never sent twice.</p>
   </details>
