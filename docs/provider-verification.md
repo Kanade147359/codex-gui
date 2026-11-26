@@ -187,6 +187,22 @@ per-case reruns and exact evidence are recorded in PR #19.
   empty report. Reports are now tied to distinct completed native children and
   matched one-to-one to the assigned scopes. A regression reproduces and rejects
   the previous false-PASS case. Final fixed-snapshot review results are in PR #19.
+- Re-review of 0d07d31 found quota-resume and pending-schedule ownership gaps.
+  A persisted explicit Claude queue-unpause now atomically requeues the owned
+  Autopilot turn and node together; elapsed time/unknown quota alone cannot do
+  so. A restart regression verifies the pause survives restart and exactly one
+  resumed attempt uses the same session/worktree. Provider changes are rejected
+  with outstanding scheduled turns, including a conditional DB guard against
+  another connection creating a reservation; cancellation remains explicit.
+- The same review found that path declarations were not evidence of reading
+  code. Native reviewers must now obtain every pinned diff page through actual
+  tools. Exact page bodies and complete BEGIN/END markers must be present in each
+  owned child's recorded tool outputs. Assistant claims/commentary and partial
+  pages do not count. Head-bound page digests and per-agent observed coverage are
+  persisted alongside the reports and one-to-one scope assignment.
+- Claude attempt history now displays provider_session_id with the legacy
+  codex_thread_id fallback. Desktop/mobile browser checks assert the actual
+  session's prefix and full tooltip, in addition to the task-level metadata.
 - GitHub CI without an installed Codex exposed a backup fixture that handled
   regular files with FakeRunner but delegated image-capability discovery to a
   real binary. ReadingRunner now inherits the existing ImageRunner fixture.

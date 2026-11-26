@@ -509,7 +509,7 @@ class Autopilot:
                             n["id"],
                             state,
                             "waiting_implementation_provider",
-                            reason="Included Codex quota unavailable; no provider slot held",
+                            reason=f"Included {task['provider']} quota unavailable; no provider slot held",
                         )
                     elif task and task["status"] in ("failed", "stopped", "blocked", "interrupted"):
                         self.ledger.transition(
@@ -1454,6 +1454,8 @@ class Autopilot:
         w = self.ledger.get("workflows", n["workflow_id"])
         task = self.manager.db.get_task(n["task_id"])
         if task["provider"] == "claude":
+            if not self.manager.providers.paused("claude") and self._resume_quota_implementation(n, w):
+                return
             self.ledger.transition(n["id"], "probing_implementation", "waiting_implementation_provider",
                                    reason="Claude quota Unknown; explicitly resume the task/queue after quota resets")
             return
@@ -1481,23 +1483,7 @@ class Autopilot:
             limits = await self.manager.read_limits("autopilot_quota_recheck", force_history=True)
             # A typed positive signal is required. Time passing alone never means available.
             if limits and limits.get("ordinary_usage_allowed") is True:
-                task = self.manager.db.get_task(n["task_id"])
-                turn = self.manager._turn_of(task, "autopilot_quota_resume")
-                with self.ledger.transaction() as c:
-                    if c.execute("SELECT state FROM ap_workflows WHERE id=?", (w["id"],)).fetchone()[0] != "running":
-                        return
-                    changed = c.execute(
-                        "UPDATE tasks SET status='queued',pid=NULL,proc_identity=NULL,claimed_by=NULL,claimed_at=NULL,pending_turn=?,finished_at=NULL WHERE id=? AND status='waiting-for-quota'",
-                        (turn.to_json(), task["id"]),
-                    ).rowcount
-                    if changed:
-                        c.execute(
-                            "UPDATE ap_nodes SET state='implementing',reason='' WHERE id=? AND state='probing_implementation'",
-                            (n["id"],),
-                        )
-                        c.execute("DELETE FROM ap_provider_availability WHERE key=?", (key,))
-                if changed:
-                    self.manager.db._notify(task["id"], "waiting-for-quota", "queued")
+                if self._resume_quota_implementation(n, w, key):
                     return
         except ProviderFailure as e:
             self.ledger.transition(
@@ -1508,6 +1494,28 @@ class Autopilot:
             )
             return
         self.ledger.transition(n["id"], "probing_implementation", "waiting_implementation_provider")
+
+    def _resume_quota_implementation(self, n, workflow, availability_key=None):
+        """Explicit Claude unpause or positive Codex limits resume one owned turn."""
+        with self.ledger.transaction() as c:
+            if (c.execute("SELECT state FROM ap_workflows WHERE id=?", (workflow["id"],)).fetchone()[0] != "running"
+                or c.execute("SELECT state FROM ap_nodes WHERE id=?", (n["id"],)).fetchone()[0] != "probing_implementation"):
+                return False
+            task = dict(c.execute("SELECT * FROM tasks WHERE id=?", (n["task_id"],)).fetchone())
+            if task["status"] != "waiting-for-quota":
+                return False
+            if task["provider"] == "claude":
+                pause = c.execute("SELECT value FROM app_settings WHERE key='provider_paused.claude'").fetchone()
+                if not pause or pause[0] != "0":
+                    return False  # Unknown quota requires the explicit persisted owner action.
+            turn = self.manager._turn_of(task, "autopilot_quota_resume")
+            c.execute("UPDATE tasks SET status='queued',pid=NULL,proc_identity=NULL,claimed_by=NULL,claimed_at=NULL,"
+                      "pending_turn=?,finished_at=NULL WHERE id=? AND status='waiting-for-quota'", (turn.to_json(), task["id"]))
+            c.execute("UPDATE ap_nodes SET state='implementing',reason='' WHERE id=? AND state='probing_implementation'", (n["id"],))
+            if availability_key:
+                c.execute("DELETE FROM ap_provider_availability WHERE key=?", (availability_key,))
+        self.manager.db._notify(task["id"], "waiting-for-quota", "queued")
+        return True
 
     async def _finish_conflict(self, n):
         w = self.ledger.get("workflows", n["workflow_id"])

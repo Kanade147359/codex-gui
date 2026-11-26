@@ -628,6 +628,8 @@ class TaskManager(CodexExecution):
             engine = self.providers.get(target)
             fields = {}
             if target != task["provider"]:
+                if self.db.list_scheduled(task_id, statuses=(*SCHEDULED_WAITING, "running")):
+                    raise TaskError("finish or cancel scheduled instructions before changing provider", 409, "scheduled_session")
                 if self.autopilot.ledger.node_for_task(task_id):
                     raise TaskError("revise the workflow and create a separate task to change its provider", 409)
                 defaults = self.providers.config(target)

@@ -1121,8 +1121,9 @@ function initTask() {
       const how = { initial: "first run", instruction: "instruction", new_session: "new session", compact: "compact", auto_retry: "auto retry",
                     manual_retry: "manual retry", restart_recovery: "GUI restart" }[a.trigger_kind] || a.trigger_kind;
       const result = a.result + (a.was_resume ? " (resumed same thread)" : "");
+      const session = a.provider_session_id || a.codex_thread_id || "";
       return `<tr><td>${a.attempt_number}</td><td>${esc(hms(a.started_at))}</td><td>${esc(how)}</td><td>${esc(result)}</td>` +
-        `<td title="${esc(a.codex_thread_id || "")}">${esc((a.codex_thread_id || "-").slice(0, 8))}</td>` +
+        `<td title="${esc(session)}">${esc((session || "-").slice(0, 8))}</td>` +
         `<td title="${esc(a.failure_message || "")}">${esc(a.failure_kind ? `${a.failure_kind}: ${(a.failure_message || "").slice(0, 70)}` : "")}</td></tr>`;
     }).join("");
   }

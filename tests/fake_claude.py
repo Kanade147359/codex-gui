@@ -60,7 +60,7 @@ if command == 'orphan':
     import subprocess
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     (fixture_dir / 'child.pid').write_text(str(child.pid))
-if command == 'quota':
+if command == 'quota' or (command == 'quota-once' and saved[session] == 1):
     emit(dict(type='rate_limit_event', rate_limit_info=dict(status='rejected', isUsingOverage=False)))
     sys.exit(0)
 if command == 'overage':

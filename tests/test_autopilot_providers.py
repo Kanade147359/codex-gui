@@ -4,6 +4,7 @@ import pytest
 
 from app.autopilot.policy import manifest
 from app.autopilot.roles import reader_policy
+from app.providers import session_id
 from autopilot_helpers import drive, plan, register
 from test_autopilot_execution_mentor import controlled_install  # noqa: F401
 from test_providers import configure, fixture_calls
@@ -67,6 +68,54 @@ def test_fallback_requires_explicit_authorization(git_repo, make_manager, contro
         assert len(reviews) == 1 and reviews[0]['provider'] == 'claude'
         assert not ap.providers['codex'].calls
         await m.shutdown()
+    asyncio.run(scenario())
+
+
+def test_explicit_claude_queue_resume_is_same_session_idempotent_and_restart_safe(git_repo, make_manager, controlled_install):
+    from app.task_manager import TaskManager
+    from conftest import FakeRunner
+    m = configure(make_manager())
+    ap = controlled_install(m)
+    raw = plan(git_repo, ('C',))
+    raw['nodes'][0].update(provider='claude', provider_options={'trusted_repository':True}, prompt='quota-once')
+    async def scenario():
+        identity = await register(ap, raw)
+        await drive(m, lambda: ap.ledger.get('nodes', identity + ':C')['state'] in
+                    ('waiting_implementation_provider', 'probing_implementation'))
+        await asyncio.sleep(.01)
+        node = ap.ledger.get('nodes', identity + ':C')
+        task = m.get(node['task_id'])
+        assert task['status'] == 'waiting-for-quota' and m.providers.paused('claude')
+        original_session = session_id(task)
+        await m.shutdown()
+        other = TaskManager(m.settings, m.db, FakeRunner())
+        restarted = controlled_install(other)
+        other.recover()
+        try:
+            for _ in range(5):
+                other.tick()
+                await asyncio.sleep(.01)
+            assert other.get(task['id'])['status'] == 'waiting-for-quota'
+            assert len(other.db.list_attempts(task['id'])) == 1
+            # POST /api/providers/claude/resume-queue performs this explicit persisted action.
+            other.providers.pause('claude', False)
+            await drive(other, lambda: len(other.db.list_attempts(task['id'])) == 2 and
+                        other.get(task['id'])['status'] == 'completed')
+            done = other.get(task['id'])
+            assert done['provider'] == 'claude' and session_id(done) == original_session
+            assert done['worktree'] == task['worktree']
+            row = restarted.ledger.get('nodes', node['id'])
+            assert row['state'] not in ('waiting_implementation_provider', 'probing_implementation')
+            assert not restarted._resume_quota_implementation(row, restarted.ledger.get('workflows', identity))
+            for _ in range(5):
+                other.tick()
+                await asyncio.sleep(.01)
+            assert len(other.db.list_attempts(task['id'])) == 2
+            import json
+            calls = [json.loads(line) for line in fixture_calls(task['worktree']).read_text().splitlines()]
+            assert len(calls) == 2 and calls[-1]['resume'] and calls[-1]['session'] == original_session
+        finally:
+            await other.shutdown()
     asyncio.run(scenario())
 
 

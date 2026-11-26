@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .models import (
-    DEPENDENCY_FAILED_STATUSES, InvalidTransition, SCHEDULED_CANCELLABLE, SCHEDULED_IDLE_TASK_STATUS, SCHEDULED_WAITING,
+    DEPENDENCY_FAILED_STATUSES, InvalidTransition, SCHEDULED_CANCELLABLE, SCHEDULED_IDLE_TASK_STATUS, SCHEDULED_OPEN, SCHEDULED_WAITING,
     STATUSES, can_transition, now_iso,
 )
 
@@ -770,10 +770,16 @@ class Database:
     def _guarded(self, task_id: str, old: str, new: str, extra_where: str, fields: dict, message=None) -> bool:
         """UPDATE ... WHERE id = ? AND status = old [AND extra]: one atomic step. True if this call made the change."""
         assignments = ", ".join(f"{k} = ?" for k in {**fields, "status": new})
+        guard_params = []
+        if "provider" in fields:
+            # Never retarget an existing scheduled turn into a different engine.
+            extra_where += (" AND (provider = ? OR NOT EXISTS (SELECT 1 FROM scheduled_instructions "
+                            f"WHERE task_id=tasks.id AND status IN ({_in(SCHEDULED_OPEN)})))")
+            guard_params.append(fields["provider"])
         with self._lock, self._conn:
             cur = self._conn.execute(
                 f"UPDATE tasks SET {assignments} WHERE id = ? AND status = ? {extra_where}",
-                [*fields.values(), new, task_id, old])
+                [*fields.values(), new, task_id, old, *guard_params])
             changed = cur.rowcount == 1
             if changed:
                 self._audit_auto_approval(task_id, fields)

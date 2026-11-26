@@ -62,3 +62,42 @@ def test_legacy_new_session_reasoning_field_remains_compatible(settings, git_rep
         assert response.status_code == 200
         done = wait_done(client, task['id'])
         assert done['status'] == 'completed' and done['reasoning_effort'] == old['reasoning_effort']
+
+
+def test_provider_switch_requires_finishing_or_cancelling_scheduled_turns(settings, git_repo):
+    app = create_app(settings, FakeRunner())
+    with TestClient(app) as client:
+        client.put('/api/providers/claude/settings', json={'settings':dict(binary=FAKE, billing_mode='subscription', extra_usage_disabled_confirmed=True)})
+        task = client.post('/api/tasks', json=dict(repository=str(git_repo), prompt='ok')).json()
+        before = wait_done(client, task['id'])
+        parent = client.post('/api/tasks', json=dict(repository=str(git_repo), prompt='sleep 60')).json()
+        m = app.state.manager
+        scheduled = client.portal.call(m.schedule_instruction, task['id'], 'original Codex follow-up', [parent['id']], 'priority')
+        body = dict(prompt='new independent session', provider='claude', provider_options={'trusted_repository':True})
+        response = client.post(f"/api/tasks/{task['id']}/new-session", json=body)
+        assert response.status_code == 409 and 'scheduled' in response.text
+        held = client.get('/api/tasks/' + task['id']).json()
+        assert held['provider'] == 'codex' and held['session_id'] == before['session_id']
+        assert len(held['messages']) == len(before['messages'])
+        assert m.db.get_scheduled(scheduled['id'])['service_tier'] == 'priority'
+        assert m.db.get_scheduled(scheduled['id'])['status'] == 'waiting_dependencies'
+        # The conditional DB write also rejects a schedule appearing after the manager's check.
+        from app.models import InvalidTransition
+        from app.database import Database
+        import pytest
+        m.cancel_scheduled(task['id'], scheduled['id'])
+        writer = Database(settings.db_path)
+        try:
+            late = writer.create_scheduled(task['id'], 'concurrent reservation', 'default', [parent['id']])
+            with pytest.raises(InvalidTransition):
+                m.db.set_status(task['id'], 'queued', provider='claude', provider_session_id=None, codex_thread_id=None)
+            writer.cancel_scheduled(late['id'])
+        finally:
+            writer.close()
+        assert m.get(task['id'])['codex_thread_id'] == before['session_id']
+        response = client.post(f"/api/tasks/{task['id']}/new-session", json=body)
+        assert response.status_code == 200, response.text
+        done = wait_done(client, task['id'])
+        assert done['provider'] == 'claude' and done['session_id'] != before['session_id']
+        assert m.db.get_scheduled(scheduled['id'])['status'] == 'cancelled'
+        client.portal.call(m.stop, parent['id'])

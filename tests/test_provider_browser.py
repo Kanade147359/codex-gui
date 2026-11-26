@@ -58,6 +58,7 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
     expect(page.locator('#meta')).to_contain_text('Claude Code')
     expect(page.locator('#provider-task-subagents')).to_contain_text('completed')
     expect(page.locator('#provider-task-usage')).to_contain_text('42')
+    expect(page.locator('#attempts-body td[title="' + task['session_id'] + '"]')).to_have_text(task['session_id'][:8])
     expect(page.locator('#send-fast-btn')).not_to_be_visible()
     expect(page.locator('#compact-btn')).not_to_be_visible()
     page.locator('#instruction').fill('continue')
