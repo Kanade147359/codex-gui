@@ -180,7 +180,7 @@ function initDashboard() {
         <tr data-id="${esc(t.id)}">
           <td class="wrap task-name"><a href="/tasks/${esc(t.id)}">${esc(t.name)}</a>${scheduledBadge(t)}</td>
           <td data-label="Repo" title="${esc(t.repository)}"><div class="task-value">${esc(repoName(t.repository))}</div></td>
-          <td data-label="Model" title="${esc(t.effective_model || "")}"><div class="task-value">${esc(modelName(t.effective_model || t.model))}</div></td>
+          <td data-label="Model" title="${esc(t.effective_model || "")}"><div class="task-value">${esc(modelName(t.effective_model || t.model))}<small>${t.provider === "claude" ? "Claude Code" : "Codex"}</small></div></td>
           <td data-label="Effort"><div class="task-value">${esc(effortLabel(t.reasoning_effort))}${t.service_tier !== "default" ? ` <span class="warn" title="Fast mode consumes included usage more quickly.">fast</span>` : ""}</div></td>
           <td data-label="Cache" title="cache hit rate of the latest turn (cached / input)"><div class="task-value">${esc(pct(t.cache_hit_rate))}</div></td>
           <td data-label="Ctx" title="current context / model window"><div class="task-value">${ctxCell(t.context)}${ctxBadges(t)}</div></td>
@@ -377,15 +377,41 @@ function initDashboard() {
   const CUSTOM = "__custom__";
   const FALLBACK_EFFORTS = ["low", "medium", "high"];
 
+  let codexOptions = null;
+  function switchProvider() {
+    const id = f.provider.value;
+    const p = window.ProviderUI?.info(id);
+    options = id === 'codex' ? {...codexOptions, default_model:p?.settings.default_model || codexOptions?.default_model || '', default_effort:p?.settings.default_effort === 'default' ? codexOptions?.default_effort || '' : p?.settings.default_effort || ''} : {...codexOptions, models: p?.models || [], recommended_model: '',
+      default_model: p?.settings.default_model || '', default_effort: p?.settings.default_effort || 'default'};
+    $('#claude-options').hidden = id !== 'claude';
+    for (const name of ['service_tier', 'auto_approval', 'web_search', 'network_access', 'adaptive_reasoning', 'context_guard', 'model_verbosity', 'sandbox', 'writable_dirs', 'feature_flags']) {
+      const input = f[name];
+      const label = input?.closest('label');
+      if (label) label.hidden = id === 'claude';
+    }
+    for (const selector of ['#ctx-group']) {
+      if ($(selector)) $(selector).hidden = id === 'claude';
+    }
+    if (id === 'codex') f.auto_approval.checked = p?.settings.permission_mode !== 'never';
+    if (id === 'claude') {
+      $('#claude-permission').innerHTML = (p?.permission_modes || ['dontAsk']).map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+      f.claude_permission.value = p?.settings.permission_mode || 'dontAsk';
+      f.claude_subagents.checked = p?.settings.default_subagents || false;
+      $('#claude-provider-note').textContent = `${p?.available ? p.version : 'CLI unavailable'} · Billing: ${p?.billing || 'Unknown'} · Model: manual CLI alias/full ID. Confirm subscription and extra usage disabled in Settings.`;
+    }
+    buildModelSelect();
+  }
+  f.provider.addEventListener('change', switchProvider);
+
   function buildModelSelect() {
-    // "Use Codex default" / the recommended model (GPT-6.1 Sol when this codex lists it) / the rest / Other…
+    // "Use provider default" / the recommended model (GPT-6.1 Sol when this codex lists it) / the rest / Other…
     const rec = options.recommended_model;
     const def = options.default_model ? ` (${options.default_model})` : "";
     const recInfo = options.models.find((m) => m.slug === rec);
     const rest = options.models.filter((m) => m.slug !== rec);
     modelSel.innerHTML =
       (recInfo ? `<option value="${esc(rec)}">${esc(recInfo.name)} — recommended</option>` : "") +
-      `<option value="">Use Codex default${esc(def)}</option>` +
+      `<option value="">Use provider default${esc(def)}</option>` +
       rest.map((m) => `<option value="${esc(m.slug)}">${esc(m.name)} — ${esc(m.slug)}</option>`).join("") +
       `<option value="${CUSTOM}">Other…</option>`;
     modelSel.value = recInfo ? rec : "";
@@ -400,10 +426,10 @@ function initDashboard() {
   function buildEffortSelect(reset) {
     // Only the efforts this model supports are offered. Default Low (the model's own default when it has no "low").
     const info = currentModelInfo();
-    const efforts = info && info.efforts.length ? info.efforts : FALLBACK_EFFORTS;
+    const efforts = f.provider.value === "claude" ? window.ProviderUI?.info("claude")?.efforts || [] : info && info.efforts.length ? info.efforts : FALLBACK_EFFORTS;
     const prev = reset ? "" : effortSel.value;
     const dflt = !modelSel.value && options.default_effort ? options.default_effort : info ? info.default_effort : "";
-    effortSel.innerHTML = `<option value="default">Auto${dflt ? " (Codex default: " + esc(effortLabel(dflt)) + ")" : ""}</option>` +
+    effortSel.innerHTML = `<option value="default">Auto${dflt ? " (Provider default: " + esc(effortLabel(dflt)) + ")" : ""}</option>` +
       efforts.map((e) => `<option value="${esc(e)}">${esc(effortLabel(e))}</option>`).join("");
     const wanted = [...effortSel.options].some((o) => o.value === prev) ? prev : efforts.includes("low") ? "low" : "default";
     effortSel.value = wanted;
@@ -567,12 +593,15 @@ function initDashboard() {
     try {
       options = await api("GET", "/api/options");
     } catch (_) {}
-    buildModelSelect();
+    codexOptions = {...options};
+    await window.ProviderUI?.load();
+    switchProvider();
     renderRecent();
     renderDepChoices();
     f.auto_retry.checked = options.default_auto_retry !== false;
     f.max_retries.value = options.default_max_retries ?? 3;
     if (window.CtxUI) CtxUI.initNewTask(options);
+    if ($('#ctx-subagents') && f.provider.value === 'codex') $('#ctx-subagents').checked = window.ProviderUI?.info('codex')?.settings.default_subagents || false;
     updateGroupSummaries();
     if (options.error) { formError.textContent = options.error + " (use Custom… to type a model id)"; formError.hidden = false; }
     if (!f.repository.value) f.repository.value = filterEl.dataset.want || options.repos[0] || "";
@@ -625,8 +654,11 @@ function initDashboard() {
         name: f.name.value,
         prompt: f.prompt.value,
         ...(images?.hasImages() ? { attachment_ids: await images.ids() } : {}),
+        provider: f.provider.value,
+        ...(f.provider.value === 'claude' ? {provider_options: {permission_mode:f.claude_permission.value,
+          trusted_repository:f.claude_trusted.checked, timeout_seconds:Number(f.claude_timeout.value)}} : {}),
         model: selectedModel(),
-        reasoning_effort: effortSel.value,
+        reasoning_effort: f.provider.value === 'claude' && f.claude_effort_custom.value.trim() ? f.claude_effort_custom.value.trim() : effortSel.value,
         auto_approval: f.auto_approval.checked,
         service_tier: tierSel.value,
         model_verbosity: f.model_verbosity.value,
@@ -638,6 +670,8 @@ function initDashboard() {
         writable_dirs: f.writable_dirs.value,
         feature_flags: f.feature_flags.value,
         ...(window.CtxUI ? CtxUI.formValues() : {}),
+        ...(f.provider.value === 'claude' ? {allow_subagents:f.claude_subagents.checked, service_tier:'default', adaptive_reasoning:false, context_guard:false,
+          tool_profile:'full', tool_output:'default', tool_output_limit:null, skills:'default', skills_budget:null, feature_flags:'', writable_dirs:''} : {}),
       });
       f.prompt.value = "";
       images?.clear();
@@ -764,7 +798,7 @@ function initTask() {
     window.ImageAttachments?.history($("#image-message-history"), t.messages);
     $("#git-branch").textContent = t.branch;
     const rows = [
-      ["Status", taskStatusText(t)], ["Repository", t.repository],
+      ["Status", taskStatusText(t)], ["Provider", t.provider === "claude" ? "Claude Code" : "Codex"], ["Repository", t.repository],
       ["Branch", t.branch + (t.branch_deleted ? " (deleted)" : "")], ["Worktree", t.worktree + (t.worktree_removed ? " (removed)" : t.worktree_pending ? " (created when the task starts)" : "")],
       ["Base ref", `${t.base_ref} (${t.base_sha.slice(0, 10)})`], ["Model", t.effective_model || t.model || "default"],
       ["Reasoning", effortLabel(t.reasoning_effort)], ["Speed", t.service_tier === "default" ? "Standard" : t.service_tier],
@@ -773,8 +807,14 @@ function initTask() {
       ["Adaptive reasoning", t.adaptive_reasoning ? "on (suggestions only)" : "off"], ["Context guard", t.context_guard ? "on" : "off"],
       ["Started at", dt(t.started_at)], ["Finished at", dt(t.finished_at)],
       ["Backend", t.backend], ["Exit code", t.exit_code ?? "-"],
-      ["Codex thread", t.codex_thread_id || "-"], ["Last turn at", dt(t.last_turn_at)],
+      ["Session", (t.session_id || t.codex_thread_id) || "-"], ["Last turn at", dt(t.last_turn_at)],
     ];
+    if (t.provider === 'claude') {
+      const codexOnly = ['Speed', 'Output verbosity', 'Web search', 'Network access', 'Auto approval', 'Sandbox', 'Adaptive reasoning', 'Context guard'];
+      for (let i = rows.length - 1; i >= 0; --i) if (codexOnly.includes(rows[i][0])) rows.splice(i, 1);
+      rows.push(['Permission mode', t.provider_options?.permission_mode || 'dontAsk'], ['Sandbox', 'Claude CLI sandbox (no unsandboxed fallback)']);
+    }
+    window.ProviderUI?.task(t);
     if (t.status_detail) rows.push(["Detail", t.status_detail]);
     $("#meta").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
     $("#meta-summary").textContent = "· " + [t.effective_model || t.model || "default", effortLabel(t.reasoning_effort),
@@ -794,30 +834,33 @@ function initTask() {
 
     // Additional instruction. Idle: Send resumes the thread. Running (app-server): Send steers the running turn.
     const idle = !busy && t.status !== "blocked" && hasWorktree;
+    const fastScheduleLabel = $('#sched-speed-fast').closest('label');
+    if (fastScheduleLabel) fastScheduleLabel.hidden = t.capabilities?.fast === false;
+    if (t.capabilities?.fast === false) $('#sched-speed-standard').checked = true;
     const steerable = active && t.status === "running" && t.backend === "app-server" && !t.worktree_removed;
     $("#send-btn").textContent = steerable ? "Send to running turn" : "Send Standard";
-    $("#send-btn").disabled = sending || !(steerable || (idle && t.codex_thread_id));
-    $("#send-fast-btn").hidden = active;  // the speed is chosen per turn; an instruction added to a running turn has none
-    $("#send-fast-btn").disabled = sending || !(idle && t.codex_thread_id);
+    $("#send-btn").disabled = sending || !(steerable || (idle && (t.session_id || t.codex_thread_id)));
+    $("#send-fast-btn").hidden = active || t.capabilities?.fast === false;  // the speed is chosen per turn; an instruction added to a running turn has none
+    $("#send-fast-btn").disabled = sending || !(idle && (t.session_id || t.codex_thread_id));
     $("#new-session-btn").disabled = !idle || sending;
     $("#resume-btn").hidden = t.status !== "interrupted";
-    $("#resume-btn").disabled = sending || !t.codex_thread_id;
+    $("#resume-btn").disabled = sending || !(t.session_id || t.codex_thread_id);
     const canSchedule = !t.worktree_removed;  // a reservation can be made while the thread is busy: that is its point
     $("#instruction").disabled = sending || !(idle || steerable || canSchedule);
-    $("#session-id").textContent = t.codex_thread_id ? `thread ${t.codex_thread_id}` : "";
+    $("#session-id").textContent = (t.session_id || t.codex_thread_id) ? `session ${(t.session_id || t.codex_thread_id)}` : "";
     $("#instruction-hint").textContent =
       waiting ? "The task is waiting for the scheduler; it takes instructions once it has run." :
       t.status === "blocked" ? "The task is blocked by a dependency: use Run Anyway or retry the failed dependency." :
       active && !steerable ? (t.backend === "app-server" ? "The turn is starting: you can add an instruction in a moment." :
                                                           "Task is running: send the next instruction when it has finished (the exec backend cannot add to a running turn).") :
       t.worktree_removed ? "The worktree was deleted." :
-      !t.codex_thread_id ? "No Codex thread was recorded for this task: use Start New Session." : "";
+      !(t.session_id || t.codex_thread_id) ? "No provider session was recorded for this task: use Start New Session." : "";
 
     // Retry with more reasoning: only ever on click. The suggested step is highlighted after a failed turn.
     const ladder = ["low", "medium", "high"];
     // "default" (Auto) is below both steps; xhigh / max / ultra are above them: never offer a step down.
     const at = ladder.includes(t.reasoning_effort) ? ladder.indexOf(t.reasoning_effort) : t.reasoning_effort === "default" ? -1 : 99;
-    const canRetry = idle && t.codex_thread_id && t.adaptive_reasoning !== 0 && !sending;
+    const canRetry = idle && (t.session_id || t.codex_thread_id) && t.adaptive_reasoning !== 0 && !sending;
     for (const [id, effort, rank] of [["#retry-medium-btn", "medium", 1], ["#retry-high-btn", "high", 2]]) {
       const el = $(id);
       el.hidden = !(canRetry && at < rank);
@@ -837,8 +880,8 @@ function initTask() {
     const ctx = t.context || {};
     $("#context-guard").hidden = !ctx.warn;
     if (ctx.warn) $("#guard-title").textContent = `Context usage: ${Math.round(ctx.percent)}%`;
-    const canCompact = idle && t.codex_thread_id && t.backend === "app-server" && !sending;
-    $("#compact-btn").hidden = !(t.backend === "app-server" && t.codex_thread_id);
+    const canCompact = idle && (t.session_id || t.codex_thread_id) && t.backend === "app-server" && !sending;
+    $("#compact-btn").hidden = !(t.backend === "app-server" && (t.session_id || t.codex_thread_id));
     document.querySelectorAll(".compact-btn").forEach((b) => (b.disabled = !canCompact));
     renderContext(t);
     renderObserved(t);
@@ -881,7 +924,7 @@ function initTask() {
     $("#completion-dependents").textContent = `Dependents: ${paused} paused`;
     for (const sel of ["#completion-check-btn", "#completion-success-btn", "#completion-blocked-btn"]) $(sel).disabled = gateWorking || t.completion_pending || t.status !== "completed";
     $("#completion-contract-save-btn").disabled = gateWorking || t.completion_pending || [...ACTIVE, "retry_wait"].includes(t.status);
-    $("#completion-instruction-btn").disabled = gateWorking || t.completion_pending || BUSY.includes(t.status) || !t.codex_thread_id;
+    $("#completion-instruction-btn").disabled = gateWorking || t.completion_pending || BUSY.includes(t.status) || !(t.session_id || t.codex_thread_id);
     $("#completion-cancel-btn").disabled = gateWorking || !paused;
     if (!contractLoaded) {
       $("#completion-contract-editor").value = JSON.stringify(t.completion_contract || {}, null, 2);
@@ -1083,7 +1126,7 @@ function initTask() {
   function renderContext(t) {
     const c = t.context || {};
     const known = c.window != null || c.tokens != null;
-    $("#context-box").hidden = !known && !t.codex_thread_id;
+    $("#context-box").hidden = !known && !(t.session_id || t.codex_thread_id);
     if ($("#context-box").hidden) return;
     $("#context-dl").innerHTML =
       `<dt>Current</dt><dd>${c.tokens == null ? "unknown" : esc(kfmt(c.tokens))}</dd>` +
@@ -1323,6 +1366,11 @@ function initTask() {
     try {
       await action(label, async () => {
         const body = { prompt, ...(images?.hasImages() ? { attachment_ids: await images.ids() } : {}) };
+        if (path === 'new-session' && $('#new-session-provider')?.value && $('#new-session-provider').value !== task.provider) {
+          body.provider = $('#new-session-provider').value;
+          body.model = $('#new-session-model').value;
+          if (body.provider === 'claude') body.provider_options = {trusted_repository:$('#new-session-trust').checked};
+        }
         if (previousImages.length) body.attachment_ids = previousImages;
         if (effort) body.reasoning_effort = effort;
         if (tier) body.service_tier = tier;  // Send Standard / Send Fast: the speed of this turn only
@@ -1370,7 +1418,7 @@ function initTask() {
     confirmText: "Start a NEW Codex thread in this worktree?\n\nThe conversation so far is not carried over and the previous thread's cached input is not reused." }));
   $("#quota-retry-btn").addEventListener("click", () => {
     // No thread yet (the first turn never ran): a plain first run. Otherwise the same thread continues.
-    sendInstruction({ path: task.codex_thread_id ? "messages" : "new-session", label: "Retry", fallbackToLast: true });
+    sendInstruction({ path: (task.session_id || task.codex_thread_id) ? "messages" : "new-session", label: "Retry", fallbackToLast: true });
   });
   document.querySelectorAll(".compact-btn").forEach((b) => b.addEventListener("click", () => {
     if (!confirm("Compact this thread?\n\nCodex summarizes the older context to shrink it. The task, worktree, branch and thread stay the same.\n" +

@@ -7,7 +7,7 @@ import yaml
 
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
 EFFORT = re.compile(r"[a-z]{1,16}\Z")
-KEYS = {"model", "reasoning_effort"}
+KEYS = {"model", "reasoning_effort", "provider"}
 
 
 def validate_settings(value, *, allow_empty_model=False):
@@ -20,6 +20,9 @@ def validate_settings(value, *, allow_empty_model=False):
         if key == "model":
             if not ((not raw and allow_empty_model) or MODEL.fullmatch(raw)):
                 raise ValueError("invalid implementation model")
+        elif key == "provider":
+            if raw not in ("codex", "claude"):
+                raise ValueError("unknown implementation provider")
         elif not EFFORT.fullmatch(raw):
             raise ValueError("invalid implementation reasoning_effort")
         result[key] = raw
@@ -45,7 +48,7 @@ def markdown_settings(text, name):
     # Fenced examples and quoted material do not silently change execution settings.
     fence = None
     aliases = {"model": "model", "モデル": "model", "reasoning_effort": "reasoning_effort",
-               "reasoning effort": "reasoning_effort", "推論強度": "reasoning_effort"}
+               "reasoning effort": "reasoning_effort", "推論強度": "reasoning_effort", "provider": "provider"}
     for line in text.splitlines():
         stripped = line.strip()
         marker = re.match(r"^(`{3,}|~{3,})", stripped)
@@ -59,7 +62,7 @@ def markdown_settings(text, name):
         if fence or line.startswith(("    ", "\t")) or stripped.startswith(">"):
             continue
         directive = re.fullmatch(
-            r"(?:[-*+]\s+)?(?:\*\*)?(model|モデル|reasoning_effort|reasoning effort|推論強度)(?:\*\*)?\s*[:：]\s*(?:\*\*)?(.*?)(?:\*\*)?",
+            r"(?:[-*+]\s+)?(?:\*\*)?(model|モデル|reasoning_effort|reasoning effort|推論強度|provider)(?:\*\*)?\s*[:：]\s*(?:\*\*)?(.*?)(?:\*\*)?",
             stripped, re.I,
         )
         if not directive:
@@ -87,8 +90,12 @@ def _document_layer(names, inputs):
 
 def resolve_execution(spec, plan):
     policy = plan.get("policy", {})
-    result = dict(model=policy.get("implementation_model", ""),
-                  reasoning_effort=policy.get("reasoning_effort", "high"),
+    role = policy.get("roles", {}).get("implementer", {})
+    result = dict(provider=spec.get("provider", role.get("provider", "codex")),
+                  allow_subagents=spec.get("allow_subagents", role.get("allow_subagents", False)),
+                  provider_options=spec.get("provider_options", role.get("provider_options", {})),
+                  model=role.get("model", policy.get("implementation_model", "")),
+                  reasoning_effort=role.get("reasoning_effort", policy.get("reasoning_effort", "high")),
                   model_source="workflow" if policy.get("implementation_model") else "CLI configuration",
                   reasoning_source="workflow" if "reasoning_effort" in policy else "default high")
     inputs = plan.get("inputs", {})
@@ -104,12 +111,13 @@ def resolve_execution(spec, plan):
             values, sources = explicit, {key: "task" for key in explicit}
         for key, value in values.items():
             result[key] = value
-            result["model_source" if key == "model" else "reasoning_source"] = (
+            result[{"model": "model_source", "provider": "provider_source"}.get(key, "reasoning_source")] = (
                 "markdown: " + sources[key] if names is not None else sources[key]
             )
     return result
 
 
-def task_fields(spec, plan):
+def task_fields(spec, plan, *, creation=False):
     settings = resolve_execution(spec, plan)
-    return {key: settings[key] for key in ("model", "reasoning_effort")}
+    keys = ("model", "reasoning_effort", "provider", "provider_options", "allow_subagents") if creation else ("model", "reasoning_effort")
+    return {key: settings[key] for key in keys}

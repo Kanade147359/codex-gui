@@ -2,6 +2,8 @@
 import logging
 import json
 import sqlite3
+import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -198,12 +200,18 @@ TASK_COLUMNS = (
     "tool_profile_check cwd_subdir stop_reason compactions last_cache_activity_at last_request_input long_context_ack "
     "task_outcome outcome_reason outcome_source completion_checked_at manual_override manual_override_at manual_override_by "
     "completion_contract completion_checks semantic_result completion_pending "
-    "evidence_result evidence_reason approval_source approved_at"
+    "evidence_result evidence_reason approval_source approved_at "
+    "provider provider_session_id provider_options provider_usage provider_subagents"
 ).split()
 
 # Columns added after the first release: (name, definition) applied to databases that lack them.
 # service_tier holds Codex's own id: "default" is Standard speed, "priority" is Fast.
 TASK_MIGRATIONS = [
+    ("provider", "TEXT NOT NULL DEFAULT 'codex' CHECK(provider IN ('codex','claude'))"),
+    ("provider_session_id", "TEXT"),
+    ("provider_options", "TEXT NOT NULL DEFAULT '{}'"),
+    ("provider_usage", "TEXT NOT NULL DEFAULT '{}'"),
+    ("provider_subagents", "TEXT NOT NULL DEFAULT '[]'"),
     ("evidence_result", "TEXT NOT NULL DEFAULT 'UNKNOWN' CHECK(evidence_result IN ('PASS','FAIL','UNKNOWN'))"),
     ("evidence_reason", "TEXT NOT NULL DEFAULT 'Completion has not been checked.'"),
     ("approval_source", "TEXT NOT NULL DEFAULT ''"), ("approved_at", "TEXT"),
@@ -269,7 +277,7 @@ TASK_MIGRATIONS = [
 
 ATTEMPT_COLUMNS = (
     "task_id attempt_number trigger_kind started_at finished_at exit_code result failure_kind failure_message "
-    "codex_thread_id was_resume service_tier reasoning_effort git_head git_status unpushed"
+    "codex_thread_id was_resume service_tier reasoning_effort git_head git_status unpushed provider provider_session_id"
 ).split()
 
 # The two conditions of the dependency policy "all_success", evaluated inside the UPDATE that acts on them so that the
@@ -298,7 +306,7 @@ def _si_deps_failed(a: str) -> str:
 def _si_target_idle(a: str) -> str:
     """The target thread can take a turn now: its task is completed, has a recorded thread and a worktree."""
     return (f"EXISTS (SELECT 1 FROM tasks t WHERE t.id = {a}.task_id AND t.status = '{SCHEDULED_IDLE_TASK_STATUS}' "
-            "AND COALESCE(t.codex_thread_id, '') != '' AND t.worktree_removed = 0 AND t.worktree_pending = 0 AND t.completion_pending = 0)")
+            "AND COALESCE(t.provider_session_id, CASE WHEN t.provider='codex' THEN t.codex_thread_id END, '') != '' AND t.worktree_removed = 0 AND t.worktree_pending = 0 AND t.completion_pending = 0)")
 
 
 def _si_head_of_queue(a: str) -> str:
@@ -317,11 +325,12 @@ TURN_COLUMNS = (
     "cache_write_input_tokens reasoning_output_tokens total_json "
     "turn_id kind status model reasoning_effort started_at finished_at cache_hit_rate "
     "service_tier verbosity tool_profile requests max_request_input requests_json tool_calls large_tool_outputs "
-    "tool_output_tokens_est compactions idle_before_seconds"
+    "tool_output_tokens_est compactions idle_before_seconds provider"
 ).split()
 
 # kind: "turn" (an instruction) or "compact" (thread compaction, which also spends tokens).
 TURN_MIGRATIONS = [
+    ("provider", "TEXT NOT NULL DEFAULT 'codex'"),
     ("turn_id", "TEXT"), ("kind", "TEXT NOT NULL DEFAULT 'turn'"), ("status", "TEXT NOT NULL DEFAULT 'completed'"),
     ("model", "TEXT"), ("reasoning_effort", "TEXT"), ("started_at", "TEXT"), ("finished_at", "TEXT"),
     ("cache_hit_rate", "REAL"),
@@ -341,13 +350,23 @@ LIMIT_COLUMNS = (
 
 class Database:
     def __init__(self, path: Path):
+        self.path = Path(path).resolve()
         self._lock = threading.RLock()
         self._listeners: list[Callable[[str, str, str], None]] = []
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.executescript(SCHEMA)
-        self._migrate()
+        columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(tasks)")}
+        if columns and "provider" not in columns:
+            backup = Path(str(path) + ".pre-providers.bak")
+            if not backup.exists():
+                self.backup(backup)
+        try:
+            self._conn.executescript(SCHEMA)
+            self._migrate()
+        except Exception:
+            self._conn.close()
+            raise
         self._conn.execute("""CREATE TABLE IF NOT EXISTS completion_overrides (
             id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES tasks(id),
             actor TEXT NOT NULL, created_at TEXT NOT NULL, previous_outcome TEXT NOT NULL,
@@ -362,20 +381,66 @@ class Database:
         migrate(self)
 
     def _migrate(self) -> None:
-        for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),
-                                  ("scheduled_instructions", [("attachment_ids", "TEXT NOT NULL DEFAULT '[]'")])):
-            have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
-            legacy_completion_upgrade = table == "tasks" and "task_outcome" not in have
-            with self._lock, self._conn:
-                # Adding the outcome column and preserving historical success must commit together.
-                if legacy_completion_upgrade:
-                    self._conn.execute("BEGIN")
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN")
+            for table, migrations in (("tasks", TASK_MIGRATIONS), ("turns", TURN_MIGRATIONS),
+                                      ("scheduled_instructions", [("attachment_ids", "TEXT NOT NULL DEFAULT '[]'")]),
+                                      ("task_attempts", [("provider", "TEXT NOT NULL DEFAULT 'codex'"), ("provider_session_id", "TEXT")])):
+                have = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
+                legacy_completion_upgrade = table == "tasks" and "task_outcome" not in have
                 for name, definition in migrations:
                     if name not in have:
                         self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
                 if legacy_completion_upgrade:
                     self._conn.execute("""UPDATE tasks SET task_outcome = 'success', outcome_source = 'legacy',
                         outcome_reason = 'Completed before Completion Gate was introduced.' WHERE status = 'completed'""")
+
+            self._conn.execute("""CREATE TABLE IF NOT EXISTS provider_sessions (
+                provider TEXT NOT NULL, session_id TEXT NOT NULL, task_id TEXT NOT NULL,
+                worktree TEXT NOT NULL, PRIMARY KEY(provider, session_id))""")
+            self._conn.execute("""UPDATE tasks SET provider_session_id=codex_thread_id
+                WHERE provider='codex' AND provider_session_id IS NULL AND codex_thread_id IS NOT NULL""")
+            self._conn.execute("""INSERT OR IGNORE INTO provider_sessions SELECT provider, provider_session_id, id, worktree
+                FROM tasks WHERE provider_session_id IS NOT NULL AND provider_session_id != ''""")
+            self._conn.execute("UPDATE task_attempts SET provider_session_id=codex_thread_id WHERE provider='codex' AND provider_session_id IS NULL")
+
+    def bind_session(self, task_id: str, session_id: str) -> None:
+        """Reserve session ownership and persist its identity atomically. Never reassign a session."""
+        with self._lock, self._conn:
+            task = self._conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task is None:
+                raise ValueError("session task does not exist")
+            owner = self._conn.execute("SELECT * FROM provider_sessions WHERE provider=? AND session_id=?",
+                                       (task["provider"], session_id)).fetchone()
+            if owner and (owner["task_id"] != task_id or owner["worktree"] != task["worktree"]):
+                raise ValueError("session belongs to another task or worktree")
+            self._conn.execute("INSERT OR IGNORE INTO provider_sessions VALUES(?,?,?,?)",
+                               (task["provider"], session_id, task_id, task["worktree"]))
+            self._conn.execute("UPDATE tasks SET provider_session_id=? WHERE id=?", (session_id, task_id))
+            if task["provider"] == "codex":
+                self._conn.execute("UPDATE tasks SET codex_thread_id=? WHERE id=?", (session_id, task_id))
+
+    def backup(self, destination: Path) -> None:
+        """Consistent SQLite snapshot, including WAL; never copy an open database file.
+
+        Restoration is offline into a separate data directory. No live restore API.
+        """
+        destination = Path(destination)
+        if destination.resolve() == self.path:
+            raise ValueError("backup destination must differ from the active database")
+        fd, temporary = tempfile.mkstemp(prefix=".codex-gui-backup-", dir=destination.parent)
+        os.close(fd)
+        try:
+            target = sqlite3.connect(temporary)
+            try:
+                with self._lock:
+                    self._conn.backup(target)
+            finally:
+                target.close()
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def close(self) -> None:
         self._conn.close()
@@ -698,6 +763,8 @@ class Database:
     def update_task(self, task_id: str, **fields) -> dict:
         if "status" in fields:
             raise ValueError("use set_status() to change status")
+        if "codex_thread_id" in fields and self.get_task(task_id)["provider"] == "codex":
+            fields["provider_session_id"] = fields["codex_thread_id"]
         return self._update(task_id, fields)
 
     def set_status(self, task_id: str, new_status: str, message=None, **fields) -> dict:
@@ -883,7 +950,7 @@ class Database:
                 if cur.rowcount != 1:
                     raise _Rollback()
                 cur = self._conn.execute(
-                    f"UPDATE tasks SET {assignments} WHERE id = ? AND status = '{SCHEDULED_IDLE_TASK_STATUS}' AND codex_thread_id = ?",
+                    f"UPDATE tasks SET {assignments} WHERE id = ? AND status = '{SCHEDULED_IDLE_TASK_STATUS}' AND COALESCE(provider_session_id, CASE WHEN provider='codex' THEN codex_thread_id END) = ?",
                     [*task_fields.values(), "queued", row["task_id"], thread_id])
                 if cur.rowcount != 1:
                     raise _Rollback()

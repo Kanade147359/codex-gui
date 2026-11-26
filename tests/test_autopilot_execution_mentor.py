@@ -74,7 +74,7 @@ def test_markdown_task_common_and_workflow_precedence(git_repo):
     node = raw["nodes"][0]
     node.update(model="explicit-task", reasoning_effort="xhigh", input_files=imported["nodes"][0]["input_files"])
     effective = resolve_execution(manifest(raw)["nodes"][0], manifest(raw))
-    assert effective == dict(model="task-md-model", reasoning_effort="high",
+    assert effective == dict(provider="codex", allow_subagents=False, provider_options={}, model="task-md-model", reasoning_effort="high",
                              model_source="markdown: C.md", reasoning_source="markdown: C.md")
     raw["inputs"]["C.md"] = "Implement C."
     assert resolve_execution(node, raw)["model"] == "explicit-task"

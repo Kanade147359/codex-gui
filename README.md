@@ -553,3 +553,17 @@ tests/
 ## License
 
 [MIT](LICENSE)
+
+## Claude Code and execution providers
+
+New Task supports Codex (default) and the official Claude Code CLI. Configure CLI
+paths, default models/effort/subagents/permission modes and provider concurrency
+in Dashboard Settings. Claude requires a verified subscription login, explicit
+confirmation that extra usage is disabled, and repository trust; there is no API
+billing fallback. Missing Claude does not affect Codex.
+
+Both engines share sessions, history/images, queue/dependency/scheduled work,
+completion/evidence gates and shutdown/recovery. Autopilot supports node/role
+provider routing, heterogeneous reviews and report-based Research Mode. See
+[provider architecture and configuration](docs/providers.md) and
+[verification results/limitations](docs/provider-verification.md).

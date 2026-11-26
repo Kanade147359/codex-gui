@@ -19,7 +19,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("CODEX_GUI_BROWSER") != "1", reas
 def browser():
     playwright = pytest.importorskip("playwright.sync_api")
     with playwright.sync_playwright() as p:
-        instance = p.chromium.launch()
+        instance = p.chromium.launch(executable_path=os.environ.get("CODEX_GUI_CHROMIUM") or None)
         yield instance
         instance.close()
 

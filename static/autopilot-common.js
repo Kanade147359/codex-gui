@@ -76,7 +76,7 @@
     const sourceLabel = value => ({workflow: '基本設定', task: '子タスク設定', 'CLI configuration': 'CLI設定', 'default high': '既定High'}[value] || value || '基本設定');
     for (const [name, value] of Object.entries(settings || {})) {
       const row = document.createElement('tr');
-      row.append(text('td', name), text('td', settingsLabel(value)),
+      row.append(text('td', name), text('td', `${value.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${settingsLabel(value)}`),
         text('td', `モデル: ${sourceLabel(value.model_source)} / 推論: ${sourceLabel(value.reasoning_source)}`));
       table.append(row);
     }

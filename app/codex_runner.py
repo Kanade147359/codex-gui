@@ -176,8 +176,6 @@ class CodexRunner:
 
 async def terminate_process(proc: asyncio.subprocess.Process, grace: float) -> None:
     """SIGTERM the process group, then SIGKILL it if it is still alive after `grace` seconds."""
-    if proc.returncode is not None:
-        return
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -189,6 +187,14 @@ async def terminate_process(proc: asyncio.subprocess.Process, grace: float) -> N
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    finally:
+        # The leader may have exited while a child still owns the pipes/process group.
+        # Only groups created by our start_new_session=True subprocess are passed here.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await proc.wait()
 
 
 def _clip(text: str, limit: int = MESSAGE_MAX_CHARS) -> str:

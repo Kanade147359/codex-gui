@@ -8,6 +8,7 @@ from pathlib import Path
 class Settings:
     home: Path
     codex_bin: str = "codex"
+    claude_bin: str = "claude"
     # 0 = unlimited. Tasks beyond the limit wait in the "queued" status.
     max_concurrent: int = 0
     # Seconds between SIGTERM and SIGKILL when stopping a task.
@@ -44,6 +45,7 @@ class Settings:
         return cls(
             home=home,
             codex_bin=os.environ.get("CODEX_BIN", "codex"),
+            claude_bin=os.environ.get("CLAUDE_BIN", "claude"),
             max_concurrent=int(os.environ.get("CODEX_GUI_MAX_CONCURRENT", "0")),
             backend=os.environ.get("CODEX_GUI_BACKEND", "app-server"),
             subscription_only=os.environ.get("CODEX_GUI_SUBSCRIPTION_ONLY", "1") != "0",

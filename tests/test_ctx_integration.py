@@ -88,7 +88,12 @@ SPAWN = [("call", "spawn_agent", {"task_name": "child", "message": "do it", "for
 def spawn_result(repo, home, overrides):
     res = run(tp.run_probe("codex", repo, overrides, list(SPAWN), codex_home=home))
     assert res.ok, res.error
-    return tool_output_of(res.requests[1])
+    output = tool_output_of(res.requests[1])
+    if not output:
+        diagnostic = repo.parent / "spawn-probe-diagnostic.json"
+        diagnostic.write_text(json.dumps(dict(overrides=overrides, exit_code=res.returncode, error=res.error,
+            request_count=len(res.requests), outputs=[tool_output_of(r)[:2000] for r in res.requests]), indent=2))
+    return output
 
 
 def test_default_allows_spawn_and_multi_agent_false_alone_does_not_stop_it(repo, home):

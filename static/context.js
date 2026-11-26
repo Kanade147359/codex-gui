@@ -236,7 +236,8 @@ const CtxUI = (() => {
 
   function renderTask(task, h) {
     host = host || $("#ctx-panel");
-    if (!host || !task.ctx) return;
+    if (host) host.hidden = task.provider === 'claude';
+    if (!host || !task.ctx || task.provider === 'claude') return;
     handlers = h;
     const ctx = task.ctx;
     const key = JSON.stringify([ctx, task.status]);

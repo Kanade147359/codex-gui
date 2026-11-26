@@ -50,6 +50,9 @@ def subscription_env(subscription_only: bool, extra: Optional[dict] = None) -> d
     """Environment for a codex child. With subscription_only, API-key variables are removed so that Codex can only
     use the stored ChatGPT login; the GUI never falls back to API billing."""
     env = child_env(extra)
+    for name in list(env):
+        if name.startswith(("ANTHROPIC_", "CLAUDE_")):
+            env.pop(name, None)
     if subscription_only:
         for name in API_KEY_VARS:
             env.pop(name, None)

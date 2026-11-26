@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .codex_runner import parse_line
+from .providers import redact
 from .models import now_iso
 
 READ_CHUNK_BYTES = 2 * 1024 * 1024
@@ -19,7 +20,7 @@ class TaskLog:
         self._f = open(self.path, "a", encoding="utf-8")
 
     def _write(self, entry: dict) -> None:
-        self._f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        self._f.write(redact(json.dumps(entry, ensure_ascii=False)) + "\n")
         self._f.flush()
 
     def add_stdout(self, line: str) -> dict:

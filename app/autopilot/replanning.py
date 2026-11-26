@@ -11,6 +11,8 @@ from . import goals, git
 from .policy import canonical, digest
 from .ledger import unpack
 from .providers import ProviderFailure
+from app.providers import session_id
+from .roles import reader_policy
 from .runner import redact
 
 TASK_SCHEMA = goals.obj(dict(
@@ -155,6 +157,7 @@ async def run(ap, node):
         return
     candidate = ap.ledger.get("candidates", node["candidate_id"])
     root = await ap._snapshot(candidate)
+    planner_provider = "codex"
     try:
         fixed = await fixed_input(ap, node, record, root)
         with ap.ledger.transaction() as c:
@@ -174,12 +177,15 @@ async def run(ap, node):
                 row = unpack(c.execute("SELECT * FROM ap_replans WHERE id=?", (record["id"],)).fetchone())
                 c.execute("UPDATE ap_replans SET payload=? WHERE id=?", (canonical(dict(row["payload"], identity=value)), record["id"]))
 
-        slots = ap.manager._slots
+        planner_provider = live["plan"]["policy"].get("roles", {}).get("planner", {}).get("provider", "codex")
+        planner_policy = reader_policy(live["plan"]["policy"], "planner", planner_provider)
+        slots = ap.manager._slots if planner_provider == "codex" else None
         if slots:
             await slots.acquire()
         try:
-            result = await ap.providers["codex"].start_replan(dict(candidate, replan_input=fixed),
-                        live["plan"]["policy"], root, attempt, on_identity)
+            async with ap.manager.providers.slot(planner_provider):
+                result = await ap.providers[planner_provider].start_replan(dict(candidate, replan_input=fixed),
+                            planner_policy, root, attempt, on_identity)
         finally:
             if slots:
                 slots.release()
@@ -189,8 +195,8 @@ async def run(ap, node):
         sessions = {r["payload"].get("session") for r in reviews}
         sessions.update(e.get("session") for r in reviews for e in r["payload"].get("partition_evidence", []))
         session = result.get("session")
-        if not session or session == task["codex_thread_id"] or session in sessions or identity.get("session") != session:
-            raise ValueError("replanner must use its own independent Codex thread")
+        if not session or session == session_id(task) or session in sessions or identity.get("session") != session:
+            raise ValueError("replanner must use its own independent provider session")
         await ap._snapshot(candidate)
         await verify_live_candidate(ap, node, candidate)
         with ap.ledger.transaction() as c:
@@ -201,7 +207,7 @@ async def run(ap, node):
         from .planning import propose_graph
         propose_graph(ap, node, record, fixed, proposal, session)
     except asyncio.CancelledError:
-        await ap.providers["codex"].cancel(record["id"])
+        await ap.providers[planner_provider].cancel(record["id"])
         raise
     except (ProviderFailure, ValueError, OSError, KeyError) as error:
         with ap.ledger.transaction() as c:

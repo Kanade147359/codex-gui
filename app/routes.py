@@ -80,9 +80,11 @@ class NewTask(BaseModel):
     name: str = ""
     prompt: str
     attachment_ids: list[str] = []
+    provider: Literal["codex", "claude"] = "codex"
+    provider_options: Optional[dict] = None
     model: str = ""
     reasoning_effort: str = "default"
-    auto_approval: bool = True
+    auto_approval: Optional[bool] = None
     # Optimization defaults: Standard speed, low verbosity, no web search, sandboxed, adaptive retries and the
     # context guard on. (reasoning_effort "default" = whatever Codex / the model defaults to; the form sends "low".)
     service_tier: str = "default"
@@ -105,7 +107,7 @@ class NewTask(BaseModel):
     tool_output_limit: Optional[int] = None    # an explicit token limit instead of a preset
     skills: str = "default"                    # default | economy (2000) | balanced (4000) | large (8000): catalog budget
     skills_budget: Optional[int] = None
-    allow_subagents: bool = False              # nested agents are OFF unless the task needs them
+    allow_subagents: Optional[bool] = None              # nested agents are OFF unless the task needs them
     tool_profile: str = "full"                 # full | development | minimal
     cwd_subdir: str = ""                       # Advanced: run Codex in a sub-directory of the worktree
     completion_contract: Optional[dict] = None
@@ -130,6 +132,15 @@ class Instruction(BaseModel):
     attachment_ids: list[str] = []
     reasoning_effort: Optional[str] = None  # an explicit "Retry with ..." choice; omitted = unchanged
     service_tier: Optional[str] = None      # speed of THIS turn: "standard" (Send Standard) / "fast" (Send Fast); omitted = the task's
+
+
+class NewSession(BaseModel):
+    prompt: str
+    attachment_ids: list[str] = []
+    provider: Optional[Literal["codex", "claude"]] = None
+    model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    provider_options: Optional[dict] = None
 
 
 class ScheduledInstruction(BaseModel):
@@ -285,6 +296,48 @@ async def options(request: Request):
             "context_warn_percent": m.settings.context_warn_percent, "context_efficiency": context_options(),
             "completion_approval": m.completion_approval_settings(),
             "completion_validation": request.app.state.completion_validation}
+
+
+@router.get("/api/providers")
+async def providers(request: Request):
+    return {"providers": await manager(request).providers.describe()}
+
+
+class ProviderSettingsRequest(BaseModel):
+    settings: dict
+
+
+@router.put("/api/providers/{provider}/settings")
+async def provider_settings(request: Request, provider: str, body: ProviderSettingsRequest):
+    from .providers import ProviderError
+    m = manager(request)
+    if m._jobs or m.autopilot.jobs or any(t["status"] in ("starting", "running") for t in m.db.list_tasks()):
+        raise HTTPException(409, "Provider settings can change after active turns finish")
+    try:
+        settings = m.providers.save(provider, body.settings)
+    except ProviderError as e:
+        raise HTTPException(400, str(e)) from e
+    if provider == "codex":
+        if m._app_server is not None:
+            await m._app_server.close()
+            m._app_server = None
+        m.settings.codex_bin = settings["binary"]
+        request.app.state.catalog.codex_bin = settings["binary"]
+        request.app.state.catalog._cached = None
+    return settings
+
+
+@router.post("/api/providers/{provider}/resume-queue")
+async def resume_provider_queue(request: Request, provider: str):
+    from .providers import ProviderError
+    m = manager(request)
+    try:
+        m.providers.get(provider)
+    except ProviderError as e:
+        raise HTTPException(400, str(e)) from e
+    m.providers.pause(provider, False)
+    m.scheduler.wake()
+    return {"provider": provider, "paused_for_quota": False}
 
 
 class CompletionApprovalSettings(BaseModel):
@@ -467,9 +520,9 @@ async def cancel_scheduled(request: Request, task_id: str, scheduled_id: int):
 
 
 @router.post("/api/tasks/{task_id}/new-session")
-async def start_new_session(request: Request, task_id: str, body: Instruction):
+async def start_new_session(request: Request, task_id: str, body: NewSession):
     try:
-        return await manager(request).start_new_session(task_id, body.prompt, body.attachment_ids)
+        return await manager(request).start_new_session(task_id, **body.model_dump())
     except TaskError as e:
         raise api_error(e)
 
