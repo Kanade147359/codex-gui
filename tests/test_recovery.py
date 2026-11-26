@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +14,7 @@ import pytest
 
 from app import recovery
 from app.appserver import AppServerError
-from app.procinfo import process_identity, same_process
+from app.procinfo import process_identity, same_process, owned_process_alive
 from app.recovery import NON_RETRYABLE, QUOTA, RETRYABLE, UNKNOWN, RECOVERY_PROMPT, NO_THREAD_NOTE
 from app.task_manager import TaskError
 
@@ -721,6 +722,53 @@ def test_gui_crash_with_the_codex_process_still_alive_starts_nothing_twice(git_r
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def test_claude_crash_adopts_custom_named_live_process_and_can_stop_it(git_repo, settings, make_manager, monkeypatch):
+    """Actual GUI SIGKILL and CLI process; argv intentionally contains no 'codex'."""
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    with tempfile.TemporaryDirectory(prefix='engine-owner-', dir='/tmp') as folder:
+        binary = Path(folder) / 'engine'
+        binary.write_text((HERE / 'fake_claude.py').read_text().replace('#!/usr/bin/env python3', '#!/usr/bin/python3', 1))
+        binary.chmod(0o700)
+        gui = subprocess.Popen([sys.executable, str(HERE / 'fake_gui.py'), str(settings.home), str(git_repo),
+                                'sleep-ignore', 'claude', str(binary)], stdout=subprocess.PIPE, text=True)
+        pid = None
+        identity = None
+        try:
+            line = gui.stdout.readline()
+            assert line.startswith('READY'), line
+            _, task_id, value = line.split()
+            pid = int(value)
+            identity = process_identity(pid)
+            assert identity and not same_process(pid, identity), 'fixture must expose the Codex-name bug'
+            assert owned_process_alive(pid, identity, 'claude')
+            assert not owned_process_alive(pid, 'other-boot:' + identity.rsplit(':', 1)[1], 'claude')
+            kill_hard(gui)
+            gui.stdout.close()
+            m = make_manager(stop_grace_seconds=.1)
+            assert m.recover() == [task_id]
+            assert task_id in m._adopted and m.get(task_id)['status'] == 'running'
+            original_session = m.get(task_id)['provider_session_id']
+
+            async def scenario():
+                for _ in range(5):
+                    m.tick()
+                    await asyncio.sleep(.02)
+                assert m.get(task_id)['status'] == 'running' and len(m.attempts(task_id)) == 1
+                assert m.get(task_id)['provider_session_id'] == original_session
+                await m.stop(task_id)
+                await wait_for(lambda: process_identity(pid) is None, timeout=4)
+                assert m.get(task_id)['status'] == 'stopped' and len(m.attempts(task_id)) == 1
+                await m.shutdown()
+            go(scenario())
+        finally:
+            if gui.poll() is None:
+                kill_hard(gui)
+            if gui.stdout and not gui.stdout.closed:
+                gui.stdout.close()
+            if owned_process_alive(pid, identity, 'claude'):
+                os.killpg(pid, signal.SIGKILL)
 
 
 def test_gui_crash_with_the_codex_process_gone_is_retried_once_in_the_same_thread(git_repo, settings, make_manager, fake_codex_state):

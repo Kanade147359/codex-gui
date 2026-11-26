@@ -8,11 +8,11 @@ from pathlib import Path
 import time
 import uuid
 
-from app.providers import session_id
+from app.providers import ProviderError, session_id
 from .roles import reader_policy
 from app import completion
 from app.models import now_iso, make_task_id, ACTIVE_STATUSES, WAITING_STATUSES
-from app.procinfo import process_identity, same_process
+from app.procinfo import process_identity, same_process, owned_process_alive
 from . import git, inputs as fixed_inputs, decisions, planning, goals, replanning, mentoring, recovery as semantic_recovery
 from .ledger import Ledger, unpack
 from .policy import canonical, digest, manifest, input_digest
@@ -221,9 +221,9 @@ class Autopilot:
         from .environment import preflight
 
         await preflight(task["worktree"], node["spec"]["validation"])
-        capability = await self.providers[task["provider"]].probe_capabilities_and_auth(workflow["plan"]["policy"])
         if task["provider"] == "claude":
             return  # Normal task provider already verified auth/billing, trust and sandbox settings.
+        capability = await self.providers[task["provider"]].probe_capabilities_and_auth(workflow["plan"]["policy"])
         if capability.get("fixture") is True:
             return
         client = await self.manager.client()
@@ -567,12 +567,19 @@ class Autopilot:
             self.ledger.transition(n["id"], "launching", "pending")
             return
         try:
-            await self.providers[resolve_execution(n["spec"], w["plan"])["provider"]].probe_capabilities_and_auth(w["plan"]["policy"])
-        except ProviderFailure as e:
+            execution = resolve_execution(n["spec"], w["plan"])
+            if execution["provider"] == "claude":
+                await self.manager.providers.get("claude").preflight(dict(
+                    provider_options=canonical(execution["provider_options"]), model=execution["model"],
+                    reasoning_effort=execution["reasoning_effort"]))
+            else:
+                await self.providers[execution["provider"]].probe_capabilities_and_auth(w["plan"]["policy"])
+        except (ProviderFailure, ProviderError) as e:
+            kind = e.failure.kind if isinstance(e, ProviderError) else e.kind
             self.ledger.transition(
                 n["id"],
                 "launching",
-                "blocked_auth" if e.kind == "auth" else "blocked_configuration",
+                "blocked_auth" if kind == "auth" else "blocked_configuration",
                 reason=redact(str(e)),
             )
             return
@@ -1803,7 +1810,7 @@ class Autopilot:
             )
             return
         identity = task.get("proc_identity")
-        if task.get("pid") and same_process(task["pid"], identity):
+        if task.get("pid") and owned_process_alive(task["pid"], identity, task["provider"]):
             self.ledger.transition(
                 node["id"],
                 "reconciling_git",

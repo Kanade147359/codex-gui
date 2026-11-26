@@ -424,14 +424,17 @@ function initDashboard() {
   }
 
   function buildEffortSelect(reset) {
-    // Only the efforts this model supports are offered. Default Low (the model's own default when it has no "low").
+    // Inherit configured provider defaults; retain Codex's existing Low fallback otherwise.
     const info = currentModelInfo();
     const efforts = f.provider.value === "claude" ? window.ProviderUI?.info("claude")?.efforts || [] : info && info.efforts.length ? info.efforts : FALLBACK_EFFORTS;
     const prev = reset ? "" : effortSel.value;
     const dflt = !modelSel.value && options.default_effort ? options.default_effort : info ? info.default_effort : "";
     effortSel.innerHTML = `<option value="default">Auto${dflt ? " (Provider default: " + esc(effortLabel(dflt)) + ")" : ""}</option>` +
       efforts.map((e) => `<option value="${esc(e)}">${esc(effortLabel(e))}</option>`).join("");
-    const wanted = [...effortSel.options].some((o) => o.value === prev) ? prev : efforts.includes("low") ? "low" : "default";
+    const configured = window.ProviderUI?.info(f.provider.value)?.settings.default_effort;
+    const inherit = f.provider.value === "claude" || (configured && configured !== "default");
+    const fallback = inherit ? "default" : efforts.includes("low") ? "low" : "default";
+    const wanted = [...effortSel.options].some((o) => o.value === prev) ? prev : fallback;
     effortSel.value = wanted;
     $("#model-custom").hidden = modelSel.value !== CUSTOM;
     buildTierSelect();

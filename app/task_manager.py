@@ -37,7 +37,7 @@ from .config import Settings
 from .database import Database, DependencyError, ScheduledError
 from .instructions import load_instructions
 from .logstore import TaskLog, read_log
-from .procinfo import process_identity, same_process
+from .procinfo import process_identity, owned_process_alive
 from .recovery import NO_THREAD_NOTE, RECOVERY_PROMPT, Failure
 from .scheduler import Scheduler
 from . import ctx_config, ctx_guard, efficiency, recovery
@@ -1503,12 +1503,12 @@ class TaskManager(CodexExecution):
     def _stop_orphan(self, task: dict) -> dict:
         """Stop a running task that has no job in this process (it was adopted after a GUI restart, or its job is gone)."""
         task_id = task["id"]
-        if same_process(task["pid"], task["proc_identity"]):
+        if owned_process_alive(task["pid"], task["proc_identity"], task["provider"]):
             try:
                 os.killpg(task["pid"], signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
-            asyncio.create_task(self._kill_later(task["pid"], task["proc_identity"]))
+            asyncio.create_task(self._kill_later(task["pid"], task["proc_identity"], task["provider"]))
         self._adopted.discard(task_id)
         TaskLog.note(self.log_path(task_id), "stopped by the user (the process was not started by this GUI session)")
         self._end_attempt(task_id, "stopped")
@@ -1517,9 +1517,9 @@ class TaskManager(CodexExecution):
         except InvalidTransition as e:
             raise TaskError(f"task changed while it was being stopped: {e}", 409) from e
 
-    async def _kill_later(self, pid: int, identity: Optional[str]) -> None:
+    async def _kill_later(self, pid: int, identity: Optional[str], provider: str = "codex") -> None:
         await asyncio.sleep(self.settings.stop_grace_seconds)
-        if same_process(pid, identity):  # still the same process after the grace period (never a reused pid)
+        if owned_process_alive(pid, identity, provider):  # never a reused pid
             try:
                 os.killpg(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
@@ -1925,7 +1925,7 @@ class TaskManager(CodexExecution):
             if task_id in self._jobs:
                 continue
             if task_id in self._adopted:
-                if not same_process(task["pid"], task["proc_identity"]):
+                if not owned_process_alive(task["pid"], task["proc_identity"], task["provider"]):
                     self._adopted.discard(task_id)
                     self._process_lost(task, "the process that was running this task is gone")
             else:
@@ -1988,14 +1988,14 @@ class TaskManager(CodexExecution):
                 return True
             return False
         # starting / running without a job in this process
-        if same_process(task["pid"], task["proc_identity"]):
+        if owned_process_alive(task["pid"], task["proc_identity"], task["provider"]):
             self._adopted.add(task_id)
             note = (f"GUI restarted while this task was running; process {task['pid']} is still alive and is left running. "
                     "Its output can no longer be captured; the task is retried if that process ends unexpectedly.")
             TaskLog.note(self.log_path(task_id), note)
             self.db.update_task(task_id, status_detail="running without output capture (GUI restarted)")
             return True
-        self._process_lost(task, "GUI restarted while this task was running and its Codex process is gone" if startup
+        self._process_lost(task, f"GUI restarted while this task was running and its {task['provider']} process is gone" if startup
                            else "the process that was running this task is gone")
         return True
 

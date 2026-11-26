@@ -25,7 +25,7 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
     page = context.new_page()
     errors = []
     page.on('pageerror', lambda e: errors.append(str(e)))
-    response = page.request.put('/api/providers/claude/settings', data={'settings':{'binary':FAKE, 'billing_mode':'subscription', 'extra_usage_disabled_confirmed':True}})
+    response = page.request.put('/api/providers/claude/settings', data={'settings':{'binary':FAKE, 'billing_mode':'subscription', 'extra_usage_disabled_confirmed':True, 'default_effort':'high'}})
     assert response.ok, response.text()
     page.goto(url)
     if width < 769:
@@ -39,6 +39,7 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
     expect(page.locator('#claude-options')).to_be_visible()
     expect(page.locator('[name="service_tier"]')).not_to_be_visible()
     assert page.locator('#effort-select option').evaluate_all('(options) => options.map(o => o.value)') == ['default', 'low', 'medium', 'high', 'xhigh', 'max']
+    expect(page.locator('#effort-select')).to_have_value('default')
     page.locator('[name="repository"]').fill(str(git_repo))
     page.locator('[name="prompt"]').fill('subagents')
     page.locator('[name="claude_trusted"]').check()
@@ -54,6 +55,7 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
         if tasks and tasks[0]['status'] == 'completed': task = tasks[0]; break
         time.sleep(.05)
     assert task and task['task_outcome'] == 'success'
+    assert task['reasoning_effort'] == 'high'
     page.goto(f"{url}/tasks/{task['id']}")
     expect(page.locator('#meta')).to_contain_text('Claude Code')
     expect(page.locator('#provider-task-subagents')).to_contain_text('completed')
@@ -79,5 +81,14 @@ def test_claude_create_images_continue_schedule_and_settings(browser, gui_url, g
     assert scheduled and scheduled[0]['status'] == 'completed'
     assert page.request.get(f"/api/tasks/{task['id']}").json()['session_id'] == task['session_id']
     no_overflow(page)
+    response = page.request.put('/api/providers/codex/settings', data={'settings':{'default_effort':'high'}})
+    assert response.ok
+    page.goto(url)
+    page.locator('#new-task-btn').click()
+    page.locator('#provider-select').select_option('codex')
+    expect(page.locator('#effort-select')).to_have_value('default')
+    page.locator('#effort-select').select_option('low')
+    page.locator('#model-select').select_option('__custom__')
+    expect(page.locator('#effort-select')).to_have_value('low')
     assert errors == []
     context.close()

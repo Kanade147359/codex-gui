@@ -135,3 +135,54 @@ def test_research_reports_use_both_providers(git_repo, make_manager, controlled_
         assert {m.get(n['task_id'])['provider'] for n in saved['nodes']} == {'codex', 'claude'}
         await m.shutdown()
     asyncio.run(scenario())
+
+
+def test_claude_implementation_uses_execution_auth_and_scrubs_unrelated_api_keys(git_repo, make_manager, controlled_install, monkeypatch, tmp_path):
+    home = tmp_path / 'alternate-credential-store'
+    home.mkdir()
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('OPENAI_API_KEY', 'unrelated-key-must-not-reach-claude')
+    m = configure(make_manager())
+    ap = controlled_install(m)
+    async def forbidden_reader_probe(policy):
+        raise AssertionError('Implementation must not use isolated reviewer credentials/environment')
+    monkeypatch.setattr(ap.providers['claude'], 'probe_capabilities_and_auth', forbidden_reader_probe)
+    raw = plan(git_repo, ('C',))
+    raw['policy']['allow_provider_fallback'] = False
+    raw['nodes'][0].update(provider='claude', provider_options={'trusted_repository':True}, review_provider='codex')
+    async def scenario():
+        try:
+            identity = await register(ap, raw)
+            await drive(m, lambda: ap.ledger.view(identity)['state'] == 'completed')
+            node = ap.ledger.view(identity)['nodes'][0]
+            task = m.get(node['task_id'])
+            assert task['provider'] == 'claude' and node['state'] == 'accepted'
+            assert node['candidates'][0]['reviews'][0]['provider'] == 'codex'
+            import json
+            calls = [json.loads(line) for line in fixture_calls(task['worktree']).read_text().splitlines()]
+            assert calls and not any(call['api_env_present'] for call in calls)
+            assert not (home / '.claude/.credentials.json').exists()
+        finally:
+            await m.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('kind,state', [('auth', 'blocked_auth'), ('billing_unknown', 'blocked_configuration')])
+def test_claude_workflow_execution_preflight_stops_before_reservation(git_repo, make_manager, controlled_install, monkeypatch, kind, state):
+    from app.providers import ProviderError
+    m = configure(make_manager())
+    ap = controlled_install(m)
+    async def denied(task):
+        raise ProviderError(kind, 'synthetic expired/unknown subscription route')
+    monkeypatch.setattr(m.providers.get('claude'), 'preflight', denied)
+    raw = plan(git_repo, ('C',))
+    raw['nodes'][0].update(provider='claude', provider_options={'trusted_repository':True}, review_provider='codex')
+    async def scenario():
+        try:
+            identity = await register(ap, raw)
+            await drive(m, lambda: ap.ledger.get('nodes', identity + ':C')['state'] == state)
+            assert ap.ledger.get('nodes', identity + ':C')['task_id'] is None
+            assert not m.db.list_tasks() and not ap.ledger.rows('acceptances')
+        finally:
+            await m.shutdown()
+    asyncio.run(scenario())

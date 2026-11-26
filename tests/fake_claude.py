@@ -47,7 +47,8 @@ if command == 'wrong-session':
 saved[session] = saved.get(session, 0) + 1
 state.write_text(json.dumps(saved))
 with (fixture_dir / 'calls.jsonl').open('a') as f:
-    f.write(json.dumps(dict(session=session, prompt=prompt, images=len(content)-1, resume=resuming)) + '\n')
+    f.write(json.dumps(dict(session=session, prompt=prompt, images=len(content)-1, resume=resuming,
+                           api_env_present=any(os.environ.get(k) for k in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')))) + '\n')
 emit(dict(type='system', subtype='init', session_id=session, model='fake-claude', apiKeySource='none'))
 emit(dict(type='future-event', payload={'new': True}))
 print('{invalid json', flush=True)

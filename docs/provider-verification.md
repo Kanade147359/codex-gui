@@ -203,6 +203,29 @@ per-case reruns and exact evidence are recorded in PR #19.
 - Claude attempt history now displays provider_session_id with the legacy
   codex_thread_id fallback. Desktop/mobile browser checks assert the actual
   session's prefix and full tooltip, in addition to the task-level metadata.
+- The witnessed full review at 077f107 found three further defects. New Task now
+  inherits explicit provider Effort defaults (and Claude's CLI default) instead
+  of choosing Low implicitly; desktop/mobile checks save High, submit without
+  changing Effort, and observe High on the task. Explicit Low overrides survive
+  model changes, while Codex's existing fallback remains when no default is set.
+- Crash recovery/adopted-process stop used a Codex command-name heuristic for
+  live Claude tasks. Recorded boot/start identity is now authoritative for owned
+  task processes, including custom executable names; only legacy rows without
+  identity use the provider-name heuristic. An actual separate GUI is SIGKILLed
+  with a live custom-named fake Claude process whose argv has no Codex text. The
+  new manager adopts it without a second attempt and collects it on Stop despite
+  SIGTERM being ignored; mismatched boot identity remains rejected.
+- Claude implementations now use normal execution-provider auth/env preflight,
+  keeping isolated-reviewer file-OAuth and raw-environment restrictions on the
+  reviewer path. A Fake CLI workflow with an alternate credential store and an
+  unrelated OpenAI key completes through Codex review; the implementation child
+  observes no API credentials. This does not claim real keychain E2E.
+
+Final follow-up review may cover only the repair delta against that witnessed
+full snapshot. In that case PR evidence records both SHAs, the earlier findings,
+their independent repair review and exact Git blob equality for every unchanged
+path. The failed earlier snapshot stays failed; it is not relabeled PASS. New
+paths and every changed blob must be covered by the final native delta review.
 - GitHub CI without an installed Codex exposed a backup fixture that handled
   regular files with FakeRunner but delegated image-capability discovery to a
   real binary. ReadingRunner now inherits the existing ImageRunner fixture.
