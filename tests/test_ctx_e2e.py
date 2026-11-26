@@ -21,7 +21,8 @@ from app.tool_probe import provider_overrides
 from conftest import wait_for
 from mock_responses import codex_home
 
-pytestmark = pytest.mark.skipif(shutil.which("codex") is None, reason="codex is not installed")
+pytestmark = [pytest.mark.skipif(shutil.which("codex") is None, reason="codex is not installed"),
+              pytest.mark.usefixtures("private_codex_runtime")]
 IDLE = ("queued", "starting", "running")
 FAKE_MCP = str(Path(__file__).parent / "fake_mcp_server.py")
 BIG = 'const r = await tools.exec_command({cmd: "seq 1 400000"}); text(r.output);'

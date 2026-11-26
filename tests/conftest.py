@@ -1,5 +1,7 @@
 import asyncio
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -21,6 +23,40 @@ from app.task_manager import TaskManager  # noqa: E402
 
 FAKE = str(Path(__file__).parent / "fake_codex.py")
 FAKE_APP_SERVER = str(Path(__file__).parent / "fake_app_server.py")
+
+
+@pytest.fixture
+def private_codex_runtime(tmp_path, monkeypatch):
+    """Isolate real-Codex sockets without changing the host's runtime permissions.
+
+    An enclosing Codex sandbox masks the shared daemon directory with mode 000.
+    The nested sandbox still validates that directory, even with --no-daemon.
+    Mount private test directories over both global runtime paths in the child
+    namespace only. Keep the CLI's own workspace/read-only sandbox enabled.
+    """
+    if sys.platform != "linux":
+        return
+    codex, bwrap = shutil.which("codex"), shutil.which("bwrap")
+    if not codex:
+        return  # The real-CLI modules have their own installed-CLI skip marker.
+    if not bwrap:
+        pytest.skip("NOT_RUN: real Codex needs bubblewrap for test-only socket isolation")
+    runtime = tmp_path / "private-codex-runtime"
+    runtime.mkdir(mode=0o700)
+    mounts = tmp_path / "private-codex-mounts"
+    mounts.mkdir(mode=0o700)
+    bindir = tmp_path / "private-codex-bin"
+    bindir.mkdir()
+    wrapper = bindir / "codex"
+    command = [bwrap, "--die-with-parent", "--unshare-pid", "--bind", "/", "/",
+               "--dev-bind", "/dev", "/dev", "--proc", "/proc",
+               "--bind", str(runtime), f"/tmp/codex-daemon-{os.getuid()}",
+               "--bind", str(mounts), f"/tmp/codex-bwrap-synthetic-mount-targets-{os.getuid()}",
+               codex, "--no-daemon"]
+    wrapper.write_text("#!/bin/sh\nexec " + shlex.join(command) + ' "$@"\n')
+    wrapper.chmod(0o700)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
+    return runtime
 
 
 class FakeRunner(CodexRunner):

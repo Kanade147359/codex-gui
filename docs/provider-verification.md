@@ -8,21 +8,21 @@ by tests, no production service was restarted, and main was not merged.
 
 | Check | Result | Evidence / limits |
 | --- | --- | --- |
-| Full default suite | 1031 passed, 3 failed, 39 skipped | Three installed-Codex environment failures below; never reported as PASS. |
+| Final HEAD full default suite | See [PR #19 acceptance evidence](https://github.com/Kanade147359/codex-gui/pull/19) | Rerun after committing the acceptance fixes; the PR records the exact tested SHA, counts and log digests. |
+| Installed-Codex runtime, app-server and lifecycle regression | **58 passed, 1 skipped, no warnings** | Includes all three previously failing tests, real read-only sandbox denial and exited-leader descendant cleanup. |
 | Final settings/restart/API/provider run | 46 passed | Covers CLI-path propagation to execution/readers, restart, configuration dispatch races, legacy API compatibility, handoff and provider contracts. |
 | Focused providers, recovery, Codex argv, sessions and heterogeneous workflows | 148 passed | Includes Claude fake subprocesses, actual streaming/parser/lifecycle, schema migrations and backups. |
-| Desktop/mobile task/browser regression | 14 passed | Real Chromium; new Claude task, image upload, same-session follow-up and scheduling; existing mobile/attachment flows. |
-| Autopilot browser regression | 3 passed | Real Chromium; independent review/fallback, Markdown revision/fix/integration and owner-approved replanning. |
+| Final HEAD desktop/mobile/Autopilot browser regression | See PR #19 acceptance evidence | All four browser modules run together after the final commit; real Chromium with isolated servers and fake execution providers. |
 | Ruff undefined-name/unused-import checks on provider/lifecycle/role modules | PASS | `F821,F822,F823,F401`; JavaScript syntax checks also passed. |
 | Installed Claude metadata | CHECKED, not execution E2E | Version 2.1.185, supported help flags/effort/modes, subscription auth classification. No credentials persisted in GUI DB. |
 | Real Claude model E2E | **NOT_RUN** | Extra usage / purchased-credit disablement cannot be verified automatically and was not confirmed for this run. Opt-in test skips by default. |
-| Parallel development/review subagents | NOT_RUN | Requested subagent creation was rejected by the environment's agent-thread limit. Implementation/review proceeded serially. |
+| Independent final subagent code review | **NOT_RUN** | Requested again for final acceptance; creation was rejected with `agent thread limit reached`. Local review is not reported as independent review. |
 
-The full-suite measurement precedes the final explicit provider-handoff and CLI
-settings propagation adjustments; those changes are covered by the final
-API/provider-focused run listed above.
-Earlier failures found during implementation were fixed and rerun; the numbers
-above are successful final runs for each listed group, not totals of repeated runs.
+The final HEAD regression/browser results and SHA are recorded in the PR after
+the commit, avoiding a self-referential commit hash in this document. The earlier
+full run after socket isolation returned 1042 passed / 39 skipped; the subsequent
+app-server cleanup changes require the final rerun and are covered by the
+58-test focused run above. Counts are individual runs, not sums of repeated runs.
 
 ## Coverage
 
@@ -52,7 +52,7 @@ It exercises:
 - A child inheriting pipes after the CLI leader exits is terminated before the
   task completes. Stop targets only the owned process group.
 
-## Existing installed-Codex environment failures
+## Resolved installed-Codex environment failures
 
 These three tests fail on the unchanged baseline commit
 `c70cb894428484423590c045ed08da7e0ec804c6` as well as on this branch:
@@ -62,20 +62,36 @@ These three tests fail on the unchanged baseline commit
 3. `tests/test_ctx_integration.py::test_tool_output_token_limit_only_lowers_the_cap`
 
 They use installed Codex against a **loopback fake Responses endpoint**, not a
-billable model. The tool response is a short runtime failure instead of `seq`
+billable model. Before the fix, the tool response was a short runtime failure instead of `seq`
 output:
 
 ```text
 error building bubblewrap command: app-server socket directory must be a user-owned directory with mode 0700
 ```
 
-Consequently the measured tool payload has 156 characters / approximately 39
-tokens regardless of the requested cap, and cannot produce a large-output event.
-No assertions were weakened. Baseline reproduction used `git archive` into an
-isolated `/tmp` directory, then the same three pytest node IDs. Production socket
-ownership/modes were not changed. Remaining work is to repair or replace the
-**test-only** Codex runtime/socket environment and rerun these measurements; this
-PR does not claim those tests passed.
+The enclosing execution sandbox masks `/tmp/codex-daemon-<uid>` as a mode-000
+directory. A file-system syscall trace confirmed nested Codex rejected this
+directory, even with global `--no-daemon`; changing `TMPDIR` did not resolve it.
+The measured payload was consequently 156 characters / approximately 39 tokens
+for every cap, so it could not produce the expected large-output event.
+
+`private_codex_runtime` in `tests/conftest.py` now launches only the two real-Codex
+test modules in a bubblewrap mount/PID namespace. It overlays private mode-0700
+temporary directories on the daemon and synthetic-mount paths, preserves device
+access, and disables shared-daemon routing. The host paths' ownership/modes and
+production processes are unchanged. The CLI's actual read-only/workspace sandbox
+is still enabled. A new real-tool regression checks a write is denied and no file
+is created; large-output and truncation assertions are unchanged. All three
+original failures now PASS. Linux without bubblewrap reports NOT_RUN rather than
+running against shared host sockets.
+
+The acceptance run also exposed app-server pipe cleanup warnings. A regression
+reproduced unclosed stdin and surviving descendants when the leader had already
+exited. `AppServerClient.close` now closes stdin, stops the owned process group,
+waits for bounded stdout/stderr draining and awaits its reader tasks. Restart
+also closes a dead server before replacing it. Both leader states and idempotent
+close are tested with an actual local subprocess whose child ignores SIGTERM.
+The final 58-test runtime run has no warnings.
 
 One run also saw an empty result in
 `test_default_allows_spawn_and_multi_agent_false_alone_does_not_stop_it`.
@@ -91,6 +107,7 @@ Commands used (replace the venv/Chromium locations as needed):
 
 ```bash
 python -m pytest -q
+python -m pytest -q tests/test_app_server_lifecycle.py tests/test_app_server.py tests/test_ctx_integration.py tests/test_ctx_e2e.py
 python -m pytest -q tests/test_providers.py tests/test_recovery.py tests/test_codex_runner.py tests/test_sessions.py tests/test_autopilot_providers.py
 python -m pytest -q tests/test_provider_api.py tests/test_providers.py tests/test_api.py
 CODEX_GUI_BROWSER=1 CODEX_GUI_CHROMIUM=/path/to/chrome python -m pytest -q tests/test_provider_browser.py tests/test_ui_mobile_browser.py tests/test_ui_attachments_browser.py
@@ -104,6 +121,40 @@ subscription billing and disables extra usage/purchased credits. The test also
 requires fresh CLI metadata to confirm a subscription route; otherwise it reports
 NOT_RUN. It uses temporary GUI data and a temporary repository. No API-key or
 provider fallback is allowed.
+
+## Real acceptance matrix / merge decision
+
+The owner has been asked to confirm Extra usage and purchased-credit usage are
+disabled. No confirmation was received during this acceptance run; no real Claude
+model execution was started. Saved GUI settings or subscription login metadata
+do not replace the requested owner confirmation.
+
+| Required isolated real acceptance | Status | Remaining evidence |
+| --- | --- | --- |
+| Claude code editing and test execution | **NOT_RUN** | Actual changed files and successful test tool output. |
+| Same-session continuation and GUI restart/resume | **NOT_RUN** | One persisted real Session ID across turns and a new GUI process. |
+| Codex + Claude concurrent execution | **NOT_RUN** | Overlapping real runs in separate worktrees. |
+| Claude native Subagent | **NOT_RUN** | Actual Agent invocation/result and GUI status. |
+| Claude image attachment | **NOT_RUN** | Real visual recognition on initial/resumed messages. |
+| Claude sandbox permission enforcement | **NOT_RUN** | Real denied out-of-scope write and successful allowed work. Codex's offline real-tool denial is a separate PASS. |
+| Codex implementation → Claude review | **NOT_RUN** | Real providers with an isolated review and completion decision. |
+| Claude implementation → Codex review | **NOT_RUN** | Real providers, including repair/re-review when applicable. |
+| Completion Gate / dependency release | **NOT_RUN** | Real blocked/evidence-failed turn holds dependencies until verified success. |
+| Interrupt / process collection / updater Drain | **NOT_RUN** | Real Claude process tree cleanup and isolated self-updater entry point. |
+| Independent final subagent review | **NOT_RUN** | Requires an available independent-agent slot. |
+
+Fake CLI tests cover the corresponding session, DAG, review, attachment and
+shutdown state transitions; they do not establish native Claude behavior. In
+particular, `test_stop_resume_timeout_and_drain` exercises `TaskManager.shutdown`,
+not an end-to-end self-updater. Real updater Drain remains NOT_RUN. The existing
+real-Claude test is only a new/resumed structured-output smoke test and is not a
+substitute for this entire matrix.
+
+**Merge decision: HOLD / keep draft.** Resolving the old three failures does not
+satisfy the remaining real acceptance and independent-review requirements. After
+owner confirmation, execute each matrix item in temporary GUI data/repositories,
+fix and rerun any failures, then record the final tested SHA and evidence in PR
+#19. No production restart or main merge is part of acceptance.
 
 ## Known constraints / remaining acceptance
 
@@ -122,5 +173,6 @@ provider fallback is allowed.
   an explicit owner assertion, not an automatically verified account setting.
 - Existing workflows without explicit `allow_provider_fallback` now wait at
   included-quota exhaustion rather than silently choosing another provider.
-- No real self-update/restart of production was performed. Drain/shutdown and
-  backup/restore were tested with isolated application state only.
+- No real self-update/restart of production was performed. Shutdown and
+  backup/restore were tested with isolated application state only; an actual
+  updater Drain is not established by those tests.
