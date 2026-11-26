@@ -1,6 +1,7 @@
 """Opt-in independent native subagents review a private PR snapshot."""
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 
@@ -28,6 +29,27 @@ def review_report(text):
         or not isinstance(value['unverified'], list) or not isinstance(value['findings'], list)):
         return None
     return value
+
+
+def codex_v2_report(home, identity, parent, worktree):
+    """Read an owned native child's final report, checking its recorded lineage."""
+    import uuid
+    uuid.UUID(identity)
+    paths = list((Path(home) / 'sessions').rglob('*-' + identity + '.jsonl'))
+    if len(paths) != 1:
+        return None
+    rows = [json.loads(line) for line in paths[0].read_text().splitlines()]
+    meta = rows[0].get('payload') or {}
+    source = meta.get('source') or {}
+    spawn = source.get('subagent', {}).get('thread_spawn', {}) if isinstance(source, dict) else {}
+    if (rows[0].get('type') != 'session_meta' or meta.get('id') != identity
+        or spawn.get('parent_thread_id') != parent or spawn.get('depth') != 1
+        or meta.get('cwd') != str(worktree)):
+        return None
+    finals = [row['payload']['message'] for row in rows
+              if row.get('type') == 'event_msg' and row.get('payload', {}).get('type') == 'agent_message'
+              and row['payload'].get('phase') == 'final_answer']
+    return review_report(finals[-1]) if finals else None
 
 
 @pytest.mark.skipif(os.environ.get('CODEX_GUI_REAL_FINAL_REVIEW') != '1', reason='NOT_RUN: separate opt-in final code review')
@@ -73,9 +95,17 @@ def test_independent_native_subagents_review_final_snapshot(real_gui):
     reports = []
     top_agents = set()
     codex_reports = {}
+    codex_completed = set()
     for entry in gui.events(task['id']):
         event = entry.get('event') or {}
         item = event.get('item') or {}
+        if provider == 'codex' and item.get('type') == 'subAgentActivity':
+            identity = item['agentThreadId']
+            if item.get('kind') == 'started':
+                top_agents.add(identity)
+            elif item.get('kind') == 'completed':
+                codex_completed.add(identity)
+            continue
         if provider == 'codex' and item.get('type') == 'collabAgentToolCall':
             if item.get('tool') == 'spawnAgent' and item.get('status') == 'completed':
                 top_agents.update(item.get('receiverThreadIds') or [])
@@ -100,6 +130,10 @@ def test_independent_native_subagents_review_final_snapshot(real_gui):
                 value = review_report(text)
                 if value is not None:
                     reports.append(value)
+    for identity in top_agents & codex_completed:
+        value = codex_v2_report(os.environ['CODEX_HOME'], identity, row['session_id'], row['worktree'])
+        if value is not None:
+            codex_reports[identity] = value
     reports.extend(codex_reports.values())
     evidence = dict(head=head, base=base, provider=provider, task=task['id'], session=row['session_id'], partitions=partitions,
                     native_subagents=row['provider_subagents'], reports=reports, outcome=row['task_outcome'])

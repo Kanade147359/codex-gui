@@ -166,6 +166,11 @@ per-case reruns and exact evidence are recorded in PR #19.
   `overageDisabledReason: org_level_disabled` and `isUsingOverage: false`.
   Review reports were absent, so independent review is not inferred from agent
   startup. No paid retry, API route or automatic provider fallback was used.
+- Codex 0.159.2 also emits v2 subAgentActivity notifications without report
+  bodies. The review harness checks started/completed child IDs, then reads only
+  final reports from its temporary CLI session records, validating parent thread,
+  child UUID, depth and worktree. A separate regression rejects commentary and
+  mismatched lineage; this does not alter the application's Completion parser.
 - GitHub CI without an installed Codex exposed a backup fixture that handled
   regular files with FakeRunner but delegated image-capability discovery to a
   real binary. ReadingRunner now inherits the existing ImageRunner fixture.
