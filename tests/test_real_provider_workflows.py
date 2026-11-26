@@ -172,8 +172,10 @@ def test_real_autopilot_reviews_in_both_provider_directions(real_gui, git_repo):
         nodes=[dict(id=name, provider=provider, review_provider=reviewer,
                     provider_options=dict(trusted_repository=True, permission_mode='acceptEdits') if provider == 'claude' else {},
                     model=os.environ.get('CODEX_GUI_REAL_CLAUDE_MODEL', 'sonnet') if provider == 'claude' else model,
-                    prompt=f'Create {name}.py with def value(): returning {value}. Return only SUCCESS Completion JSON. Do not commit.',
-                    paths=[name + '.py'], validation=dict(commands=[['python3', '-c', f'from {name} import value; assert value()=={value}']], artifacts=[name + '.py']))
+                    prompt=f'Create {name}.py with def value(): returning {value}. Only edit that file. '
+                           'For any Python verification use python3 -B so no __pycache__ or other files are created. '
+                           'Return only SUCCESS Completion JSON, using StructuredOutput when available. Do not commit.',
+                    paths=[name + '.py'], validation=dict(commands=[['python3', '-B', '-c', f'from {name} import value; assert value()=={value}']], artifacts=[name + '.py']))
                for name, provider, reviewer, value in [('codex_impl', 'codex', 'claude', 7), ('claude_impl', 'claude', 'codex', 11)]],
         policy=dict(extra_usage_disabled_confirmed=True, allow_provider_fallback=False, claude_model=os.environ.get('CODEX_GUI_REAL_CLAUDE_MODEL', 'sonnet'), codex_model=model),
         permissions=dict(commit_owned_changes=True), inputs={})
@@ -187,7 +189,8 @@ def test_real_autopilot_reviews_in_both_provider_directions(real_gui, git_repo):
         if view['state'] == 'completed':
             break
         states = [(node['name'], node['state'], node['reason'][:180]) for node in view['nodes']]
-        assert not any(state in ('waiting_provider', 'failed', 'needs_human') for _, state, _ in states), states
+        assert not any(state in ('waiting_provider', 'failed', 'needs_human') or state.startswith('blocked_')
+                       for _, state, _ in states), states
         time.sleep(.25)
     else:
         (gui.folder / 'autopilot-failure.json').write_text(json.dumps(view, indent=2))

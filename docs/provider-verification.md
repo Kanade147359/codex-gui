@@ -15,7 +15,7 @@ by tests, no production service was restarted, and main was not merged.
 | Final HEAD desktop/mobile/Autopilot browser regression | See PR #19 acceptance evidence | All modules containing opt-in browser tests run together after the final commit; real Chromium with isolated servers and fake execution providers. |
 | Ruff undefined-name/unused-import checks on provider/lifecycle/role modules | PASS | `F821,F822,F823,F401`; JavaScript syntax checks also passed. |
 | Installed Claude metadata | CHECKED, not execution E2E | Version 2.1.185, supported help flags/effort/modes, subscription auth classification. No credentials persisted in GUI DB. |
-| Real Claude model E2E | **PASS (pre-integration)** | Owner confirmation received 2026-11-27; official 2.1.185 / Sonnet 4.6, private staged OAuth, real new/resumed turns. |
+| Real Claude model E2E | **PASS** | Owner confirmation received 2026-11-27; official 2.1.185 / Sonnet 4.6, private staged OAuth, real new/resumed turns. |
 | Independent final subagent code review | Pending | Codex collaboration slot is unavailable; separate native Claude Explore agents will review an isolated final snapshot. |
 
 The final HEAD regression/browser results and SHA are recorded in the PR after
@@ -139,8 +139,8 @@ OAuth staging, GUI SQLite databases, repositories and worktrees are temporary;
 account credentials are removed at teardown. No production data/processes or
 permissions are changed. Remaining quota and invoice charges stay Unknown.
 
-These measurements precede integration with the advanced main branch; final
-HEAD reruns and exact evidence are recorded in PR #19.
+The real cases were rerun after integrating current main. The final HEAD,
+per-case reruns and exact evidence are recorded in PR #19.
 
 | Isolated real acceptance | Result | Evidence |
 | --- | --- | --- |
@@ -179,6 +179,17 @@ HEAD reruns and exact evidence are recorded in PR #19.
 - A shell-wrapper CLI path was inaccessible inside the independent Codex review
   sandbox. The test GUI now owns private runtime mounts and hands reviewers the
   real CLI executable. Both actual review directions passed after this fix.
+- After main integration, a model self-check created __pycache__ outside the
+  approved edit path. The existing ownership gate correctly blocked the node.
+  The fixture now explicitly requires Python -B for self-checks and validation;
+  edit ownership assertions and rejection of unowned files are unchanged.
+- An initial Explore review was incomplete and included a Fast-tier normalization
+  false positive. The UI hides unsupported Claude controls and the API rejects
+  Fast; normalization to default is intentional. That review is not marked PASS.
+  Follow-up reviewers use explicit Sonnet / very-thorough exploration and must
+  inspect every assigned path. Documentary fenced review JSON is parsed separately
+  from the strict outer Completion Contract, retaining findings and unverified
+  scope and rejecting duplicate/ambiguous reports.
 - Test diagnostics originally assumed capitalized shell errors and a non-null
   raw event; zsh uses lowercase and system log events have no raw payload. The
   harness normalizes case, checks actual tool results and handles absent events;
